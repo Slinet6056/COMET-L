@@ -1,0 +1,6 @@
+openai
+pyyaml
+requests
+jinja2
+pydantic
+# httpx[socks]
