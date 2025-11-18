@@ -1,0 +1,136 @@
+# COMET-L: 基于 LLM 的测试变异协同进化系统
+
+COMET-L 是一个创新的测试生成系统，通过测试生成器和变异生成器的对抗式协同进化来自动提升测试质量。
+
+## 核心特性
+
+- 🤖 **双 LLM 协同**：测试生成器和变异生成器相互对抗，持续提升测试覆盖率和变异检测能力
+- 📚 **知识库驱动**：从源代码提取契约，从 Bug 报告学习缺陷模式
+- 🎯 **语义变异**：基于 LLM 生成有意义的语义变异，而非简单的语法变异
+- 🔄 **Agent 调度**：智能 Agent 自动选择目标、分配预算、调整策略
+- 🏖️ **沙箱隔离**：独立的执行环境确保测试和变异互不干扰
+
+## 系统架构
+
+系统包含以下核心组件：
+
+1. **知识提取层**：从源代码和 Bug 报告中提取知识
+2. **变异生成管线**：生成语义变异体暴露测试不足
+3. **测试生成管线**：针对幸存变异生成新测试
+4. **执行与评估**：编译运行并收集覆盖率和击杀率数据
+5. **Agent 调度器**：协调整个进化过程
+
+## 快速开始
+
+### 环境要求
+
+- Python 3.13+
+- Java 8+
+- Maven 3.6+
+
+### 安装
+
+```bash
+# 安装 Python 依赖
+pip install -r requirements.txt
+
+# 构建 Java 运行时模块
+cd java-runtime
+mvn clean install
+cd ..
+```
+
+### 配置
+
+复制配置模板并填入您的设置：
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+编辑 `config.yaml`，配置 LLM API：
+
+```yaml
+llm:
+  base_url: "https://api.openai.com/v1"
+  api_key: "your-api-key"
+  model: "gpt-4"
+```
+
+### 运行
+
+对任意 Maven 项目运行协同进化：
+
+```bash
+python main.py --project-path /path/to/your/java/project
+```
+
+使用示例项目测试：
+
+```bash
+python main.py --project-path examples/calculator-demo
+```
+
+## 使用示例
+
+```bash
+# 基本使用
+python main.py --project-path /path/to/project
+
+# 指定最大迭代次数
+python main.py --project-path /path/to/project --max-iterations 5
+
+# 设置 LLM 调用预算
+python main.py --project-path /path/to/project --budget 500
+
+# 使用自定义配置
+python main.py --project-path /path/to/project --config my-config.yaml
+```
+
+## 项目结构
+
+```
+COMET-L/
+├── comet/              # Python 主模块
+│   ├── config/        # 配置管理
+│   ├── llm/           # LLM 客户端
+│   ├── knowledge/     # 知识库
+│   ├── extractors/    # 知识提取器
+│   ├── generators/    # 测试和变异生成器
+│   ├── executor/      # 执行器
+│   ├── agent/         # Agent 调度器
+│   └── store/         # 数据存储
+├── java-runtime/      # Java 执行模块
+├── examples/          # 示例项目
+└── docs/             # 文档
+```
+
+## 工作原理
+
+1. **初始化**：提取源代码契约和 Bug 报告中的缺陷模式
+2. **迭代循环**：
+   - 变异生成器创建语义变异体
+   - 执行测试识别幸存变异体
+   - 测试生成器针对幸存变异生成新测试
+   - Agent 调度器根据结果调整策略
+3. **输出**：生成的测试类输出到项目的 test 目录
+
+## 技术栈
+
+- **Python 侧**：Python 3.13, OpenAI API, SQLite, Pydantic
+- **Java 侧**：Java 8+, Maven, JUnit5, JaCoCo, JavaParser
+
+## 文档
+
+详细文档请查看 `docs/` 目录：
+
+- [系统架构](docs/LLM%20驱动的测试变异协同进化系统.md)
+- [实现计划](docs/comet-l.plan.md)
+
+## 许可
+
+MIT License
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！
