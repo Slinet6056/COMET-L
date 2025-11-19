@@ -2,8 +2,19 @@
 
 import logging
 from typing import Dict, Any, List, Callable, Optional
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolMetadata:
+    """工具元数据"""
+    name: str
+    description: str
+    params: Dict[str, Any] = field(default_factory=dict)  # 支持任意类型的参数值
+    when_to_use: str = ""
+    notes: List[str] = field(default_factory=list)
 
 
 class AgentTools:
@@ -12,6 +23,7 @@ class AgentTools:
     def __init__(self):
         """初始化工具集"""
         self.tools: Dict[str, Callable] = {}
+        self.metadata: Dict[str, ToolMetadata] = {}
 
         # 组件依赖（将在 main.py 中注入）
         self.project_path: Optional[str] = None
@@ -31,22 +43,107 @@ class AgentTools:
 
     def _register_default_tools(self) -> None:
         """注册默认工具"""
-        self.register("select_target", self.select_target)
-        self.register("generate_mutants", self.generate_mutants)
-        self.register("generate_tests", self.generate_tests)
-        self.register("run_evaluation", self.run_evaluation)
-        self.register("update_knowledge", self.update_knowledge)
-        self.register("trigger_pitest", self.trigger_pitest)
+        # 注册 select_target
+        self.register(
+            name="select_target",
+            func=self.select_target,
+            metadata=ToolMetadata(
+                name="select_target",
+                description="选择要处理的类/方法",
+                params={},  # 无参数（空对象 {}）
+                when_to_use="当前没有选中目标时",
+                notes=[]
+            )
+        )
 
-    def register(self, name: str, func: Callable) -> None:
+        # 注册 generate_mutants
+        self.register(
+            name="generate_mutants",
+            func=self.generate_mutants,
+            metadata=ToolMetadata(
+                name="generate_mutants",
+                description="生成变异体",
+                params={
+                    "class_name": "类名",
+                    "method_name": "方法名"
+                },
+                when_to_use="已有目标但变异体数量为 0 时",
+                notes=["如果有当前选中的目标方法，必须传递 method_name 参数"]
+            )
+        )
+
+        # 注册 generate_tests
+        self.register(
+            name="generate_tests",
+            func=self.generate_tests,
+            metadata=ToolMetadata(
+                name="generate_tests",
+                description="生成测试",
+                params={
+                    "class_name": "类名",
+                    "method_name": "方法名"
+                },
+                when_to_use="已有目标但测试数量为 0 或较少时",
+                notes=[]
+            )
+        )
+
+        # 注册 run_evaluation
+        self.register(
+            name="run_evaluation",
+            func=self.run_evaluation,
+            metadata=ToolMetadata(
+                name="run_evaluation",
+                description="执行评估",
+                params={},  # 无参数（空对象 {}）
+                when_to_use="已有变异体和测试后",
+                notes=[]
+            )
+        )
+
+        # 注册 update_knowledge
+        self.register(
+            name="update_knowledge",
+            func=self.update_knowledge,
+            metadata=ToolMetadata(
+                name="update_knowledge",
+                description="更新知识库",
+                params={
+                    "type": "knowledge类型",
+                    "data": {"具体数据字段": "..."}
+                },
+                when_to_use="评估完成后，从结果学习（暂时可选，系统会自动学习）",
+                notes=[]
+            )
+        )
+
+        # 注册 trigger_pitest
+        self.register(
+            name="trigger_pitest",
+            func=self.trigger_pitest,
+            metadata=ToolMetadata(
+                name="trigger_pitest",
+                description="调用传统 PIT 变异",
+                params={
+                    "class_name": "类名"
+                },
+                when_to_use="可选，需要传统变异测试时",
+                notes=[]
+            )
+        )
+
+    def register(self, name: str, func: Callable, metadata: Optional[ToolMetadata] = None) -> None:
         """
         注册工具
 
         Args:
             name: 工具名称
             func: 工具函数
+            metadata: 工具元数据（可选）
         """
         self.tools[name] = func
+        if metadata:
+            self.metadata[name] = metadata
         logger.debug(f"注册工具: {name}")
 
     def call(self, name: str, **params) -> Any:
@@ -66,40 +163,45 @@ class AgentTools:
         logger.info(f"调用工具: {name} with {params}")
         return self.tools[name](**params)
 
-    def get_tools_description(self) -> List[Dict[str, str]]:
-        """获取工具描述列表"""
-        return [
-            {
-                "name": "select_target",
-                "description": "选择要处理的类/方法",
-                "params": {"criteria": "选择标准（coverage/mutants/random）"}
-            },
-            {
-                "name": "generate_mutants",
-                "description": "为目标类生成变异体",
-                "params": {"class_name": "类名", "num_mutations": "变异数量"}
-            },
-            {
-                "name": "generate_tests",
-                "description": "为目标方法生成测试",
-                "params": {"class_name": "类名", "method_name": "方法名", "num_tests": "测试数量"}
-            },
-            {
-                "name": "run_evaluation",
-                "description": "运行评估，构建击杀矩阵",
-                "params": {}
-            },
-            {
-                "name": "update_knowledge",
-                "description": "更新知识库（添加新模式/契约）",
-                "params": {"type": "类型（pattern/contract）", "data": "数据"}
-            },
-            {
-                "name": "trigger_pitest",
-                "description": "调用传统 PIT 变异测试",
-                "params": {"project_path": "项目路径"}
-            },
-        ]
+    def get_tools_metadata(self) -> List[ToolMetadata]:
+        """
+        获取所有工具的元数据
+
+        Returns:
+            工具元数据列表
+        """
+        return list(self.metadata.values())
+
+    def get_tools_description(self) -> str:
+        """
+        生成工具描述文本（用于 LLM 提示词）
+
+        Returns:
+            格式化的工具描述文本
+        """
+        lines = []
+        for i, meta in enumerate(self.metadata.values(), 1):
+            lines.append(f"{i}. **{meta.name}** - {meta.description}")
+
+            # 参数说明
+            if meta.params:
+                import json
+                params_str = json.dumps(meta.params, ensure_ascii=False, indent=2)
+                lines.append(f"   参数：{params_str}")
+            else:
+                lines.append(f"   参数：无（空对象 {{}}）")
+
+            # 使用时机
+            if meta.when_to_use:
+                lines.append(f"   使用时机：{meta.when_to_use}")
+
+            # 注意事项
+            for note in meta.notes:
+                lines.append(f"   **注意**：{note}")
+
+            lines.append("")  # 空行分隔
+
+        return "\n".join(lines)
 
     # 工具实现
 
