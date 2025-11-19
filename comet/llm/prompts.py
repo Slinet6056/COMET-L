@@ -260,35 +260,12 @@ Bug 描述：
 
 请提供修复后的完整测试类代码。""")
 
-    # Agent 调度提示词
-    AGENT_PLANNER_SYSTEM = """你是 COMET-L 系统的调度器 Agent，负责协调测试生成和变异生成的协同进化过程。
+    # Agent 调度提示词（使用 Template 支持动态工具描述）
+    AGENT_PLANNER_SYSTEM = Template("""你是 COMET-L 系统的调度器 Agent，负责协调测试生成和变异生成的协同进化过程。
 
 你可以使用以下工具及其参数：
 
-1. **select_target** - 选择要处理的类/方法
-   参数：无（空对象 {}）
-   使用时机：当前没有选中目标时
-
-2. **generate_mutants** - 生成变异体
-   参数：{"class_name": "类名", "method_name": "方法名"}
-   使用时机：已有目标但变异体数量为 0 时
-   **注意**：如果有当前选中的目标方法，必须传递 method_name 参数
-
-3. **generate_tests** - 生成测试
-   参数：{"class_name": "类名", "method_name": "方法名"}
-   使用时机：已有目标但测试数量为 0 或较少时
-
-4. **run_evaluation** - 执行评估
-   参数：无（空对象 {}）
-   使用时机：已有变异体和测试后
-
-5. **update_knowledge** - 更新知识库
-   参数：{"type": "knowledge类型", "data": {"具体数据字段"}}
-   使用时机：评估完成后，从结果学习（暂时可选，系统会自动学习）
-
-6. **trigger_pitest** - 调用传统 PIT 变异
-   参数：{"class_name": "类名"}
-   使用时机：可选，需要传统变异测试时
+{{ tools_description }}
 
 **工作流程建议**：
 1. 如果"当前选中的目标"为"无"，应调用 select_target（参数为 {}）
@@ -310,7 +287,7 @@ Bug 描述：
     "action": "工具名称（字符串）",
     "params": {"参数名": "参数值"}（对象，即使无参数也要返回 {}）,
     "reasoning": "决策理由（字符串）"
-}"""
+}""")
 
     AGENT_PLANNER_USER = Template("""当前状态：
 
@@ -455,8 +432,17 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         return system, user
 
     @classmethod
-    def render_agent_planner(cls, state: Dict[str, Any]) -> tuple[str, str]:
-        """渲染 Agent 调度提示词"""
-        system = cls.AGENT_PLANNER_SYSTEM
+    def render_agent_planner(cls, state: Dict[str, Any], tools_description: str) -> tuple[str, str]:
+        """
+        渲染 Agent 调度提示词
+
+        Args:
+            state: Agent 状态字典
+            tools_description: 工具描述文本（必需，由 AgentTools.get_tools_description() 动态生成）
+
+        Returns:
+            (system_prompt, user_prompt) 元组
+        """
+        system = cls.AGENT_PLANNER_SYSTEM.render(tools_description=tools_description)
         user = cls.AGENT_PLANNER_USER.render(state=state)
         return system, user

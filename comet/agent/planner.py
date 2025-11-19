@@ -103,9 +103,13 @@ class PlannerAgent:
             决策字典 {action, params, reasoning}
         """
         try:
+            # 动态获取工具描述
+            tools_description = self.tools.get_tools_description()
+
             # 渲染提示词
             system, user = self.prompt_manager.render_agent_planner(
-                state=self.state.to_dict()
+                state=self.state.to_dict(),
+                tools_description=tools_description
             )
 
             # 调用 LLM
