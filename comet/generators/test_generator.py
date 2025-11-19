@@ -197,36 +197,11 @@ class TestGenerator:
             logger.debug(f"修复尝试 {attempt + 1}/{max_retries}")
 
             try:
-                # 构建修复提示词
-                system_prompt = """你是一个 Java 测试代码修复专家。
-你的任务是根据编译错误信息修复测试代码。
-
-常见问题和修复方法：
-1. 检查导入语句是否正确
-2. 检查类名、方法名拼写
-3. 检查语法错误（括号不匹配、分号缺失等）
-
-**重要**：必须返回 JSON 对象格式，包含 "fixed_code" 键。
-
-返回格式示例：
-{
-  "fixed_code": "完整修复后的测试类代码",
-  "changes": "修复了什么问题的说明"
-}"""
-
-                user_prompt = f"""请修复以下测试代码的编译错误：
-
-原始测试代码：
-```java
-{test_case.full_code}
-```
-
-编译错误信息：
-```
-{compile_error}
-```
-
-请提供修复后的完整测试类代码。"""
+                # 使用提示词管理器生成修复提示词
+                system_prompt, user_prompt = self.prompt_manager.render_fix_test(
+                    test_code=test_case.full_code or "",
+                    compile_error=compile_error,
+                )
 
                 # 调用 LLM 修复
                 response = self.llm.chat_with_system(
