@@ -26,7 +26,8 @@ class AgentTools:
         self.metadata: Dict[str, ToolMetadata] = {}
 
         # 组件依赖（将在 main.py 中注入）
-        self.project_path: Optional[str] = None
+        self.project_path: Optional[str] = None  # 工作路径（可能是沙箱）
+        self.original_project_path: Optional[str] = None  # 原始项目路径（用于创建变异沙箱）
         self.db = None
         self.java_executor = None
         self.mutant_generator = None
@@ -78,13 +79,29 @@ class AgentTools:
             func=self.generate_tests,
             metadata=ToolMetadata(
                 name="generate_tests",
-                description="生成测试",
+                description="生成测试（数量由LLM自主决定）",
                 params={
                     "class_name": "类名",
                     "method_name": "方法名"
                 },
-                when_to_use="已有目标但测试数量为 0 或较少时",
-                notes=[]
+                when_to_use="已有目标但还没有测试时",
+                notes=["生成的测试数量由LLM根据方法复杂度决定"]
+            )
+        )
+
+        # 注册 refine_tests
+        self.register(
+            name="refine_tests",
+            func=self.refine_tests,
+            metadata=ToolMetadata(
+                name="refine_tests",
+                description="完善现有测试（改进或补充）",
+                params={
+                    "class_name": "类名",
+                    "method_name": "方法名"
+                },
+                when_to_use="已有测试但效果不佳时（如：变异分数低、有幸存变异体、覆盖率低）",
+                notes=["可以改进现有测试或补充新测试，由LLM自主决定策略"]
             )
         )
 
@@ -277,9 +294,8 @@ class AgentTools:
         self,
         class_name: str,
         method_name: str,
-        num_tests: int = 3
     ) -> Dict[str, Any]:
-        """生成测试"""
+        """生成测试（数量由LLM自主决定）"""
         if not all([self.project_path, self.test_generator, self.java_executor, self.db]):
             logger.error("generate_tests: 缺少必要组件")
             return {"generated": 0}
@@ -296,6 +312,9 @@ class AgentTools:
         class_code = extract_class_from_file(str(file_path))
         method_sig = extract_method_signature(class_code, method_name) if method_name else None
 
+        # 获取现有测试（用于参考）
+        existing_tests = self.db.get_tests_by_target_class(class_name)
+
         # 获取幸存变异体和覆盖缺口
         all_mutants = self.db.get_all_mutants()
         survived = self.metrics_collector.get_survived_mutants_for_method(
@@ -311,7 +330,7 @@ class AgentTools:
             class_code=class_code,
             survived_mutants=survived,
             coverage_gaps=gaps,
-            num_tests=num_tests,
+            existing_tests=existing_tests,
         )
 
         if not test_case:
@@ -373,12 +392,135 @@ class AgentTools:
                 logger.error("自动修复失败")
 
         # 保存
+        logger.debug(f"准备保存新生成的测试用例: ID={test_case.id}, version={test_case.version}")
         self.db.save_test_case(test_case)
 
         return {
             "generated": len(test_case.methods),
             "test_id": test_case.id,
             "compile_success": test_case.compile_success,
+        }
+
+    def refine_tests(
+        self,
+        class_name: str,
+        method_name: str,
+    ) -> Dict[str, Any]:
+        """完善现有测试（改进或补充）"""
+        if not all([self.project_path, self.test_generator, self.java_executor, self.db]):
+            logger.error("refine_tests: 缺少必要组件")
+            return {"refined": 0}
+
+        from ..utils.project_utils import find_java_file, write_test_file
+        from ..utils.code_utils import extract_class_from_file
+
+        # 获取现有测试
+        existing_tests = self.db.get_tests_by_target_class(class_name)
+        if not existing_tests:
+            logger.warning(f"没有找到 {class_name} 的现有测试，无法完善")
+            return {"refined": 0, "message": "No existing tests found"}
+
+        # 选择最新的测试用例
+        test_case = existing_tests[0]
+        logger.info(f"将完善测试用例: {test_case.class_name} (共 {len(test_case.methods)} 个测试方法)")
+        logger.debug(f"选中的测试用例: ID={test_case.id}, version={test_case.version}")
+
+        # 读取被测类代码
+        file_path = find_java_file(self.project_path, class_name)
+        if not file_path:
+            logger.error(f"未找到类文件: {class_name}")
+            return {"refined": 0}
+
+        class_code = extract_class_from_file(str(file_path))
+
+        # 获取幸存变异体和覆盖缺口
+        all_mutants = self.db.get_all_mutants()
+        survived = self.metrics_collector.get_survived_mutants_for_method(
+            class_name, method_name, all_mutants
+        ) if self.metrics_collector else []
+
+        gaps = {}  # 简化实现
+
+        # 构建评估反馈
+        evaluation_feedback = None
+        if self.metrics_collector and survived:
+            evaluation_feedback = f"当前有 {len(survived)} 个幸存变异体需要击杀"
+
+        # 完善测试
+        refined_test_case = self.test_generator.refine_tests(
+            test_case=test_case,
+            class_code=class_code,
+            survived_mutants=survived,
+            coverage_gaps=gaps,
+            evaluation_feedback=evaluation_feedback,
+        )
+
+        if not refined_test_case:
+            logger.warning(f"测试完善失败: {class_name}.{method_name}")
+            return {"refined": 0}
+
+        # 写入测试文件
+        test_file = write_test_file(
+            project_path=self.project_path,
+            package_name=refined_test_case.package_name,
+            test_code=refined_test_case.full_code,
+            test_class_name=refined_test_case.class_name,
+        )
+
+        if not test_file:
+            logger.error("写入测试文件失败")
+            return {"refined": 0}
+
+        # 验证编译
+        compile_result = self.java_executor.compile_tests(self.project_path)
+        if compile_result.get("success"):
+            refined_test_case.compile_success = True
+            logger.info(f"完善后的测试编译成功: {refined_test_case.class_name}")
+        else:
+            compile_error = compile_result.get('error', 'Unknown error')
+            logger.warning(f"完善后的测试编译失败: {compile_error}")
+            refined_test_case.compile_error = str(compile_error)
+
+            # 尝试自动修复
+            logger.info("尝试自动修复编译错误...")
+            fixed_test_case = self.test_generator.regenerate_with_feedback(
+                test_case=refined_test_case,
+                compile_error=compile_error,
+                max_retries=2,
+            )
+
+            if fixed_test_case:
+                # 重新写入
+                test_file = write_test_file(
+                    project_path=self.project_path,
+                    package_name=fixed_test_case.package_name,
+                    test_code=fixed_test_case.full_code,
+                    test_class_name=fixed_test_case.class_name,
+                )
+
+                # 重新编译
+                compile_result2 = self.java_executor.compile_tests(self.project_path)
+                if compile_result2.get("success"):
+                    fixed_test_case.compile_success = True
+                    fixed_test_case.compile_error = None
+                    logger.info(f"修复成功！")
+                    refined_test_case = fixed_test_case
+                else:
+                    logger.error(f"修复后仍无法编译")
+                    fixed_test_case.compile_error = str(compile_result2.get('error'))
+                    refined_test_case = fixed_test_case
+            else:
+                logger.error("自动修复失败")
+
+        # 保存
+        logger.debug(f"准备保存完善后的测试用例: ID={refined_test_case.id}, version={refined_test_case.version}")
+        self.db.save_test_case(refined_test_case)
+
+        return {
+            "refined": len(refined_test_case.methods),
+            "test_id": refined_test_case.id,
+            "compile_success": refined_test_case.compile_success,
+            "previous_count": len(test_case.methods),
         }
 
     def run_evaluation(self) -> Dict[str, Any]:
@@ -401,12 +543,17 @@ class AgentTools:
 
         logger.info(f"开始评估 {len(mutants)} 个变异体 和 {len(test_cases)} 个测试")
 
-        # 构建击杀矩阵
+        # 构建击杀矩阵（使用工作路径，因为测试文件在工作沙箱中）
         kill_matrix = self.mutation_evaluator.build_kill_matrix(
             mutants=mutants,
             test_cases=test_cases,
             project_path=self.project_path,
         )
+
+        # 保存更新后的变异体状态到数据库
+        for mutant in mutants:
+            self.db.save_mutant(mutant)
+        logger.debug(f"已保存 {len(mutants)} 个变异体的评估状态")
 
         # 运行覆盖率分析
         coverage_data = None

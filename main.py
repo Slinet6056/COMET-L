@@ -197,22 +197,30 @@ def run_evolution(project_path: str, components: dict, resume_state: str = None)
     运行协同进化
 
     Args:
-        project_path: 项目路径
+        project_path: 项目路径（原始项目）
         components: 系统组件
         resume_state: 恢复状态文件路径
     """
     logger.info(f"{'='*60}")
     logger.info("开始协同进化")
-    logger.info(f"项目路径: {project_path}")
+    logger.info(f"原项目路径: {project_path}")
     logger.info(f"{'='*60}")
 
     planner = components["planner"]
     config = components["config"]
+    sandbox_manager = components["sandbox_manager"]
 
-    # 设置 tools 的 project_path
+    # 创建工作空间沙箱
+    logger.info("创建工作空间沙箱...")
+    workspace_sandbox = sandbox_manager.create_workspace_sandbox(project_path)
+    logger.info(f"工作空间沙箱: {workspace_sandbox}")
+
+    # 设置 tools 使用沙箱路径
     if hasattr(planner, 'tools') and hasattr(planner.tools, 'project_path'):
-        planner.tools.project_path = project_path
-        logger.info("已设置 project_path 到 AgentTools")
+        planner.tools.project_path = workspace_sandbox  # 工作路径（沙箱）
+        planner.tools.original_project_path = project_path  # 保存原始路径
+        logger.info(f"已设置沙箱路径到 AgentTools: {workspace_sandbox}")
+        logger.info(f"原始项目路径: {project_path}")
 
     # 恢复状态（如果有）
     if resume_state and Path(resume_state).exists():
@@ -230,6 +238,12 @@ def run_evolution(project_path: str, components: dict, resume_state: str = None)
         planner.save_state(state_file)
         logger.info(f"最终状态已保存: {state_file}")
 
+        # 导出测试文件到原项目
+        logger.info("="*60)
+        logger.info("导出测试文件到原项目...")
+        sandbox_manager.export_test_files("workspace", project_path)
+        logger.info("="*60)
+
         # 输出摘要
         print_summary(final_state, components["metrics_collector"])
 
@@ -238,10 +252,21 @@ def run_evolution(project_path: str, components: dict, resume_state: str = None)
         state_file = f"{config.paths.output}/interrupted_state.json"
         planner.save_state(state_file)
         logger.info(f"状态已保存: {state_file}")
+
+        # 即使中断也导出测试文件
+        logger.info("导出当前测试文件到原项目...")
+        sandbox_manager.export_test_files("workspace", project_path)
+
         logger.info("可使用 --resume 参数恢复")
 
     except Exception as e:
         logger.error(f"运行出错: {e}", exc_info=True)
+        # 出错时也尝试导出已生成的测试
+        try:
+            logger.info("尝试导出已生成的测试文件...")
+            sandbox_manager.export_test_files("workspace", project_path)
+        except:
+            pass
         raise
 
 

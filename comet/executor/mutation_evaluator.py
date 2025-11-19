@@ -63,21 +63,33 @@ class MutationEvaluator:
             })
 
             # 确定源文件路径
-            source_file = mutant.patch.file_path
-            if not source_file:
+            original_file_path = mutant.patch.file_path
+            if not original_file_path:
                 logger.error(f"变异体 {mutant.id} 没有指定源文件路径")
                 return {}
 
             # 确定沙箱中的目标文件路径
             from pathlib import Path
-            project_name = Path(project_path).name
-            mutated_file = str(Path(sandbox_path) / Path(source_file).relative_to(Path(project_path)))
+            # 从完整路径中提取相对路径（从 src/main/java 开始）
+            file_path_obj = Path(original_file_path)
 
-            # 应用变异
+            # 尝试找到 src/main/java 或 src/test/java 的位置
+            parts = file_path_obj.parts
+            try:
+                src_idx = parts.index('src')
+                rel_path = Path(*parts[src_idx:])
+            except ValueError:
+                # 如果找不到 src，尝试直接使用最后几个部分
+                rel_path = Path(*parts[-5:]) if len(parts) >= 5 else file_path_obj.name
+
+            # 沙箱中的源文件和目标文件路径（同一个文件，原地修改）
+            sandbox_file = str(Path(sandbox_path) / rel_path)
+
+            # 应用变异（源文件和输出文件都在沙箱中）
             mutation_result = self.java_executor.apply_mutation(
-                source_file=source_file,
+                source_file=sandbox_file,
                 patch_json=patch_json,
-                output_path=mutated_file,
+                output_path=sandbox_file,
             )
 
             if not mutation_result.get("success", False):
@@ -89,17 +101,29 @@ class MutationEvaluator:
                 # 跳过此变异体，不运行测试
                 return {}
 
+            logger.debug(f"变异应用成功: {mutant.id}")
+            logger.debug(f"  沙箱路径: {sandbox_path}")
+            logger.debug(f"  变异文件: {sandbox_file}")
+
             # 运行测试
+            logger.debug(f"开始运行测试，沙箱: {sandbox_path}")
             test_result = self.java_executor.run_tests(sandbox_path)
+            logger.debug(f"测试运行结果: success={test_result.get('success')}")
+            if test_result.get("stderr"):
+                logger.debug(f"  测试stderr: {test_result['stderr'][:200]}")
+            if test_result.get("stdout"):
+                logger.debug(f"  测试stdout: {test_result['stdout'][:200]}")
 
             # 解析结果
             results = {}
             if test_result.get("success"):
                 # 所有测试通过 = 变异体幸存
+                logger.debug(f"  所有测试通过，变异体 {mutant.id} 幸存")
                 for test_case in test_cases:
                     results[test_case.id] = True
             else:
                 # 测试失败 = 变异体被击杀
+                logger.debug(f"  测试失败，变异体 {mutant.id} 被击杀")
                 for test_case in test_cases:
                     results[test_case.id] = False
 

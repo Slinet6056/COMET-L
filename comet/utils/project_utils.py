@@ -180,7 +180,11 @@ def write_test_file(project_path: str, package_name: str, test_code: str, test_c
 
 def _merge_test_methods(existing_code: str, new_code: str) -> str:
     """
-    合并测试方法（避免覆盖已有测试）
+    合并测试方法（支持更新和添加）
+
+    规则：
+    - 如果新方法名不存在于现有代码中，则添加
+    - 如果新方法名已存在，则用新方法替换旧方法（支持版本更新）
 
     Args:
         existing_code: 现有测试代码
@@ -191,40 +195,54 @@ def _merge_test_methods(existing_code: str, new_code: str) -> str:
     """
     import re
 
-    # 提取现有测试方法名
-    existing_methods = set(re.findall(r'@Test\s+(?:public\s+)?void\s+(\w+)\s*\(', existing_code))
-    logger.debug(f"现有测试方法: {existing_methods}")
+    # 提取现有测试方法（方法名 -> 方法代码）
+    existing_methods_dict = _extract_test_methods(existing_code)
+    logger.debug(f"现有测试方法: {set(existing_methods_dict.keys())}")
 
-    # 从新代码中提取测试方法（包括完整的方法体）
-    # 使用简单的方法：按行解析，找到@Test注解开始到对应的闭合大括号
+    # 从新代码中提取测试方法
     new_test_methods = _extract_test_methods(new_code)
 
-    # 只保留不重复的测试方法
+    # 分类：需要更新的、需要添加的
+    methods_to_update = []
     methods_to_add = []
+
     for method_name, method_code in new_test_methods.items():
-        if method_name not in existing_methods:
+        if method_name in existing_methods_dict:
+            # 比较代码是否有变化
+            if existing_methods_dict[method_name].strip() != method_code.strip():
+                methods_to_update.append((method_name, method_code))
+                logger.debug(f"更新测试方法: {method_name}")
+            else:
+                logger.debug(f"跳过重复测试方法: {method_name} (无变化)")
+        else:
             methods_to_add.append(method_code)
             logger.debug(f"添加新测试方法: {method_name}")
-        else:
-            logger.debug(f"跳过重复测试方法: {method_name}")
 
-    if not methods_to_add:
+    # 如果没有任何变化，直接返回
+    if not methods_to_update and not methods_to_add:
         logger.info("没有新测试方法需要添加")
         return existing_code
 
+    # 替换需要更新的方法
+    result_code = existing_code
+    for method_name, new_method_code in methods_to_update:
+        old_method_code = existing_methods_dict[method_name]
+        # 替换整个方法
+        result_code = result_code.replace(old_method_code, new_method_code)
+
     # 在类结束前插入新方法
-    last_brace_pos = existing_code.rfind('}')
-    if last_brace_pos == -1:
-        logger.error("无法找到类结束标记")
-        return existing_code
+    if methods_to_add:
+        last_brace_pos = result_code.rfind('}')
+        if last_brace_pos == -1:
+            logger.error("无法找到类结束标记")
+            return result_code
 
-    # 插入新方法
-    before_brace = existing_code[:last_brace_pos].rstrip()
-    new_methods_str = '\n\n    '.join(methods_to_add)
-    merged = f"{before_brace}\n\n    {new_methods_str}\n}}"
+        before_brace = result_code[:last_brace_pos].rstrip()
+        new_methods_str = '\n\n    '.join(methods_to_add)
+        result_code = f"{before_brace}\n\n    {new_methods_str}\n}}"
 
-    logger.info(f"成功合并 {len(methods_to_add)} 个新测试方法")
-    return merged
+    logger.info(f"成功更新 {len(methods_to_update)} 个测试方法，添加 {len(methods_to_add)} 个新测试方法")
+    return result_code
 
 
 def _extract_test_methods(code: str) -> dict:
@@ -259,9 +277,11 @@ def _extract_test_methods(code: str) -> dict:
                 continue
             method_name = match.group(1)
 
-            # 找到方法体的开始
-            brace_count = 0
+            # 初始化方法行和大括号计数
             method_lines = [lines[method_start], lines[i]]
+
+            # 计算方法签名行中的大括号
+            brace_count = lines[i].count('{') - lines[i].count('}')
             i += 1
 
             # 找到匹配的闭合大括号
@@ -272,6 +292,7 @@ def _extract_test_methods(code: str) -> dict:
                 # 计算大括号
                 brace_count += line.count('{') - line.count('}')
 
+                # 当大括号平衡且当前行包含}时，方法结束
                 if brace_count == 0 and '}' in line:
                     # 方法结束
                     methods[method_name] = '\n'.join(method_lines)

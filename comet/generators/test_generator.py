@@ -37,10 +37,10 @@ class TestGenerator:
         class_code: str,
         survived_mutants: Optional[List[Mutant]] = None,
         coverage_gaps: Optional[Dict[str, Any]] = None,
-        num_tests: int = 3,
+        existing_tests: Optional[List[TestCase]] = None,
     ) -> Optional[TestCase]:
         """
-        为方法生成测试
+        为方法生成测试（数量由 LLM 自主决定）
 
         Args:
             class_name: 类名
@@ -48,7 +48,7 @@ class TestGenerator:
             class_code: 完整类代码
             survived_mutants: 幸存的变异体列表
             coverage_gaps: 覆盖缺口信息
-            num_tests: 要生成的测试方法数量
+            existing_tests: 现有测试用例列表（用于参考，避免重复）
 
         Returns:
             TestCase 对象，如果生成失败则返回 None
@@ -69,7 +69,7 @@ class TestGenerator:
                 contracts=contract,
                 survived_mutants=survived_mutants or [],
                 coverage_gaps=coverage_gaps or {},
-                num_tests=num_tests,
+                existing_tests=existing_tests or [],
             )
 
             # 调用 LLM
@@ -125,6 +125,9 @@ class TestGenerator:
                     code=test_data.get("code", ""),
                     target_method=method_name,
                     description=test_data.get("description"),
+                    version=1,  # 新生成的方法，版本号为1
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
                 )
                 test_methods.append(test_method)
                 logger.debug(f"成功创建测试 #{idx+1}")
@@ -172,6 +175,106 @@ class TestGenerator:
 
         except Exception as e:
             logger.error(f"测试生成失败: {e}")
+            return None
+
+    def refine_tests(
+        self,
+        test_case: TestCase,
+        class_code: str,
+        survived_mutants: Optional[List[Mutant]] = None,
+        coverage_gaps: Optional[Dict[str, Any]] = None,
+        evaluation_feedback: Optional[str] = None,
+    ) -> Optional[TestCase]:
+        """
+        完善现有测试（改进、扩展或修正）
+
+        Args:
+            test_case: 现有测试用例
+            class_code: 被测类的完整代码
+            survived_mutants: 幸存的变异体列表
+            coverage_gaps: 覆盖缺口信息
+            evaluation_feedback: 评估反馈信息
+
+        Returns:
+            完善后的 TestCase，如果失败则返回 None
+        """
+        logger.info(f"开始完善测试: {test_case.class_name}")
+
+        try:
+            # 渲染提示词
+            system_prompt, user_prompt = self.prompt_manager.render_refine_test(
+                test_case=test_case,
+                class_code=class_code,
+                survived_mutants=survived_mutants or [],
+                coverage_gaps=coverage_gaps or {},
+                evaluation_feedback=evaluation_feedback,
+            )
+
+            # 调用 LLM
+            response = self.llm.chat_with_system(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.6,
+                response_format={"type": "json_object"},
+            )
+
+            # 解析响应
+            data = json.loads(response)
+
+            # 支持两种返回格式
+            if "tests" in data:
+                tests_data = data["tests"]
+            elif "refined_tests" in data:
+                tests_data = data["refined_tests"]
+            else:
+                logger.error("响应中未找到测试数据")
+                return None
+
+            if not isinstance(tests_data, list):
+                tests_data = [tests_data]
+
+            # 创建 TestMethod 对象
+            test_methods = []
+            for test_data in tests_data:
+                if not test_data.get("code"):
+                    continue
+
+                test_method = TestMethod(
+                    method_name=test_data.get("method_name", "test_method"),
+                    code=test_data.get("code", ""),
+                    target_method=test_data.get("target_method", ""),
+                    description=test_data.get("description"),
+                    version=1,  # 版本号将在保存时根据是否已存在自动更新
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                )
+                test_methods.append(test_method)
+
+            if not test_methods:
+                logger.warning("未生成有效的测试方法")
+                return None
+
+            # 构建完整测试类
+            method_codes = [m.code for m in test_methods]
+            full_code = build_test_class(
+                test_class_name=test_case.class_name,
+                target_class=test_case.target_class,
+                package_name=test_case.package_name,
+                imports=test_case.imports,
+                test_methods=method_codes,
+            )
+
+            # 更新 TestCase
+            test_case.methods = test_methods
+            test_case.full_code = full_code
+            test_case.updated_at = datetime.now()
+
+            logger.info(f"成功完善测试，现有 {len(test_methods)} 个测试方法")
+            logger.debug(f"返回的测试用例: ID={test_case.id}, version={test_case.version} (未更新版本号)")
+            return test_case
+
+        except Exception as e:
+            logger.error(f"完善测试失败: {e}")
             return None
 
     def regenerate_with_feedback(
