@@ -28,6 +28,9 @@ class AgentState:
         # 当前目标
         self.current_target: Optional[Dict[str, Any]] = None
 
+        # 测试用例信息（新增）
+        self.test_cases: List[Dict[str, Any]] = []  # 测试用例列表
+
         # 历史记录
         self.action_history: List[Dict[str, Any]] = []  # 操作历史
         self.recent_improvements: List[Dict[str, Any]] = []
@@ -92,6 +95,26 @@ class AgentState:
         # 只保留最近 10 次操作
         self.action_history = self.action_history[-10:]
 
+    def set_test_cases(self, test_cases: List[Any]) -> None:
+        """
+        设置测试用例列表（供 Agent 查看）
+
+        Args:
+            test_cases: TestCase 对象列表
+        """
+        self.test_cases = []
+        for tc in test_cases:
+            self.test_cases.append({
+                "class_name": tc.class_name,
+                "target_class": tc.target_class,
+                "version": tc.version,
+                "num_methods": len(tc.methods),
+                "method_names": [m.method_name for m in tc.methods],
+                "compile_success": tc.compile_success,
+                "kills_count": len(tc.kills),
+            })
+        self.total_tests = sum(tc["num_methods"] for tc in self.test_cases)
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -106,6 +129,7 @@ class AgentState:
             "llm_calls": self.llm_calls,
             "budget": self.budget,
             "current_target": self.current_target,
+            "test_cases": self.test_cases,
             "action_history": self.action_history,
             "recent_improvements": self.recent_improvements,
             "processed_targets": self.processed_targets,
@@ -129,6 +153,7 @@ class AgentState:
         state.llm_calls = data.get("llm_calls", 0)
         state.budget = data.get("budget", 1000)
         state.current_target = data.get("current_target")
+        state.test_cases = data.get("test_cases", [])
         state.action_history = data.get("action_history", [])
         state.recent_improvements = data.get("recent_improvements", [])
         state.processed_targets = data.get("processed_targets", [])

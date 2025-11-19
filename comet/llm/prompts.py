@@ -164,12 +164,27 @@ Bug 描述：
     # 测试生成提示词
     GENERATE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门为 Java 代码生成高质量的测试用例。
 
-你的任务是为给定的方法生成测试方法，测试应该：
+你的任务是为给定的方法生成测试方法。**你可以自主决定生成多少个测试方法**，根据方法的复杂度和需要覆盖的场景来判断。
+
+测试应该：
 1. 使用 JUnit 5 语法（@Test 注解）
-2. 包含断言验证行为（使用 assertEquals 等）
+2. 包含断言验证行为（直接使用 assertEquals 等，不要加 Assertions. 前缀）
 3. 覆盖正常情况和边界情况（正数、负数、零、边界值等）
 4. 测试异常处理（使用 assertThrows 等）
 5. 只生成测试方法代码，不要生成完整的类定义
+6. 如果提供了现有测试，应避免重复，补充缺失的测试场景
+
+**生成数量指导**：
+- 简单方法（如 getter/setter）：1-2 个测试
+- 中等复杂度（如计算、验证）：3-5 个测试
+- 复杂方法（多分支、多异常）：5-10 个测试
+
+**断言方法使用规范**：
+- ✔ 正确：直接使用 `assertEquals(expected, actual)`
+- ✖ 错误：不要使用 `Assertions.assertEquals(expected, actual)`
+- ✔ 正确：直接使用 `assertTrue(condition)`
+- ✖ 错误：不要使用 `Assertions.assertTrue(condition)`
+- 原因：测试类会使用静态导入 `import static org.junit.jupiter.api.Assertions.*`
 
 **重要**：必须返回 JSON 对象格式，包含 "tests" 键，其值为测试方法数组。
 
@@ -206,6 +221,16 @@ Bug 描述：
 异常条件: {{ contracts.exceptions | join(', ') }}
 {% endif %}
 
+{% if existing_tests %}
+现有测试方法（请避免重复，补充缺失的场景）：
+{% for test in existing_tests %}
+- {{ test.class_name }}: {{ test.methods|length }} 个测试方法
+{% for method in test.methods %}
+  * {{ method.method_name }}: {{ method.description or '无描述' }}
+{% endfor %}
+{% endfor %}
+{% endif %}
+
 {% if survived_mutants %}
 以下变异体幸存（未被现有测试击杀），请特别关注：
 {% for mutant in survived_mutants %}
@@ -221,22 +246,144 @@ Bug 描述：
 {% endif %}
 
 **测试要求**：
-1. 使用 org.junit.jupiter.api.Assertions 中的断言方法进行断言
+1. **断言方法**：直接使用 assertEquals、assertTrue、assertThrows 等，不要添加 Assertions. 前缀
 2. 测试方法必须以 @Test 注解开头
 3. 测试方法名应清晰描述测试场景（如 testAddWithPositiveNumbers）
 4. 包含边界情况测试（如 Integer.MAX_VALUE, Integer.MIN_VALUE, 0）
 5. 如果方法可能抛出异常，使用 assertThrows 验证
+6. 根据方法复杂度自主决定生成多少个测试（简单方法 1-2 个，复杂方法 5-10 个）
 
-请生成 {{ num_tests }} 个测试方法。""")
+**示例（正确的断言写法）**：
+```java
+@Test
+void testAddPositiveNumbers() {
+    Calculator calc = new Calculator();
+    int result = calc.add(2, 3);
+    assertEquals(5, result);  // ✔ 正确：直接使用 assertEquals
+    // 错误示例：Assertions.assertEquals(5, result);  ✖ 不要这样写
+}
+```
+
+请生成适量的测试方法。""")
+
+    # 测试完善提示词
+    REFINE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门完善和改进现有的测试用例。
+
+你的任务是根据评估反馈（如幸存的变异体、覆盖缺口等）来完善现有测试。你可以：
+1. **改进现有测试**：增强断言、添加边界检查、修复逻辑错误
+2. **补充新测试**：添加缺失的测试场景
+3. **删除冗余测试**：移除重复或无效的测试
+4. **重构测试**：提高测试质量和可维护性
+
+**策略选择**：
+- 如果现有测试覆盖了基本场景但不够细致：改进现有测试
+- 如果存在明显的测试缺口：补充新测试
+- 如果现有测试有明显问题：修正或重写
+- 优先考虑击杀幸存变异体的测试
+
+**断言方法使用规范**：
+- ✔ 正确：直接使用 `assertEquals(expected, actual)`
+- ✖ 错误：不要使用 `Assertions.assertEquals(expected, actual)`
+- ✔ 正确：直接使用 `assertTrue(condition)`
+- ✖ 错误：不要使用 `Assertions.assertTrue(condition)`
+- 原因：测试类会使用静态导入 `import static org.junit.jupiter.api.Assertions.*`
+
+**重要**：必须返回 JSON 对象格式，包含 "tests" 或 "refined_tests" 键。
+
+返回格式示例：
+{
+  "refined_tests": [
+    {
+      "method_name": "testAddPositiveNumbers",
+      "code": "@Test\\nvoid testAddPositiveNumbers() {\\n    Calculator calc = new Calculator();\\n    int result = calc.add(2, 3);\\n    assertEquals(5, result);\\n}",
+      "description": "验证两个正数相加返回正确结果",
+      "target_method": "add"
+    }
+  ],
+  "refinement_summary": "改进了 2 个测试，新增了 3 个测试，删除了 1 个冗余测试"
+}
+
+每个测试对象必须包含：
+- method_name: 测试方法名
+- code: 完整测试代码（包含 @Test 注解）
+- description: 测试描述
+- target_method: 目标方法名（可选）"""
+
+    REFINE_TEST_USER = Template("""请完善以下测试用例：
+
+目标类：{{ test_case.target_class }}
+测试类：{{ test_case.class_name }}
+
+被测类完整代码：
+```java
+{{ class_code }}
+```
+
+当前测试方法（共 {{ test_case.methods|length }} 个）：
+{% for method in test_case.methods %}
+### {{ method.method_name }}
+```java
+{{ method.code }}
+```
+{% if method.description %}
+描述: {{ method.description }}
+{% endif %}
+
+{% endfor %}
+
+{% if survived_mutants %}
+**幸存变异体（需要击杀）**：
+{% for mutant in survived_mutants %}
+- {{ mutant.semantic_intent }}
+  变异代码: {{ mutant.patch.mutated_code }}
+{% endfor %}
+{% endif %}
+
+{% if coverage_gaps %}
+**覆盖缺口**：
+未覆盖的行: {{ coverage_gaps.uncovered_lines | join(', ') }}
+未覆盖的分支: {{ coverage_gaps.uncovered_branches | join(', ') }}
+{% endif %}
+
+{% if evaluation_feedback %}
+**评估反馈**：
+{{ evaluation_feedback }}
+{% endif %}
+
+**完善要求**：
+1. 分析现有测试的不足之处
+2. 重点关注如何击杀幸存的变异体
+3. 补充缺失的测试场景（边界值、异常情况等）
+4. 改进现有测试的断言和验证逻辑
+5. 返回完整的测试方法列表（包括保留的、修改的和新增的）
+
+请完善这些测试。""")
 
     # 测试修复提示词
     FIX_TEST_SYSTEM = """你是一个 Java 测试代码修复专家。
 你的任务是根据编译错误信息修复测试代码。
 
-常见问题和修复方法：
-1. 检查导入语句是否正确
-2. 检查类名、方法名拼写
-3. 检查语法错误（括号不匹配、分号缺失等）
+**严格限制**：
+1. **只能修改测试方法内部的实现代码**（方法体内的语句）
+2. **不能修改测试方法名称**（如 testAddWithPositiveNumbers）
+3. **不能修改测试方法外的任何内容**，包括：
+   - 导入语句（import）
+   - 类声明（class CalculatorTest）
+   - 类变量
+   - @BeforeEach、@AfterEach 等辅助方法
+   - 只保持原样
+
+**修复策略**：
+1. 不要修改 import 语句
+2. 如果是变量未定义，检查方法内是否正确使用了类的成员变量（如 target）
+3. 如果是语法错误，仅修正方法体内的语法问题（括号、分号等）
+
+**绝对禁止**：
+- 不要添加、删除或修改任何 import 语句
+- 不要修改类名、包名
+- 不要修改测试方法的名称、参数、注解
+- 不要修改 setUp()、tearDown() 等辅助方法
+- 只修改测试方法的方法体内部代码
 
 **重要**：必须返回 JSON 对象格式，包含 "fixed_code" 键。
 
@@ -258,6 +405,13 @@ Bug 描述：
 {{ compile_error }}
 ```
 
+**修复要求**：
+1. 仔细查看编译错误，定位到具体的测试方法和行号
+2. **只修改出错的测试方法内部代码**，不要修改方法名
+3. **保持 import 语句、类声明、其他方法完全不变**
+4. 如果是静态导入问题（如 `import static ... Assertions.*`），则修改方法内调用方式，不要改 import
+5. 返回完整的测试类代码（包括未修改的部分）
+
 请提供修复后的完整测试类代码。""")
 
     # Agent 调度提示词（使用 Template 支持动态工具描述）
@@ -270,16 +424,21 @@ Bug 描述：
 **工作流程建议**：
 1. 如果"当前选中的目标"为"无"，应调用 select_target（参数为 {}）
 2. 如果已有目标但变异体数量为 0，应调用 generate_mutants（参数为 {"class_name": "当前目标类名", "method_name": "当前目标方法名"}）
-3. 如果已有目标但测试数量为 0 或较少，应调用 generate_tests（参数为 {"class_name": "当前目标类名", "method_name": "当前目标方法名"}）
-4. 如果已有变异体和测试，应调用 run_evaluation（参数为 {}）
-5. 评估后可以选择新目标，或继续优化当前目标
+3. 如果已有目标但测试数量为 0，应调用 generate_tests（参数为 {"class_name": "当前目标类名", "method_name": "当前目标方法名"}）
+4. 如果已有测试和变异体，应调用 run_evaluation（参数为 {}）
+5. 评估后如果变异分数低或有幸存变异体，应调用 refine_tests 完善测试（参数为 {"class_name": "类名", "method_name": "方法名"}）
+6. 可以在 generate_tests 和 refine_tests 之间迭代多次，直到测试质量满意
+7. 测试质量满意后，可以选择新目标继续
 
 **重要决策指导**：
 - 查看"最近操作历史"了解之前做了什么，避免重复无效操作
-- 不要连续执行相同的操作（除非有明确的理由）
+- **测试迭代策略**：首次使用 generate_tests，后续改进使用 refine_tests
+- **质量导向**：如果变异分数 < 0.7 或有幸存变异体，应优先完善测试而非选择新目标
+- 不要连续执行完全相同的操作（除非有明确的理由）
 - 如果某个操作失败了（特别是参数错误），检查参数格式是否正确
-- 如果当前目标已经完成（有变异体、有测试、已评估），应该选择新目标
+- 如果当前目标测试质量已经很高（变异分数 > 0.9），应该选择新目标
 - 如果多次生成都返回 0，说明可能存在问题，应该尝试其他策略或选择新目标
+- **refine_tests 优于重新 generate_tests**：有现有测试时应优先使用 refine_tests
 
 **返回格式要求**：
 必须返回 JSON 对象，包含以下字段：
@@ -310,6 +469,15 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
 {% endif %}
 {% else %}
 当前选中的目标: 无（尚未选择）
+{% endif %}
+
+{% if state.test_cases %}
+现有测试用例：
+{% for tc in state.test_cases %}
+- {{ tc.class_name }} (v{{ tc.version }}) - 目标: {{ tc.target_class }}
+  测试方法数: {{ tc.num_methods }}, 编译: {% if tc.compile_success %}成功{% else %}失败{% endif %}, 击杀变异体: {{ tc.kills_count }}
+  方法: {{ tc.method_names | join(', ') }}
+{% endfor %}
 {% endif %}
 
 {% if state.action_history %}
@@ -402,7 +570,7 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         contracts: Optional[Any] = None,
         survived_mutants: Optional[List[Any]] = None,
         coverage_gaps: Optional[Dict[str, Any]] = None,
-        num_tests: int = 3,
+        existing_tests: Optional[List[Any]] = None,
     ) -> tuple[str, str]:
         """渲染测试生成提示词"""
         system = cls.GENERATE_TEST_SYSTEM
@@ -413,7 +581,27 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
             contracts=contracts,
             survived_mutants=survived_mutants or [],
             coverage_gaps=coverage_gaps or {},
-            num_tests=num_tests,
+            existing_tests=existing_tests or [],
+        )
+        return system, user
+
+    @classmethod
+    def render_refine_test(
+        cls,
+        test_case: Any,
+        class_code: str,
+        survived_mutants: Optional[List[Any]] = None,
+        coverage_gaps: Optional[Dict[str, Any]] = None,
+        evaluation_feedback: Optional[str] = None,
+    ) -> tuple[str, str]:
+        """渲染测试完善提示词"""
+        system = cls.REFINE_TEST_SYSTEM
+        user = cls.REFINE_TEST_USER.render(
+            test_case=test_case,
+            class_code=class_code,
+            survived_mutants=survived_mutants or [],
+            coverage_gaps=coverage_gaps or {},
+            evaluation_feedback=evaluation_feedback,
         )
         return system, user
 

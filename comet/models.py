@@ -93,6 +93,14 @@ class TestMethod(BaseModel):
     code: str = Field(description="测试方法代码")
     target_method: str = Field(description="目标被测方法")
     description: Optional[str] = Field(default=None, description="测试描述")
+    version: int = Field(default=1, ge=1, description="方法版本号（每次修改递增）")
+    created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
+    updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
 
 
 class TestCase(BaseModel):
@@ -110,6 +118,7 @@ class TestCase(BaseModel):
     kills: List[str] = Field(default_factory=list, description="击杀的变异体 ID 列表")
     coverage_lines: List[int] = Field(default_factory=list, description="覆盖的代码行")
     coverage_branches: List[str] = Field(default_factory=list, description="覆盖的分支")
+    version: int = Field(default=1, ge=1, description="版本号（每次修改递增）")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 

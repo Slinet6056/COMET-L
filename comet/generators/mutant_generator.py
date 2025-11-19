@@ -163,7 +163,7 @@ class MutantGenerator:
                     mutant = Mutant(
                         id=generate_id("mutant", f"{class_name}_{mut_data.get('intent', '')}"),
                         class_name=class_name,
-                        method_name=None,  # 可以从代码中提取
+                        method_name=target_method,  # 使用传入的目标方法名
                         patch=patch,
                         semantic_intent=mut_data.get("intent", "Unknown intent"),
                         pattern_id=mut_data.get("pattern_id"),

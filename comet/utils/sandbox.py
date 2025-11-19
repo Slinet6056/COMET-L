@@ -118,3 +118,56 @@ class SandboxManager:
         if not self.sandbox_root.exists():
             return []
         return [d.name for d in self.sandbox_root.iterdir() if d.is_dir()]
+
+    def export_test_files(self, sandbox_id: str, original_project_path: str) -> None:
+        """
+        将沙箱中的测试文件导出到原项目
+
+        Args:
+            sandbox_id: 沙箱 ID
+            original_project_path: 原项目路径
+        """
+        sandbox_path = self.sandbox_root / sandbox_id
+        if not sandbox_path.exists():
+            logger.error(f"沙箱不存在: {sandbox_id}")
+            return
+
+        # 获取沙箱中的测试目录
+        sandbox_test_root = sandbox_path / "src" / "test" / "java"
+        if not sandbox_test_root.exists():
+            logger.warning(f"沙箱中没有测试目录: {sandbox_test_root}")
+            return
+
+        # 获取原项目的测试目录
+        original_test_root = Path(original_project_path) / "src" / "test" / "java"
+        original_test_root.mkdir(parents=True, exist_ok=True)
+
+        # 复制所有测试文件
+        copied_count = 0
+        for test_file in sandbox_test_root.rglob("*Test.java"):
+            # 计算相对路径
+            rel_path = test_file.relative_to(sandbox_test_root)
+            target_file = original_test_root / rel_path
+
+            # 创建目标目录
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # 复制文件
+            shutil.copy2(test_file, target_file)
+            copied_count += 1
+            logger.info(f"导出测试文件: {rel_path}")
+
+        logger.info(f"成功导出 {copied_count} 个测试文件到原项目")
+
+    def create_workspace_sandbox(self, project_path: str) -> str:
+        """
+        创建工作空间沙箱（用于整个运行期间）
+
+        Args:
+            project_path: 源项目路径
+
+        Returns:
+            沙箱路径
+        """
+        sandbox_id = "workspace"
+        return self.create_sandbox(project_path, sandbox_id)

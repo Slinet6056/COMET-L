@@ -103,6 +103,14 @@ class PlannerAgent:
             决策字典 {action, params, reasoning}
         """
         try:
+            # 更新测试用例信息（让 Agent 知道当前有哪些测试）
+            if self.tools.db:
+                try:
+                    all_test_cases = self.tools.db.get_all_test_cases()
+                    self.state.set_test_cases(all_test_cases)
+                except Exception as e:
+                    logger.warning(f"获取测试用例列表失败: {e}")
+
             # 动态获取工具描述
             tools_description = self.tools.get_tools_description()
 
