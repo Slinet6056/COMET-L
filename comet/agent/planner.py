@@ -58,6 +58,9 @@ class PlannerAgent:
             logger.info(f"迭代 {self.state.iteration + 1}/{self.max_iterations}")
             logger.info(f"{'='*60}")
 
+            # 从数据库同步状态
+            self._sync_state_from_db()
+
             # LLM 决策
             decision = self._make_decision()
 
@@ -94,6 +97,31 @@ class PlannerAgent:
             return True
 
         return False
+
+    def _sync_state_from_db(self) -> None:
+        """从数据库同步状态信息"""
+        if not self.tools.db:
+            return
+
+        try:
+            # 获取变异体统计
+            mutants = self.tools.db.get_valid_mutants()
+            self.state.total_mutants = len(mutants)
+            self.state.survived_mutants = len([m for m in mutants if m.survived])
+            self.state.killed_mutants = self.state.total_mutants - self.state.survived_mutants
+
+            # 计算变异分数
+            if self.state.total_mutants > 0:
+                self.state.mutation_score = self.state.killed_mutants / self.state.total_mutants
+            else:
+                self.state.mutation_score = 0.0
+
+            logger.debug(
+                f"状态已同步: {self.state.total_mutants} 个变异体 "
+                f"({self.state.killed_mutants} 击杀, {self.state.survived_mutants} 幸存)"
+            )
+        except Exception as e:
+            logger.warning(f"同步状态失败: {e}")
 
     def _make_decision(self) -> Optional[Dict[str, Any]]:
         """
