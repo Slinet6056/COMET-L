@@ -102,6 +102,24 @@ class Database:
             )
         """)
 
+        # 方法覆盖率表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS method_coverage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                iteration INTEGER NOT NULL,
+                class_name TEXT NOT NULL,
+                method_name TEXT NOT NULL,
+                covered_lines TEXT NOT NULL,
+                missed_lines TEXT NOT NULL,
+                total_lines INTEGER,
+                covered_branches INTEGER,
+                total_branches INTEGER,
+                line_coverage REAL,
+                branch_coverage REAL,
+                timestamp TEXT
+            )
+        """)
+
         # 创建索引
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_mutants_status ON mutants(status)
@@ -117,6 +135,12 @@ class Database:
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_test_methods_name ON test_methods(test_case_id, method_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_coverage_class_method ON method_coverage(class_name, method_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_coverage_iteration ON method_coverage(iteration)
         """)
 
         self.conn.commit()
@@ -438,6 +462,153 @@ class Database:
             methods_by_name[method_name].append(method)
 
         return methods_by_name
+
+    def save_method_coverage(self, coverage, iteration: int) -> None:
+        """
+        保存方法覆盖率数据
+
+        Args:
+            coverage: MethodCoverage 对象（来自 coverage_parser）
+            iteration: 迭代次数
+        """
+        from datetime import datetime
+        # 提取简单类名（去掉包名）
+        simple_class_name = coverage.class_name.split('.')[-1] if '.' in coverage.class_name else coverage.class_name
+
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO method_coverage
+            (iteration, class_name, method_name, covered_lines, missed_lines,
+             total_lines, covered_branches, total_branches, line_coverage, branch_coverage, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            iteration,
+            simple_class_name,  # 使用简单类名
+            coverage.method_name,
+            json.dumps(coverage.covered_lines),
+            json.dumps(coverage.missed_lines),
+            coverage.total_lines,
+            coverage.covered_branches,
+            coverage.total_branches,
+            coverage.line_coverage_rate,
+            coverage.branch_coverage_rate,
+            datetime.now().isoformat(),
+        ))
+        self.conn.commit()
+
+    def get_method_coverage(self, class_name: str, method_name: str):
+        """
+        获取方法的最新覆盖率
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+
+        Returns:
+            MethodCoverage 对象或 None
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM method_coverage
+            WHERE class_name = ? AND method_name = ?
+            ORDER BY iteration DESC, id DESC
+            LIMIT 1
+        """, (class_name, method_name))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_method_coverage(row)
+
+    def get_latest_coverage_for_class(self, class_name: str) -> List:
+        """
+        获取类的最新覆盖率（所有方法）
+
+        Args:
+            class_name: 类名
+
+        Returns:
+            MethodCoverage 对象列表
+        """
+        cursor = self.conn.cursor()
+        # 获取最新迭代号
+        cursor.execute("""
+            SELECT MAX(iteration) FROM method_coverage WHERE class_name = ?
+        """, (class_name,))
+        result = cursor.fetchone()
+        max_iteration = result[0] if result and result[0] is not None else 0
+
+        # 获取该迭代的所有方法覆盖率
+        cursor.execute("""
+            SELECT * FROM method_coverage
+            WHERE class_name = ? AND iteration = ?
+            ORDER BY method_name
+        """, (class_name, max_iteration))
+        return [self._row_to_method_coverage(row) for row in cursor.fetchall()]
+
+    def get_low_coverage_methods(self, threshold: float = 0.8) -> List:
+        """
+        获取低覆盖率的方法
+
+        Args:
+            threshold: 覆盖率阈值（默认 0.8，即 80%）
+
+        Returns:
+            MethodCoverage 对象列表，按覆盖率从低到高排序
+        """
+        cursor = self.conn.cursor()
+        # 获取最新迭代号
+        cursor.execute("SELECT MAX(iteration) FROM method_coverage")
+        result = cursor.fetchone()
+        max_iteration = result[0] if result and result[0] is not None else 0
+
+        # 获取低于阈值的方法
+        cursor.execute("""
+            SELECT * FROM method_coverage
+            WHERE iteration = ? AND line_coverage < ?
+            ORDER BY line_coverage ASC
+        """, (max_iteration, threshold))
+        return [self._row_to_method_coverage(row) for row in cursor.fetchall()]
+
+    def get_all_method_coverage(self, iteration: Optional[int] = None) -> List:
+        """
+        获取所有方法的覆盖率
+
+        Args:
+            iteration: 迭代次数（如果为 None 则获取最新迭代）
+
+        Returns:
+            MethodCoverage 对象列表
+        """
+        cursor = self.conn.cursor()
+
+        if iteration is None:
+            # 获取最新迭代号
+            cursor.execute("SELECT MAX(iteration) FROM method_coverage")
+            result = cursor.fetchone()
+            iteration = result[0] if result and result[0] is not None else 0
+
+        cursor.execute("""
+            SELECT * FROM method_coverage
+            WHERE iteration = ?
+            ORDER BY class_name, method_name
+        """, (iteration,))
+        return [self._row_to_method_coverage(row) for row in cursor.fetchall()]
+
+    def _row_to_method_coverage(self, row: sqlite3.Row):
+        """将数据库行转换为 MethodCoverage 对象"""
+        from ..executor.coverage_parser import MethodCoverage
+        return MethodCoverage(
+            class_name=row["class_name"],
+            method_name=row["method_name"],
+            covered_lines=json.loads(row["covered_lines"]) if row["covered_lines"] else [],
+            missed_lines=json.loads(row["missed_lines"]) if row["missed_lines"] else [],
+            total_lines=row["total_lines"],
+            covered_branches=row["covered_branches"],
+            missed_branches=row["total_branches"] - row["covered_branches"],
+            total_branches=row["total_branches"],
+            line_coverage_rate=row["line_coverage"],
+            branch_coverage_rate=row["branch_coverage"],
+        )
 
     def close(self) -> None:
         """关闭数据库连接"""

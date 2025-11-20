@@ -116,9 +116,38 @@ class PlannerAgent:
             else:
                 self.state.mutation_score = 0.0
 
+            # 获取覆盖率统计
+            try:
+                all_coverages = self.tools.db.get_all_method_coverage()
+                if all_coverages:
+                    # 计算所有方法的加权平均覆盖率
+                    total_lines = sum(c.total_lines for c in all_coverages)
+                    covered_lines = sum(len(c.covered_lines) for c in all_coverages)
+                    total_branches = sum(c.total_branches for c in all_coverages)
+                    covered_branches = sum(c.covered_branches for c in all_coverages)
+
+                    self.state.line_coverage = covered_lines / total_lines if total_lines > 0 else 0.0
+                    self.state.branch_coverage = covered_branches / total_branches if total_branches > 0 else 0.0
+                else:
+                    self.state.line_coverage = 0.0
+                    self.state.branch_coverage = 0.0
+
+                # 同步当前目标方法的覆盖率
+                if self.state.current_target and self.state.current_target.get("class_name") and self.state.current_target.get("method_name"):
+                    current_coverage = self.tools.db.get_method_coverage(
+                        self.state.current_target["class_name"],
+                        self.state.current_target["method_name"]
+                    )
+                    if current_coverage:
+                        self.state.current_method_coverage = current_coverage.line_coverage_rate
+                        logger.debug(f"已更新当前方法覆盖率: {self.state.current_method_coverage:.1%}")
+            except Exception as e:
+                logger.warning(f"同步覆盖率数据失败: {e}")
+
             logger.debug(
                 f"状态已同步: {self.state.total_mutants} 个变异体 "
-                f"({self.state.killed_mutants} 击杀, {self.state.survived_mutants} 幸存)"
+                f"({self.state.killed_mutants} 击杀, {self.state.survived_mutants} 幸存), "
+                f"全局行覆盖率={self.state.line_coverage:.1%}, 全局分支覆盖率={self.state.branch_coverage:.1%}"
             )
         except Exception as e:
             logger.warning(f"同步状态失败: {e}")
@@ -185,6 +214,11 @@ class PlannerAgent:
         try:
             result = self.tools.call(action, **params)
             logger.info(f"工具执行成功: {action}")
+
+            # 如果是refine_tests，更新当前方法的覆盖率
+            if action == "refine_tests" and isinstance(result, dict) and "method_coverage" in result:
+                self.state.current_method_coverage = result["method_coverage"]
+                logger.debug(f"更新当前方法覆盖率: {self.state.current_method_coverage:.1%}")
 
             # 记录操作历史
             self.state.add_action(

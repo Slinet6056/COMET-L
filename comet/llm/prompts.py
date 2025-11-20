@@ -239,10 +239,16 @@ Bug 描述：
 {% endfor %}
 {% endif %}
 
-{% if coverage_gaps %}
-覆盖缺口：
-未覆盖的行: {{ coverage_gaps.uncovered_lines | join(', ') }}
-未覆盖的分支: {{ coverage_gaps.uncovered_branches | join(', ') }}
+{% if coverage_gaps and coverage_gaps.coverage_rate is defined %}
+**覆盖率缺口分析**：
+- 当前行覆盖率：{{ "%.1f"|format(coverage_gaps.coverage_rate * 100) }}%
+- 已覆盖：{{ coverage_gaps.covered_lines }}/{{ coverage_gaps.total_lines }} 行
+{% if coverage_gaps.uncovered_lines %}
+- 未覆盖的行号：{{ coverage_gaps.uncovered_lines | join(', ') }}
+- **请重点针对这些未覆盖的行号生成测试用例**
+{% else %}
+- **该方法已达到100%行覆盖率，请关注分支覆盖和边界情况**
+{% endif %}
 {% endif %}
 
 **测试要求**：
@@ -361,7 +367,7 @@ void testAddPositiveNumbers() {
 
     # 测试修复提示词
     FIX_TEST_SYSTEM = """你是一个 Java 测试代码修复专家。
-你的任务是根据编译错误信息修复测试代码。
+你的任务是根据错误信息修复测试代码（包括编译错误和测试运行失败）。
 
 **严格限制**：
 1. **只能修改测试方法内部的实现代码**（方法体内的语句）
@@ -374,13 +380,19 @@ void testAddPositiveNumbers() {
    - 只保持原样
 
 **修复策略**：
-1. 不要修改 import 语句
-2. 如果是变量未定义，检查方法内是否正确使用了类的成员变量（如 target）
-3. 如果是语法错误，仅修正方法体内的语法问题（括号、分号等）
+1. **编译错误**：检查语法、变量定义、类型匹配等
+2. **测试运行失败**（AssertionFailedError）：
+   - 检查断言的期望值是否正确
+   - 特别注意整数溢出问题（如 Integer.MAX_VALUE + Integer.MIN_VALUE = -1，不是 0）
+   - 检查边界条件的处理是否符合实际行为
+   - 如果断言不合理，修正期望值或删除该断言
+3. 不要修改 import 语句
+4. 如果是变量未定义，检查方法内是否正确使用了类的成员变量（如 target）
 
 **绝对禁止**：
 - 不要添加、删除或修改任何 import 语句
 - 不要修改类名、包名
+- 不要为了通过测试而修改被测代码的行为（测试应该反映真实行为）
 - 不要修改测试方法的名称、参数、注解
 - 不要修改 setUp()、tearDown() 等辅助方法
 - 只修改测试方法的方法体内部代码
@@ -393,24 +405,29 @@ void testAddPositiveNumbers() {
   "changes": "修复了什么问题的说明"
 }"""
 
-    FIX_TEST_USER = Template("""请修复以下测试代码的编译错误：
+    FIX_TEST_USER = Template("""请修复以下测试代码的错误：
 
 原始测试代码：
 ```java
 {{ test_code }}
 ```
 
-编译错误信息：
+错误信息：
 ```
 {{ compile_error }}
 ```
 
 **修复要求**：
-1. 仔细查看编译错误，定位到具体的测试方法和行号
-2. **只修改出错的测试方法内部代码**，不要修改方法名
-3. **保持 import 语句、类声明、其他方法完全不变**
-4. 如果是静态导入问题（如 `import static ... Assertions.*`），则修改方法内调用方式，不要改 import
-5. 返回完整的测试类代码（包括未修改的部分）
+1. 仔细查看错误信息，定位到具体的测试方法和行号
+2. 如果是**测试断言失败**（AssertionFailedError: expected X but was Y）：
+   - 分析期望值是否合理（注意整数溢出等边界情况）
+   - 修正不合理的期望值，或删除该断言
+3. 如果是**编译错误**：
+   - 修正语法、类型、变量定义等问题
+4. **只修改出错的测试方法内部代码**，不要修改方法名
+5. **保持 import 语句、类声明、其他方法完全不变**
+6. 如果是静态导入问题，修改方法内调用方式，不要改 import
+7. 返回完整的测试类代码（包括未修改的部分）
 
 请提供修复后的完整测试类代码。""")
 
@@ -440,6 +457,13 @@ void testAddPositiveNumbers() {
 - 如果多次生成都返回 0，说明可能存在问题，应该尝试其他策略或选择新目标
 - **refine_tests 优于重新 generate_tests**：有现有测试时应优先使用 refine_tests
 
+**覆盖率优化策略**：
+- **重要**：状态中显示的覆盖率是整个项目的全局覆盖率，不是当前方法的覆盖率
+- 如果当前方法已经高覆盖率（如100%），但全局覆盖率仍低，说明需要选择新目标为其他方法生成测试
+- select_target 工具会自动优先选择低覆盖率的方法（<80%）
+- refine_tests 工具会获得当前方法的行级覆盖率缺口信息，LLM 会针对性优化
+- 如果连续3次以上 refine_tests 后覆盖率没有显著提升，应该选择新目标
+
 **返回格式要求**：
 必须返回 JSON 对象，包含以下字段：
 {
@@ -456,8 +480,8 @@ void testAddPositiveNumbers() {
 幸存变异体: {{ state.survived_mutants }}
 总测试数: {{ state.total_tests }}
 变异分数: {{ state.mutation_score | round(3) }}
-行覆盖率: {{ state.line_coverage | round(3) }}
-分支覆盖率: {{ state.branch_coverage | round(3) }}
+全局行覆盖率: {{ state.line_coverage | round(3) }}（整个项目）
+全局分支覆盖率: {{ state.branch_coverage | round(3) }}（整个项目）
 LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
 
 {% if state.current_target %}
@@ -466,6 +490,9 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
 - 方法名: {{ state.current_target.method_name }}
 {% if state.current_target.method_signature %}
 - 方法签名: {{ state.current_target.method_signature }}
+{% endif %}
+{% if state.current_method_coverage is not none %}
+- 当前方法行覆盖率: {{ (state.current_method_coverage * 100) | round(1) }}%
 {% endif %}
 {% else %}
 当前选中的目标: 无（尚未选择）

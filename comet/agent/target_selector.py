@@ -57,23 +57,90 @@ class TargetSelector:
 
     def select_by_coverage(self) -> Dict[str, Any]:
         """
-        选择覆盖率最低的类
+        选择覆盖率最低的方法
+
+        优先选择覆盖率低于 80% 的方法，如果所有方法都达标则选择覆盖率最低的
 
         Returns:
             目标信息字典
         """
-        # 获取所有类
+        # 尝试从数据库获取低覆盖率方法
+        low_cov_methods = self.db.get_low_coverage_methods(threshold=0.8)
+
+        if low_cov_methods:
+            # 选择覆盖率最低的方法
+            selected = low_cov_methods[0]
+            logger.info(
+                f"选择目标（低覆盖率）: {selected.class_name}.{selected.method_name} "
+                f"(覆盖率: {selected.line_coverage_rate:.1%})"
+            )
+
+            # 获取方法签名
+            methods = self._get_public_methods(selected.class_name)
+            selected_method_info = None
+            method_signature = None
+
+            if methods:
+                for method in methods:
+                    if isinstance(method, dict) and method.get("name") == selected.method_name:
+                        selected_method_info = method
+                        method_signature = method.get("signature")
+                        break
+
+            return {
+                "class_name": selected.class_name,
+                "method_name": selected.method_name,
+                "method_signature": method_signature,
+                "method_info": selected_method_info,
+                "strategy": "coverage",
+                "coverage_rate": selected.line_coverage_rate,
+                "missed_lines": selected.missed_lines,
+            }
+
+        # 如果没有低覆盖率方法，尝试获取所有覆盖率数据
+        all_coverage = self.db.get_all_method_coverage()
+
+        if all_coverage:
+            # 选择覆盖率最低的方法
+            selected = min(all_coverage, key=lambda x: x.line_coverage_rate)
+            logger.info(
+                f"选择目标（最低覆盖率）: {selected.class_name}.{selected.method_name} "
+                f"(覆盖率: {selected.line_coverage_rate:.1%})"
+            )
+
+            # 获取方法签名
+            methods = self._get_public_methods(selected.class_name)
+            selected_method_info = None
+            method_signature = None
+
+            if methods:
+                for method in methods:
+                    if isinstance(method, dict) and method.get("name") == selected.method_name:
+                        selected_method_info = method
+                        method_signature = method.get("signature")
+                        break
+
+            return {
+                "class_name": selected.class_name,
+                "method_name": selected.method_name,
+                "method_signature": method_signature,
+                "method_info": selected_method_info,
+                "strategy": "coverage",
+                "coverage_rate": selected.line_coverage_rate,
+                "missed_lines": selected.missed_lines,  # 行号列表
+                "covered_lines": selected.covered_lines,  # 行号列表
+            }
+
+        # 如果没有覆盖率数据，回退到默认逻辑
+        logger.info("没有覆盖率数据，使用默认选择策略")
         all_classes = self._get_all_classes()
 
         if not all_classes:
             logger.warning("未找到任何 Java 类")
             return {"class_name": None, "method_name": None}
 
-        # 简化实现：选择第一个类
-        # 未来可以基于覆盖率数据做更智能的选择
+        # 选择第一个类的第一个方法
         selected_class = all_classes[0]
-
-        # 获取类的 public 方法
         methods = self._get_public_methods(selected_class)
         selected_method_info = None
         method_name = None
@@ -84,7 +151,7 @@ class TargetSelector:
             method_name = selected_method_info.get("name") if isinstance(selected_method_info, dict) else selected_method_info
             method_signature = selected_method_info.get("signature") if isinstance(selected_method_info, dict) else None
 
-        logger.info(f"选择目标（按覆盖率）: {selected_class}.{method_name}")
+        logger.info(f"选择目标（默认）: {selected_class}.{method_name}")
         return {
             "class_name": selected_class,
             "method_name": method_name,

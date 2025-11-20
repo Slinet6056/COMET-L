@@ -22,6 +22,7 @@ class AgentState:
         self.mutation_score = 0.0
         self.line_coverage = 0.0
         self.branch_coverage = 0.0
+        self.current_method_coverage: Optional[float] = None  # 当前方法的覆盖率
         self.llm_calls = 0
         self.budget = 1000
 
@@ -126,6 +127,7 @@ class AgentState:
             "mutation_score": self.mutation_score,
             "line_coverage": self.line_coverage,
             "branch_coverage": self.branch_coverage,
+            "current_method_coverage": self.current_method_coverage,
             "llm_calls": self.llm_calls,
             "budget": self.budget,
             "current_target": self.current_target,
