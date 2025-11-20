@@ -442,14 +442,18 @@ void testAddPositiveNumbers() {
 1. 如果"当前选中的目标"为"无"，应调用 select_target（参数为 {}）
 2. 如果已有目标但变异体数量为 0，应调用 generate_mutants（参数为 {"class_name": "当前目标类名", "method_name": "当前目标方法名"}）
 3. 如果已有目标但测试数量为 0，应调用 generate_tests（参数为 {"class_name": "当前目标类名", "method_name": "当前目标方法名"}）
-4. 如果已有测试和变异体，应调用 run_evaluation（参数为 {}）
-5. 评估后如果变异分数低或有幸存变异体，应调用 refine_tests 完善测试（参数为 {"class_name": "类名", "method_name": "方法名"}）
-6. 可以在 generate_tests 和 refine_tests 之间迭代多次，直到测试质量满意
-7. 测试质量满意后，可以选择新目标继续
+4. **关键步骤**：如果刚生成了变异体或测试，必须立即调用 run_evaluation（参数为 {}）来获取覆盖率和变异分数
+5. 如果已有测试和变异体但还没评估过，应调用 run_evaluation（参数为 {}）
+6. 评估后如果变异分数低或有幸存变异体，应调用 refine_tests 完善测试（参数为 {"class_name": "类名", "method_name": "方法名"}）
+7. refine_tests 后也应该调用 run_evaluation 来查看改进效果
+8. 可以在 refine_tests 和 run_evaluation 之间迭代多次，直到测试质量满意
+9. 测试质量满意后，可以选择新目标继续
 
 **重要决策指导**：
 - 查看"最近操作历史"了解之前做了什么，避免重复无效操作
-- **测试迭代策略**：首次使用 generate_tests，后续改进使用 refine_tests
+- **评估是必须的**：在任何 generate_tests、generate_mutants 或 refine_tests 后，都必须调用 run_evaluation 才能获得准确的覆盖率和变异分数
+- **不要基于旧数据决策**：如果最近的操作是 generate_tests 或 refine_tests，但没有紧接着 run_evaluation，那么当前的覆盖率和变异分数是过时的
+- **测试迭代策略**：首次使用 generate_tests，后续改进使用 refine_tests，每次改动后都要 run_evaluation
 - **质量导向**：如果变异分数 < 0.7 或有幸存变异体，应优先完善测试而非选择新目标
 - 不要连续执行完全相同的操作（除非有明确的理由）
 - 如果某个操作失败了（特别是参数错误），检查参数格式是否正确
@@ -459,6 +463,7 @@ void testAddPositiveNumbers() {
 
 **覆盖率优化策略**：
 - **重要**：状态中显示的覆盖率是整个项目的全局覆盖率，不是当前方法的覆盖率
+- **覆盖率数据的有效性**：只有在 run_evaluation 之后，覆盖率数据才是最新的；如果没有评估过，覆盖率可能为 0 或过时
 - 如果当前方法已经高覆盖率（如100%），但全局覆盖率仍低，说明需要选择新目标为其他方法生成测试
 - select_target 工具会自动优先选择低覆盖率的方法（<80%）
 - refine_tests 工具会获得当前方法的行级覆盖率缺口信息，LLM 会针对性优化
