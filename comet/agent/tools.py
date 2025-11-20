@@ -232,9 +232,21 @@ class AgentTools:
         selector = TargetSelector(self.project_path, self.java_executor, self.db)
         target = selector.select(criteria)
 
+        # 获取目标方法的覆盖率
+        if target.get("class_name") and target.get("method_name"):
+            coverage = self.db.get_method_coverage(target["class_name"], target["method_name"])
+            if coverage:
+                target["method_coverage"] = coverage.line_coverage_rate
+                logger.info(f"目标方法覆盖率: {coverage.line_coverage_rate:.1%}")
+            else:
+                target["method_coverage"] = 0.0
+
         # 保存到状态
         if self.state and target.get("class_name"):
             self.state.current_target = target
+            # 更新当前方法覆盖率
+            if "method_coverage" in target:
+                self.state.current_method_coverage = target["method_coverage"]
 
         logger.info(f"已选择目标: {target.get('class_name')}.{target.get('method_name')}")
         return target
@@ -349,17 +361,65 @@ class AgentTools:
             logger.error("写入测试文件失败")
             return {"generated": 0}
 
-        # 验证编译
+        # 验证编译和运行
         compile_result = self.java_executor.compile_tests(self.project_path)
         if compile_result.get("success"):
             test_case.compile_success = True
             logger.info(f"测试编译成功: {test_case.class_name}")
+
+            # 运行测试以确保没有运行时错误
+            logger.info("运行测试验证...")
+            test_result = self.java_executor.run_tests(self.project_path)
+
+            if not test_result.get("success"):
+                # 测试运行失败（可能是测试断言错误）
+                test_error = test_result.get('output', 'Unknown test failure')
+                logger.warning(f"测试运行失败，尝试修复...")
+                logger.debug(f"测试失败详情: {test_error[:500]}")
+
+                # 尝试自动修复测试失败
+                fixed_test_case = self.test_generator.regenerate_with_feedback(
+                    test_case=test_case,
+                    compile_error=f"测试运行失败:\n{test_error}",
+                    max_retries=2,
+                )
+
+                if fixed_test_case:
+                    # 重新写入并验证
+                    test_file = write_test_file(
+                        project_path=self.project_path,
+                        package_name=fixed_test_case.package_name,
+                        test_code=fixed_test_case.full_code,
+                        test_class_name=fixed_test_case.class_name,
+                    )
+
+                    compile_result2 = self.java_executor.compile_tests(self.project_path)
+                    if compile_result2.get("success"):
+                        test_result2 = self.java_executor.run_tests(self.project_path)
+                        if test_result2.get("success"):
+                            fixed_test_case.compile_success = True
+                            fixed_test_case.compile_error = None
+                            logger.info(f"修复成功！测试现在可以正常运行")
+                            test_case = fixed_test_case
+                        else:
+                            logger.warning(f"修复后测试仍然失败")
+                            fixed_test_case.compile_error = "Test execution failed after fix"
+                            test_case = fixed_test_case
+                    else:
+                        logger.error(f"修复后无法编译")
+                        fixed_test_case.compile_error = str(compile_result2.get('error'))
+                        test_case = fixed_test_case
+                else:
+                    logger.error("自动修复失败")
+                    test_case.compile_error = "Test execution failed"
+            else:
+                logger.info("测试运行成功！")
         else:
             compile_error = compile_result.get('error', 'Unknown error')
             logger.warning(f"测试编译失败: {compile_error}")
             test_case.compile_error = str(compile_error)
 
-            # 尝试自动修复
+            # 尝试自动修复编译错误
             logger.info("尝试自动修复编译错误...")
             fixed_test_case = self.test_generator.regenerate_with_feedback(
                 test_case=test_case,
@@ -377,13 +437,19 @@ class AgentTools:
                     test_class_name=fixed_test_case.class_name,
                 )
 
-                # 重新编译验证
+                # 重新编译和运行验证
                 compile_result2 = self.java_executor.compile_tests(self.project_path)
                 if compile_result2.get("success"):
-                    fixed_test_case.compile_success = True
-                    fixed_test_case.compile_error = None
-                    logger.info(f"修复成功！测试现在可以编译: {fixed_test_case.class_name}")
-                    test_case = fixed_test_case
+                    test_result2 = self.java_executor.run_tests(self.project_path)
+                    if test_result2.get("success"):
+                        fixed_test_case.compile_success = True
+                        fixed_test_case.compile_error = None
+                        logger.info(f"修复成功！测试现在可以编译和运行")
+                        test_case = fixed_test_case
+                    else:
+                        logger.warning(f"修复后测试运行失败")
+                        fixed_test_case.compile_error = "Test execution failed after fix"
+                        test_case = fixed_test_case
                 else:
                     logger.error(f"修复后仍无法编译: {compile_result2.get('error', 'Unknown error')}")
                     fixed_test_case.compile_error = str(compile_result2.get('error'))
@@ -439,7 +505,27 @@ class AgentTools:
             class_name, method_name, all_mutants
         ) if self.metrics_collector else []
 
-        gaps = {}  # 简化实现
+        # 获取覆盖率信息
+        current_method_coverage = None
+        coverage = self.db.get_method_coverage(class_name, method_name)
+        if coverage:
+            gaps = {
+                "coverage_rate": coverage.line_coverage_rate,
+                "total_lines": coverage.total_lines,
+                "covered_lines": len(coverage.covered_lines),
+                "uncovered_lines": coverage.missed_lines,  # 现在是行号列表
+            }
+            current_method_coverage = coverage.line_coverage_rate
+            logger.info(
+                f"覆盖率信息: {class_name}.{method_name} - "
+                f"{coverage.line_coverage_rate:.1%} "
+                f"({len(coverage.covered_lines)}/{coverage.total_lines} 行)"
+            )
+            if coverage.missed_lines:
+                logger.debug(f"  未覆盖行: {coverage.missed_lines}")
+        else:
+            gaps = {}
+            logger.debug(f"没有找到 {class_name}.{method_name} 的覆盖率信息")
 
         # 构建评估反馈
         evaluation_feedback = None
@@ -471,17 +557,65 @@ class AgentTools:
             logger.error("写入测试文件失败")
             return {"refined": 0}
 
-        # 验证编译
+        # 验证编译和运行
         compile_result = self.java_executor.compile_tests(self.project_path)
         if compile_result.get("success"):
             refined_test_case.compile_success = True
             logger.info(f"完善后的测试编译成功: {refined_test_case.class_name}")
+
+            # 运行测试以确保没有运行时错误
+            logger.info("运行测试验证...")
+            test_result = self.java_executor.run_tests(self.project_path)
+
+            if not test_result.get("success"):
+                # 测试运行失败（可能是测试断言错误）
+                test_error = test_result.get('output', 'Unknown test failure')
+                logger.warning(f"完善后的测试运行失败，尝试修复...")
+                logger.debug(f"测试失败详情: {test_error[:500]}")
+
+                # 尝试自动修复测试失败
+                fixed_test_case = self.test_generator.regenerate_with_feedback(
+                    test_case=refined_test_case,
+                    compile_error=f"测试运行失败:\n{test_error}",
+                    max_retries=2,
+                )
+
+                if fixed_test_case:
+                    # 重新写入并验证
+                    test_file = write_test_file(
+                        project_path=self.project_path,
+                        package_name=fixed_test_case.package_name,
+                        test_code=fixed_test_case.full_code,
+                        test_class_name=fixed_test_case.class_name,
+                    )
+
+                    compile_result2 = self.java_executor.compile_tests(self.project_path)
+                    if compile_result2.get("success"):
+                        test_result2 = self.java_executor.run_tests(self.project_path)
+                        if test_result2.get("success"):
+                            fixed_test_case.compile_success = True
+                            fixed_test_case.compile_error = None
+                            logger.info(f"修复成功！测试现在可以正常运行")
+                            refined_test_case = fixed_test_case
+                        else:
+                            logger.warning(f"修复后测试仍然失败")
+                            fixed_test_case.compile_error = "Test execution failed after fix"
+                            refined_test_case = fixed_test_case
+                    else:
+                        logger.error(f"修复后无法编译")
+                        fixed_test_case.compile_error = str(compile_result2.get('error'))
+                        refined_test_case = fixed_test_case
+                else:
+                    logger.error("自动修复失败")
+                    refined_test_case.compile_error = "Test execution failed"
+            else:
+                logger.info("完善后的测试运行成功！")
         else:
             compile_error = compile_result.get('error', 'Unknown error')
             logger.warning(f"完善后的测试编译失败: {compile_error}")
             refined_test_case.compile_error = str(compile_error)
 
-            # 尝试自动修复
+            # 尝试自动修复编译错误
             logger.info("尝试自动修复编译错误...")
             fixed_test_case = self.test_generator.regenerate_with_feedback(
                 test_case=refined_test_case,
@@ -498,13 +632,19 @@ class AgentTools:
                     test_class_name=fixed_test_case.class_name,
                 )
 
-                # 重新编译
+                # 重新编译和运行
                 compile_result2 = self.java_executor.compile_tests(self.project_path)
                 if compile_result2.get("success"):
-                    fixed_test_case.compile_success = True
-                    fixed_test_case.compile_error = None
-                    logger.info(f"修复成功！")
-                    refined_test_case = fixed_test_case
+                    test_result2 = self.java_executor.run_tests(self.project_path)
+                    if test_result2.get("success"):
+                        fixed_test_case.compile_success = True
+                        fixed_test_case.compile_error = None
+                        logger.info(f"修复成功！测试现在可以编译和运行")
+                        refined_test_case = fixed_test_case
+                    else:
+                        logger.warning(f"修复后测试运行失败")
+                        fixed_test_case.compile_error = "Test execution failed after fix"
+                        refined_test_case = fixed_test_case
                 else:
                     logger.error(f"修复后仍无法编译")
                     fixed_test_case.compile_error = str(compile_result2.get('error'))
@@ -516,12 +656,19 @@ class AgentTools:
         logger.debug(f"准备保存完善后的测试用例: ID={refined_test_case.id}, version={refined_test_case.version}")
         self.db.save_test_case(refined_test_case)
 
-        return {
+        result = {
             "refined": len(refined_test_case.methods),
             "test_id": refined_test_case.id,
             "compile_success": refined_test_case.compile_success,
             "previous_count": len(test_case.methods),
         }
+
+        # 添加当前方法的覆盖率信息
+        if current_method_coverage is not None:
+            result["method_coverage"] = current_method_coverage
+            logger.info(f"当前方法 {method_name} 覆盖率: {current_method_coverage:.1%}")
+
+        return result
 
     def run_evaluation(self) -> Dict[str, Any]:
         """运行评估并构建击杀矩阵"""
@@ -555,12 +702,51 @@ class AgentTools:
             self.db.save_mutant(mutant)
         logger.debug(f"已保存 {len(mutants)} 个变异体的评估状态")
 
-        # 运行覆盖率分析
+        # 运行覆盖率分析（在工作沙箱上，针对原始代码）
         coverage_data = None
         try:
+            logger.info("收集覆盖率数据（针对原始代码）...")
             coverage_result = self.java_executor.run_tests_with_coverage(self.project_path)
+
             if coverage_result.get("success"):
                 coverage_data = coverage_result
+
+                # 解析覆盖率报告
+                from pathlib import Path
+                from ..executor.coverage_parser import CoverageParser
+
+                parser = CoverageParser()
+                jacoco_path = Path(self.project_path) / "target" / "site" / "jacoco" / "jacoco.xml"
+
+                if jacoco_path.exists():
+                    logger.info(f"解析 JaCoCo 报告: {jacoco_path}")
+                    method_coverages = parser.parse_jacoco_xml_with_lines(str(jacoco_path))
+
+                    # 保存到数据库
+                    iteration = self.state.iteration if self.state else 0
+                    for cov in method_coverages:
+                        self.db.save_method_coverage(cov, iteration)
+
+                    logger.info(f"已保存 {len(method_coverages)} 个方法的覆盖率数据")
+
+                    # 计算聚合覆盖率数据用于 metrics
+                    # 注意：详细的行号信息已保存到数据库，这里只传递统计数据给 metrics
+                    if method_coverages:
+                        total_lines = sum(c.total_lines for c in method_coverages)
+                        covered_lines_count = sum(len(c.covered_lines) for c in method_coverages)
+                        total_branches = sum(c.total_branches for c in method_coverages)
+                        covered_branches = sum(c.covered_branches for c in method_coverages)
+
+                        coverage_data = {
+                            "line_coverage": covered_lines_count / total_lines if total_lines > 0 else 0.0,
+                            "branch_coverage": covered_branches / total_branches if total_branches > 0 else 0.0,
+                            "total_lines": total_lines,
+                            "covered_lines": [],  # MetricsCollector 只需要百分比，不需要具体行号
+                            "covered_branches": covered_branches,
+                            "total_branches": total_branches,
+                        }
+                else:
+                    logger.warning(f"JaCoCo 报告不存在: {jacoco_path}")
         except Exception as e:
             logger.warning(f"覆盖率分析失败: {e}")
 

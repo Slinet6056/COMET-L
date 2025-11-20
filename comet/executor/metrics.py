@@ -177,23 +177,40 @@ class MetricsCollector:
         class_name: str,
         method_name: str,
         coverage_info: CoverageInfo = None,
+        db = None,
     ) -> Dict[str, Any]:
         """
-        分析覆盖缺口
+        分析覆盖缺口（优先使用数据库中的真实覆盖率数据）
 
         Args:
             class_name: 类名
             method_name: 方法名
-            coverage_info: 覆盖率信息
+            coverage_info: 覆盖率信息（已废弃，保留向后兼容）
+            db: 数据库实例
 
         Returns:
             覆盖缺口信息字典
         """
+        # 优先从数据库获取最新覆盖率
+        if db:
+            try:
+                coverage = db.get_method_coverage(class_name, method_name)
+                if coverage:
+                    return {
+                        "coverage_rate": coverage.line_coverage_rate,
+                        "total_lines": coverage.total_lines,
+                        "covered_lines": len(coverage.covered_lines),
+                        "uncovered_lines": coverage.missed_lines,  # 行号列表
+                    }
+            except Exception as e:
+                logger.warning(f"从数据库获取覆盖率失败: {e}")
+
+        # 回退到传入的 coverage_info
         if not coverage_info:
             return {
                 "uncovered_lines": [],
-                "uncovered_branches": [],
                 "coverage_rate": 0.0,
+                "total_lines": 0,
             }
 
         # 简化实现：返回未覆盖的行
@@ -207,8 +224,8 @@ class MetricsCollector:
 
         return {
             "uncovered_lines": uncovered_lines,
-            "uncovered_branches": [],
             "coverage_rate": coverage_info.line_coverage,
+            "total_lines": total_lines,
         }
 
     def update_from_evaluation(
