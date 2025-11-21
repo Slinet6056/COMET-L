@@ -9,6 +9,7 @@ from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
 from ..models import Contract
 from ..utils.hash_utils import generate_id
+from ..executor.java_executor import JavaExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -16,15 +17,17 @@ logger = logging.getLogger(__name__)
 class SpecExtractor:
     """契约提取器 - 从源代码中提取前置条件、后置条件和异常条件"""
 
-    def __init__(self, llm_client: LLMClient):
+    def __init__(self, llm_client: LLMClient, java_executor: Optional[JavaExecutor] = None):
         """
         初始化契约提取器
 
         Args:
             llm_client: LLM 客户端
+            java_executor: Java 执行器（用于代码解析）
         """
         self.llm = llm_client
         self.prompt_manager = PromptManager()
+        self.java_executor = java_executor
 
     def extract_from_method(
         self,
@@ -92,22 +95,59 @@ class SpecExtractor:
 
     def extract_from_class(
         self,
-        class_name: str,
-        class_code: str,
+        file_path: str,
+        class_name: Optional[str] = None,
         method_names: Optional[List[str]] = None,
     ) -> List[Contract]:
         """
-        从类中提取所有 public 方法的契约
+        从类文件中提取所有 public 方法的契约
 
         Args:
-            class_name: 类名
-            class_code: 类代码
+            file_path: Java 源文件路径
+            class_name: 类名（可选，如果不提供则从文件解析）
             method_names: 要提取的方法名列表（如果为 None 则提取所有 public 方法）
 
         Returns:
             Contract 对象列表
         """
-        # 简化实现：这里应该使用 JavaParser 解析类，提取方法
-        # 目前假设由 Java 侧提供方法列表
-        logger.warning("extract_from_class 需要 Java 侧支持来解析方法")
-        return []
+        if not self.java_executor:
+            logger.error("需要 JavaExecutor 来解析 Java 代码")
+            return []
+
+        try:
+            # 使用 JavaExecutor 获取 public 方法列表
+            methods_data = self.java_executor.get_public_methods(file_path)
+
+            if not methods_data:
+                logger.warning(f"无法从 {file_path} 提取方法")
+                return []
+
+            # 读取源代码
+            with open(file_path, 'r', encoding='utf-8') as f:
+                source_code = f.read()
+
+            contracts = []
+            for method in methods_data:
+                method_name = method.get('name')
+
+                # 如果指定了方法名列表，只提取列表中的方法
+                if method_names and method_name not in method_names:
+                    continue
+
+                # 提取契约
+                contract = self.extract_from_method(
+                    class_name=class_name or method.get('className', 'Unknown'),
+                    method_signature=method.get('signature', ''),
+                    source_code=method.get('body', ''),
+                    javadoc=method.get('javadoc'),
+                )
+
+                if contract:
+                    contracts.append(contract)
+
+            logger.info(f"从 {file_path} 提取了 {len(contracts)} 个方法契约")
+            return contracts
+
+        except Exception as e:
+            logger.error(f"提取类契约失败: {e}")
+            return []
