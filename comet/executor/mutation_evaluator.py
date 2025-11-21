@@ -134,21 +134,29 @@ class MutationEvaluator:
                 # 有测试失败 - 精确识别哪个测试失败了
                 logger.debug(f"  检测到 {len(failed_tests)} 个失败的测试")
 
+                # 构建测试用例的完整名称映射
+                # 从 TestCase 的 methods 中提取每个测试方法的名称
+                test_full_names = {}  # {test_case.id: [完整测试名称列表]}
                 for test_case in test_cases:
-                    # 检查这个测试用例是否失败
-                    # TestCase 可能存储为 class_name.method_name 或仅 method_name
+                    full_names = []
+                    for method in test_case.methods:
+                        # 构建完整的测试名称: package.class_name.method_name
+                        # 例如: com.example.CalculatorTest.testAddTwoPositiveNumbers
+                        if test_case.package_name:
+                            full_name = f"{test_case.package_name}.{test_case.class_name}.{method.method_name}"
+                        else:
+                            full_name = f"{test_case.class_name}.{method.method_name}"
+                        full_names.append(full_name)
+                    test_full_names[test_case.id] = full_names
+
+                for test_case in test_cases:
+                    # 检查这个测试用例中的任何一个测试方法是否失败
                     test_failed = False
 
-                    for failed_test in failed_tests:
-                        # 匹配策略：
-                        # 1. 完全匹配 test_case.id
-                        # 2. 失败测试的方法名匹配 test_case.id
-                        # 3. 失败测试包含 test_case.id（后缀匹配）
-                        if (test_case.id == failed_test or
-                            failed_test.endswith("." + test_case.id) or
-                            test_case.id in failed_test):
+                    for full_name in test_full_names[test_case.id]:
+                        if full_name in failed_tests:
                             test_failed = True
-                            logger.debug(f"    测试 {test_case.id} 击杀了变异体")
+                            logger.debug(f"    测试方法 {full_name} (测试用例 {test_case.id}) 击杀了变异体")
                             break
 
                     # True = 测试通过（变异体幸存）
@@ -160,6 +168,7 @@ class MutationEvaluator:
                     logger.warning(
                         f"  检测到测试失败但无法匹配到具体测试用例: {failed_tests}"
                     )
+                    logger.debug(f"  可用的测试名称: {test_full_names}")
                     # 保守策略：标记所有测试为失败
                     for test_case in test_cases:
                         results[test_case.id] = False

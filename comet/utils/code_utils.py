@@ -1,4 +1,7 @@
-"""代码处理工具函数"""
+"""代码处理工具函数 - 轻量级文本处理
+
+复杂的 Java 代码解析（提取方法、签名等）使用 JavaExecutor
+"""
 
 import re
 from typing import List, Dict, Optional
@@ -67,68 +70,6 @@ def add_line_numbers(code: str, start: int = 1) -> str:
     lines = code.split('\n')
     numbered_lines = [f"{i + start:4d} | {line}" for i, line in enumerate(lines)]
     return '\n'.join(numbered_lines)
-
-
-def remove_line_numbers(code_with_numbers: str) -> str:
-    """
-    移除代码中的行号
-
-    Args:
-        code_with_numbers: 带行号的代码
-
-    Returns:
-        不带行号的代码
-    """
-    lines = code_with_numbers.split('\n')
-    cleaned_lines = [re.sub(r'^\s*\d+\s*\|', '', line) for line in lines]
-    return '\n'.join(cleaned_lines)
-
-
-def extract_method_signature(java_code: str, method_name: str) -> Optional[str]:
-    """
-    提取方法签名
-
-    Args:
-        java_code: Java 源代码
-        method_name: 方法名
-
-    Returns:
-        方法签名（如果找到）
-    """
-    # 匹配方法签名（简化版）
-    pattern = rf'^\s*(public|private|protected)?\s*\w+\s+{method_name}\s*\([^)]*\)'
-    match = re.search(pattern, java_code, re.MULTILINE)
-    if match:
-        return match.group(0).strip()
-    return None
-
-
-def format_java_code(code: str) -> str:
-    """
-    简单的 Java 代码格式化
-
-    Args:
-        code: Java 源代码
-
-    Returns:
-        格式化后的代码
-    """
-    # 简单的格式化：移除多余空行
-    lines = code.split('\n')
-    formatted_lines = []
-    prev_empty = False
-
-    for line in lines:
-        is_empty = not line.strip()
-        if is_empty:
-            if not prev_empty:
-                formatted_lines.append(line)
-            prev_empty = True
-        else:
-            formatted_lines.append(line)
-            prev_empty = False
-
-    return '\n'.join(formatted_lines)
 
 
 def extract_class_from_file(file_path: str) -> str:

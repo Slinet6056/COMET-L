@@ -348,7 +348,7 @@ class AgentTools:
             return {"generated": 0}
 
         from ..utils.project_utils import find_java_file, write_test_file
-        from ..utils.code_utils import extract_class_from_file, extract_method_signature
+        from ..utils.code_utils import extract_class_from_file
 
         # 读取源代码
         file_path = find_java_file(self.project_path, class_name)
@@ -357,7 +357,21 @@ class AgentTools:
             return {"generated": 0}
 
         class_code = extract_class_from_file(str(file_path))
-        method_sig = extract_method_signature(class_code, method_name) if method_name else None
+
+        # 如果指定了方法名，使用 JavaExecutor 获取准确的方法签名
+        method_sig = None
+        if method_name:
+            methods = self.java_executor.get_public_methods(str(file_path))
+            if methods:
+                # 从方法列表中找到指定方法
+                for m in methods:
+                    if m.get('name') == method_name:
+                        method_sig = m.get('signature')
+                        break
+            if not method_sig:
+                # Fallback: 如果找不到，使用默认签名
+                logger.warning(f"未找到方法 {method_name} 的签名，使用默认值")
+                method_sig = f"public void {method_name}()"
 
         # 获取现有测试（用于参考，避免重复生成）
         existing_tests = self.db.get_tests_by_target_class(class_name)
