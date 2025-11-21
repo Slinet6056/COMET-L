@@ -150,7 +150,7 @@ class MetricsCollector:
         all_mutants: List[Mutant] = None,
     ) -> List[Mutant]:
         """
-        获取特定方法的幸存变异体
+        获取特定方法的幸存变异体（排除 outdated 状态）
 
         Args:
             class_name: 类名
@@ -158,7 +158,7 @@ class MetricsCollector:
             all_mutants: 所有变异体列表（如果为 None 则返回空列表）
 
         Returns:
-            幸存的变异体列表
+            幸存的有效变异体列表
         """
         if not all_mutants:
             return []
@@ -168,6 +168,7 @@ class MetricsCollector:
             if m.survived
             and m.class_name == class_name
             and (m.method_name == method_name or method_name is None)
+            and m.status != 'outdated'  # 排除 outdated 状态的变异体
         ]
 
         return survived

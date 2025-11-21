@@ -199,6 +199,58 @@ class Database:
         cursor.execute("SELECT * FROM mutants WHERE class_name = ?", (class_name,))
         return [self._row_to_mutant(row) for row in cursor.fetchall()]
 
+    def get_mutants_by_method(
+        self,
+        class_name: str,
+        method_name: str,
+        status: Optional[str] = "valid"
+    ) -> List[Mutant]:
+        """
+        获取指定方法的变异体
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+            status: 状态过滤（如 'valid', 'pending', None 表示所有状态）
+
+        Returns:
+            变异体列表
+        """
+        cursor = self.conn.cursor()
+        if status:
+            cursor.execute(
+                "SELECT * FROM mutants WHERE class_name = ? AND method_name = ? AND status = ?",
+                (class_name, method_name, status)
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM mutants WHERE class_name = ? AND method_name = ?",
+                (class_name, method_name)
+            )
+        return [self._row_to_mutant(row) for row in cursor.fetchall()]
+
+    def mark_mutants_outdated(self, class_name: str, method_name: str) -> int:
+        """
+        将指定方法的有效变异体标记为 outdated
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+
+        Returns:
+            被标记的变异体数量
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE mutants
+            SET status = 'outdated'
+            WHERE class_name = ? AND method_name = ? AND status = 'valid'
+        """, (class_name, method_name))
+        self.conn.commit()
+        updated_count = cursor.rowcount
+        logger.info(f"已将 {class_name}.{method_name} 的 {updated_count} 个变异体标记为 outdated")
+        return updated_count
+
     def save_test_case(self, test_case: TestCase) -> None:
         """
         保存测试用例（支持方法级别的版本控制）

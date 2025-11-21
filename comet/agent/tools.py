@@ -134,6 +134,23 @@ class AgentTools:
             )
         )
 
+        # 注册 refine_mutants
+        self.register(
+            name="refine_mutants",
+            func=self.refine_mutants,
+            metadata=ToolMetadata(
+                name="refine_mutants",
+                description="基于现有测试生成更有针对性的变异体（分析测试弱点）",
+                params={
+                    "class_name": "类名",
+                    "method_name": "方法名",
+                    "num_mutations": "变异体数量（默认5）"
+                },
+                when_to_use="根据项目复杂度和测试质量自主判断（可选工具）",
+                notes=["简单项目高杀死率是正常的，不必强制使用此工具"]
+            )
+        )
+
         # 注册 trigger_pitest
         self.register(
             name="trigger_pitest",
@@ -241,9 +258,21 @@ class AgentTools:
             else:
                 target["method_coverage"] = 0.0
 
-        # 保存到状态
+        # 保存到状态并处理目标切换
         if self.state and target.get("class_name"):
-            self.state.current_target = target
+            # 使用 update_target 方法，自动追踪上一个目标
+            previous = self.state.update_target(target)
+
+            # 如果目标切换了，将上一个目标的变异体标记为 outdated
+            if previous and previous.get("class_name") and previous.get("method_name"):
+                old_class = previous["class_name"]
+                old_method = previous["method_name"]
+                outdated_count = self.db.mark_mutants_outdated(old_class, old_method)
+                logger.info(
+                    f"目标已切换，将 {old_class}.{old_method} 的 "
+                    f"{outdated_count} 个变异体标记为 outdated"
+                )
+
             # 更新当前方法覆盖率
             if "method_coverage" in target:
                 self.state.current_method_coverage = target["method_coverage"]
@@ -275,6 +304,12 @@ class AgentTools:
 
         # 读取源代码
         class_code = extract_class_from_file(str(file_path))
+
+        # 如果指定了目标方法，将该方法的旧变异体标记为 outdated
+        if method_name:
+            outdated_count = self.db.mark_mutants_outdated(class_name, method_name)
+            if outdated_count > 0:
+                logger.info(f"已将 {outdated_count} 个旧变异体标记为 outdated")
 
         # 生成变异体（如果指定了目标方法，在生成时聚焦该方法）
         mutants = self.mutant_generator.generate_mutants(
@@ -671,13 +706,29 @@ class AgentTools:
         return result
 
     def run_evaluation(self) -> Dict[str, Any]:
-        """运行评估并构建击杀矩阵"""
+        """运行评估并构建击杀矩阵（只评估当前目标方法的变异体）"""
         if not all([self.project_path, self.mutation_evaluator, self.java_executor, self.db]):
             logger.error("run_evaluation: 缺少必要组件")
             return {"evaluated": 0}
 
-        # 获取所有待评估的变异体和测试
-        mutants = self.db.get_valid_mutants()  # 获取有效的变异体
+        # 获取当前目标方法
+        current_target = self.state.current_target if self.state else None
+
+        # 获取变异体：优先获取当前目标方法的变异体
+        if current_target and current_target.get("class_name") and current_target.get("method_name"):
+            class_name = current_target["class_name"]
+            method_name = current_target["method_name"]
+            mutants = self.db.get_mutants_by_method(
+                class_name=class_name,
+                method_name=method_name,
+                status="valid"
+            )
+            logger.info(f"评估目标方法 {class_name}.{method_name} 的变异体")
+        else:
+            # 如果没有当前目标，评估所有有效变异体
+            mutants = self.db.get_valid_mutants()
+            logger.info("评估所有有效变异体（未指定目标方法）")
+
         test_cases = self.db.get_all_tests()
 
         if not mutants:
@@ -827,6 +878,96 @@ class AgentTools:
         except Exception as e:
             logger.error(f"更新知识库失败: {e}")
             return {"updated": False, "error": str(e)}
+
+    def refine_mutants(
+        self,
+        class_name: str,
+        method_name: str,
+        num_mutations: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        基于现有测试生成更具针对性的变异体
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+            num_mutations: 变异体数量
+
+        Returns:
+            结果字典
+        """
+        if not all([self.project_path, self.mutant_generator, self.static_guard, self.db]):
+            logger.error("refine_mutants: 缺少必要组件")
+            return {"generated": 0}
+
+        from ..utils.project_utils import find_java_file
+        from ..utils.code_utils import extract_class_from_file
+
+        # 查找源文件
+        file_path = find_java_file(self.project_path, class_name)
+        if not file_path:
+            logger.error(f"未找到类文件: {class_name}")
+            return {"generated": 0}
+
+        # 读取源代码
+        class_code = extract_class_from_file(str(file_path))
+
+        # 获取现有变异体
+        existing_mutants = self.db.get_mutants_by_method(
+            class_name=class_name,
+            method_name=method_name,
+            status=None  # 获取所有状态的变异体
+        )
+
+        # 获取测试用例
+        test_cases = self.db.get_tests_by_target_class(class_name)
+
+        if not test_cases:
+            logger.warning(f"没有找到 {class_name} 的测试用例，无法完善变异体")
+            return {"generated": 0, "message": "No test cases found"}
+
+        # 计算击杀率
+        valid_mutants = [m for m in existing_mutants if m.status == 'valid']
+        if valid_mutants:
+            killed_count = len([m for m in valid_mutants if not m.survived])
+            kill_rate = killed_count / len(valid_mutants) if valid_mutants else 0.0
+        else:
+            kill_rate = 0.0
+
+        logger.info(
+            f"开始完善变异体: {class_name}.{method_name}, "
+            f"现有 {len(existing_mutants)} 个变异体, 击杀率 {kill_rate:.1%}"
+        )
+
+        # 调用变异生成器的 refine_mutants 方法
+        mutants = self.mutant_generator.refine_mutants(
+            class_name=class_name,
+            class_code=class_code,
+            existing_mutants=existing_mutants,
+            test_cases=test_cases,
+            kill_rate=kill_rate,
+            target_method=method_name,
+            num_mutations=num_mutations,
+        )
+
+        if not mutants:
+            logger.warning(f"未生成任何完善变异体: {class_name}.{method_name}")
+            return {"generated": 0}
+
+        # 静态过滤
+        valid_mutants = self.static_guard.filter_mutants(mutants, str(file_path))
+
+        # 保存到数据库
+        for mutant in valid_mutants:
+            mutant.patch.file_path = str(file_path)
+            self.db.save_mutant(mutant)
+
+        logger.info(f"成功完善并保存 {len(valid_mutants)} 个变异体")
+        return {
+            "generated": len(valid_mutants),
+            "mutant_ids": [m.id for m in valid_mutants],
+            "kill_rate": kill_rate,
+        }
 
     def trigger_pitest(self, project_path: str) -> Dict[str, Any]:
         """触发 PIT 测试（可选功能，暂未实现）"""
