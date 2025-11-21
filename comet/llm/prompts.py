@@ -161,6 +161,116 @@ Bug 描述：
 
 请生成 {{ num_mutations }} 个有意义的变异体。""")
 
+    # 变异完善提示词
+    REFINE_MUTATION_SYSTEM = """你是一个高级代码变异专家，专门基于现有测试的弱点生成更具针对性的变异体。
+
+你的任务是分析现有的变异体、测试代码和击杀率，生成新的、更难被测试检测的变异体。
+
+分析策略：
+1. **研究测试代码**：查看测试方法的断言、边界检查、异常处理
+2. **识别测试盲区**：找出测试没有充分验证的场景（如未测试的边界值、遗漏的异常情况）
+3. **针对性变异**：生成专门针对测试弱点的变异
+
+变异应该：
+1. 针对测试未覆盖或覆盖不足的语义问题
+2. 小范围修改（几行代码）
+3. 能够编译通过
+4. 代表真实可能出现的缺陷
+
+**重要**：必须返回 JSON 对象格式，包含 "mutations" 键，其值为变异数组。
+
+返回格式与 GENERATE_MUTATION 相同：
+{
+  "mutations": [
+    {
+      "line_start": 行号,
+      "line_end": 行号,
+      "original": "原始代码",
+      "mutated": "变异代码",
+      "intent": "针对测试的哪个弱点（说明测试为什么检测不到这个变异）",
+      "pattern_id": "模式ID（可选）"
+    }
+  ]
+}
+
+每个变异对象必须包含：
+- line_start: 起始行号（整数）
+- line_end: 结束行号（整数）
+- original: 原始代码片段（字符串，不要包含行号）
+- mutated: 变异后代码（字符串，不要包含行号）
+- intent: 语义意图（字符串，说明为什么这个变异能利用测试的弱点）
+- pattern_id: 使用的缺陷模式 ID（字符串，可选）"""
+
+    REFINE_MUTATION_USER = Template("""请基于现有测试生成更具针对性的变异体：
+
+类名：{{ class_name }}
+
+{% if target_method %}
+**目标方法**：请只针对 `{{ target_method }}` 方法生成变异体。
+{% endif %}
+
+源代码（带行号）：
+```java
+{{ source_code_with_lines }}
+```
+
+{% if test_cases %}
+现有测试代码：
+{% for test_case in test_cases %}
+测试类：{{ test_case.class_name }}
+{% for method in test_case.methods %}
+---
+方法名：{{ method.method_name }}
+```java
+{{ method.code }}
+```
+{% endfor %}
+{% endfor %}
+{% endif %}
+
+{% if existing_mutants %}
+现有变异体（参考，避免重复）：
+{% for mutant in existing_mutants[:10] %}
+- {{ mutant.semantic_intent }}
+  状态：{{ '被击杀' if not mutant.survived else '幸存' }}
+{% endfor %}
+{% endif %}
+
+当前击杀率：{{ "%.1f%%"|format(kill_rate * 100) }}
+
+{% if contracts %}
+相关契约：
+{% for contract in contracts %}
+- {{ contract.method_name }}:
+  前置条件: {{ contract.preconditions | join(', ') }}
+  后置条件: {{ contract.postconditions | join(', ') }}
+  异常条件: {{ contract.exceptions | join(', ') }}
+{% endfor %}
+{% endif %}
+
+{% if patterns %}
+可用的缺陷模式：
+{% for pattern in patterns %}
+- [{{ pattern.id }}] {{ pattern.name }}: {{ pattern.description }}
+{% endfor %}
+{% endif %}
+
+**任务**：
+1. 仔细分析测试代码的断言和验证逻辑
+2. 找出测试的盲区（未测试的边界值、异常情况、特殊输入组合）
+3. 生成 {{ num_mutations }} 个针对这些盲区的变异体
+4. 每个变异的 intent 应明确说明它利用了测试的哪个弱点
+
+**变异要求**：
+1. line_start 和 line_end 必须是源代码中实际存在的行号
+2. original 必须是这些行的完整代码
+3. mutated 必须是完整的替换代码（保持缩进和格式一致）
+4. 不要改变类名、方法签名、访问修饰符
+5. 确保变异后的代码语法正确、能够编译
+{% if target_method %}
+6. **只针对 `{{ target_method }}` 方法生成变异体**
+{% endif %}""")
+
     # 测试生成提示词
     GENERATE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门为 Java 代码生成高质量的测试用例。
 
@@ -590,6 +700,34 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
             patterns=patterns or [],
             num_mutations=num_mutations,
             target_method=target_method,  # 传递目标方法
+        )
+        return system, user
+
+    @classmethod
+    def render_refine_mutation(
+        cls,
+        class_name: str,
+        source_code_with_lines: str,
+        existing_mutants: List[Any],
+        test_cases: List[Any],
+        kill_rate: float,
+        contracts: Optional[List[Any]] = None,
+        patterns: Optional[List[Any]] = None,
+        target_method: Optional[str] = None,
+        num_mutations: int = 5,
+    ) -> tuple[str, str]:
+        """渲染变异完善提示词"""
+        system = cls.REFINE_MUTATION_SYSTEM
+        user = cls.REFINE_MUTATION_USER.render(
+            class_name=class_name,
+            source_code_with_lines=source_code_with_lines,
+            existing_mutants=existing_mutants,
+            test_cases=test_cases,
+            kill_rate=kill_rate,
+            contracts=contracts or [],
+            patterns=patterns or [],
+            target_method=target_method,
+            num_mutations=num_mutations,
         )
         return system, user
 

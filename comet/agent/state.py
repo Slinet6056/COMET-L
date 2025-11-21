@@ -26,8 +26,9 @@ class AgentState:
         self.llm_calls = 0
         self.budget = 1000
 
-        # 当前目标
+        # 当前目标和上一个目标
         self.current_target: Optional[Dict[str, Any]] = None
+        self.previous_target: Optional[Dict[str, Any]] = None  # 追踪目标切换
 
         # 测试用例信息（新增）
         self.test_cases: List[Dict[str, Any]] = []  # 测试用例列表
@@ -116,6 +117,30 @@ class AgentState:
             })
         self.total_tests = sum(tc["num_methods"] for tc in self.test_cases)
 
+    def update_target(self, new_target: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        更新当前目标，并记录上一个目标
+
+        Args:
+            new_target: 新目标
+
+        Returns:
+            上一个目标（如果有切换）
+        """
+        if new_target != self.current_target:
+            self.previous_target = self.current_target
+            self.current_target = new_target
+
+            if self.previous_target:
+                logger.info(
+                    f"目标已切换: "
+                    f"{self.previous_target.get('class_name')}.{self.previous_target.get('method_name')} "
+                    f"-> {new_target.get('class_name') if new_target else 'None'}."
+                    f"{new_target.get('method_name') if new_target else 'None'}"
+                )
+            return self.previous_target
+        return None
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -131,6 +156,7 @@ class AgentState:
             "llm_calls": self.llm_calls,
             "budget": self.budget,
             "current_target": self.current_target,
+            "previous_target": self.previous_target,
             "test_cases": self.test_cases,
             "action_history": self.action_history,
             "recent_improvements": self.recent_improvements,
@@ -155,6 +181,7 @@ class AgentState:
         state.llm_calls = data.get("llm_calls", 0)
         state.budget = data.get("budget", 1000)
         state.current_target = data.get("current_target")
+        state.previous_target = data.get("previous_target")
         state.test_cases = data.get("test_cases", [])
         state.action_history = data.get("action_history", [])
         state.recent_improvements = data.get("recent_improvements", [])
