@@ -1,7 +1,7 @@
 """度量收集器"""
 
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from ..models import Mutant, TestCase, KillMatrix, Metrics, CoverageInfo
@@ -22,7 +22,7 @@ class MetricsCollector:
         mutants: List[Mutant],
         test_cases: List[TestCase],
         kill_matrix: KillMatrix,
-        coverage_info: CoverageInfo = None,
+        coverage_info: Optional[CoverageInfo] = None,
         llm_calls: int = 0,
     ) -> Metrics:
         """
@@ -147,7 +147,7 @@ class MetricsCollector:
         self,
         class_name: str,
         method_name: str,
-        all_mutants: List[Mutant] = None,
+        all_mutants: Optional[List[Mutant]] = None,
     ) -> List[Mutant]:
         """
         获取特定方法的幸存变异体（排除 outdated 状态）
@@ -173,68 +173,12 @@ class MetricsCollector:
 
         return survived
 
-    def get_coverage_gaps(
-        self,
-        class_name: str,
-        method_name: str,
-        coverage_info: CoverageInfo = None,
-        db = None,
-    ) -> Dict[str, Any]:
-        """
-        分析覆盖缺口（优先使用数据库中的真实覆盖率数据）
-
-        Args:
-            class_name: 类名
-            method_name: 方法名
-            coverage_info: 覆盖率信息（已废弃，保留向后兼容）
-            db: 数据库实例
-
-        Returns:
-            覆盖缺口信息字典
-        """
-        # 优先从数据库获取最新覆盖率
-        if db:
-            try:
-                coverage = db.get_method_coverage(class_name, method_name)
-                if coverage:
-                    return {
-                        "coverage_rate": coverage.line_coverage_rate,
-                        "total_lines": coverage.total_lines,
-                        "covered_lines": len(coverage.covered_lines),
-                        "uncovered_lines": coverage.missed_lines,  # 行号列表
-                    }
-            except Exception as e:
-                logger.warning(f"从数据库获取覆盖率失败: {e}")
-
-        # 回退到传入的 coverage_info
-        if not coverage_info:
-            return {
-                "uncovered_lines": [],
-                "coverage_rate": 0.0,
-                "total_lines": 0,
-            }
-
-        # 简化实现：返回未覆盖的行
-        total_lines = coverage_info.total_lines
-        covered_lines = coverage_info.covered_lines
-
-        # 假设行号是连续的，从1开始
-        all_lines = set(range(1, total_lines + 1))
-        covered_set = set(covered_lines)
-        uncovered_lines = list(all_lines - covered_set)
-
-        return {
-            "uncovered_lines": uncovered_lines,
-            "coverage_rate": coverage_info.line_coverage,
-            "total_lines": total_lines,
-        }
-
     def update_from_evaluation(
         self,
         mutants: List[Mutant],
         test_cases: List[TestCase],
         kill_matrix: KillMatrix,
-        coverage_data: Dict[str, Any] = None,
+        coverage_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         从评估结果更新度量指标
