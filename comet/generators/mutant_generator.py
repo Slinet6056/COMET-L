@@ -183,29 +183,6 @@ class MutantGenerator:
             logger.error(f"变异生成失败: {e}")
             return []
 
-    def generate_targeted_mutants(
-        self,
-        class_name: str,
-        class_code: str,
-        target_lines: List[int],
-        num_mutations: int = 3,
-    ) -> List[Mutant]:
-        """
-        针对特定代码行生成变异体（用于覆盖缺口）
-
-        Args:
-            class_name: 类名
-            class_code: 类代码
-            target_lines: 目标行号列表
-            num_mutations: 每个目标生成的变异体数量
-
-        Returns:
-            Mutant 对象列表
-        """
-        # 简化实现：生成通用变异体
-        # 未来可以根据 target_lines 做更精准的变异
-        return self.generate_mutants(class_name, class_code, num_mutations * len(target_lines))
-
     def refine_mutants(
         self,
         class_name: str,
