@@ -359,24 +359,15 @@ class AgentTools:
         class_code = extract_class_from_file(str(file_path))
         method_sig = extract_method_signature(class_code, method_name) if method_name else None
 
-        # 获取现有测试（用于参考）
+        # 获取现有测试（用于参考，避免重复生成）
         existing_tests = self.db.get_tests_by_target_class(class_name)
 
-        # 获取幸存变异体和覆盖缺口
-        all_mutants = self.db.get_all_mutants()
-        survived = self.metrics_collector.get_survived_mutants_for_method(
-            class_name, method_name, all_mutants
-        ) if self.metrics_collector else []
-
-        gaps = {}  # 简化实现，暂不使用覆盖缺口
 
         # 生成测试
         test_case = self.test_generator.generate_tests_for_method(
             class_name=class_name,
             method_signature=method_sig or f"public void {method_name}()",
             class_code=class_code,
-            survived_mutants=survived,
-            coverage_gaps=gaps,
             existing_tests=existing_tests,
         )
 
