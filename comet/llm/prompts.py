@@ -428,6 +428,9 @@ void testAddPositiveNumbers() {
     REFINE_TEST_USER = Template("""请完善以下测试用例：
 
 目标类：{{ test_case.target_class }}
+{% if target_method %}
+目标方法：{{ target_method }}（请重点针对此方法进行测试优化）
+{% endif %}
 测试类：{{ test_case.class_name }}
 
 被测类完整代码：
@@ -449,6 +452,9 @@ void testAddPositiveNumbers() {
 
 {% if survived_mutants %}
 **幸存变异体（需要击杀）**：
+{% if target_method %}
+以下变异体来自目标方法 {{ target_method }}，需要重点击杀：
+{% endif %}
 {% for mutant in survived_mutants %}
 - {{ mutant.semantic_intent }}
   变异代码: {{ mutant.patch.mutated_code }}
@@ -457,6 +463,9 @@ void testAddPositiveNumbers() {
 
 {% if coverage_gaps %}
 **覆盖缺口**：
+{% if target_method %}
+以下是目标方法 {{ target_method }} 的覆盖缺口：
+{% endif %}
 未覆盖的行: {{ coverage_gaps.uncovered_lines | join(', ') }}
 未覆盖的分支: {{ coverage_gaps.uncovered_branches | join(', ') }}
 {% endif %}
@@ -468,7 +477,11 @@ void testAddPositiveNumbers() {
 
 **完善要求**：
 1. 分析现有测试的不足之处
+{% if target_method %}
+2. **重点关注目标方法 {{ target_method }}**，优先击杀其幸存的变异体
+{% else %}
 2. 重点关注如何击杀幸存的变异体
+{% endif %}
 3. 补充缺失的测试场景（边界值、异常情况等）
 4. 改进现有测试的断言和验证逻辑
 5. 返回完整的测试方法列表（包括保留的、修改的和新增的）
@@ -760,6 +773,7 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         cls,
         test_case: Any,
         class_code: str,
+        target_method: Optional[str] = None,
         survived_mutants: Optional[List[Any]] = None,
         coverage_gaps: Optional[Dict[str, Any]] = None,
         evaluation_feedback: Optional[str] = None,
@@ -769,6 +783,7 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         user = cls.REFINE_TEST_USER.render(
             test_case=test_case,
             class_code=class_code,
+            target_method=target_method,
             survived_mutants=survived_mutants or [],
             coverage_gaps=coverage_gaps or {},
             evaluation_feedback=evaluation_feedback,

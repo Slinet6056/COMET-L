@@ -181,6 +181,7 @@ class TestGenerator:
         self,
         test_case: TestCase,
         class_code: str,
+        target_method: Optional[str] = None,
         survived_mutants: Optional[List[Mutant]] = None,
         coverage_gaps: Optional[Dict[str, Any]] = None,
         evaluation_feedback: Optional[str] = None,
@@ -191,6 +192,7 @@ class TestGenerator:
         Args:
             test_case: 现有测试用例
             class_code: 被测类的完整代码
+            target_method: 目标方法名（指定重点优化的方法）
             survived_mutants: 幸存的变异体列表
             coverage_gaps: 覆盖缺口信息
             evaluation_feedback: 评估反馈信息
@@ -199,12 +201,15 @@ class TestGenerator:
             完善后的 TestCase，如果失败则返回 None
         """
         logger.info(f"开始完善测试: {test_case.class_name}")
+        if target_method:
+            logger.info(f"目标方法: {target_method}")
 
         try:
             # 渲染提示词
             system_prompt, user_prompt = self.prompt_manager.render_refine_test(
                 test_case=test_case,
                 class_code=class_code,
+                target_method=target_method,
                 survived_mutants=survived_mutants or [],
                 coverage_gaps=coverage_gaps or {},
                 evaluation_feedback=evaluation_feedback,
