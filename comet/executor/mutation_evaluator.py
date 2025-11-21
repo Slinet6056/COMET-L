@@ -1,11 +1,13 @@
 """变异评估器"""
 
 import logging
-from typing import List, Dict
+from typing import List, Dict, Set
 from datetime import datetime
+from pathlib import Path
 
 from ..models import Mutant, TestCase, KillMatrix, EvaluationResult
 from .java_executor import JavaExecutor
+from .surefire_parser import SurefireParser
 from ..utils.sandbox import SandboxManager
 
 logger = logging.getLogger(__name__)
@@ -28,6 +30,7 @@ class MutationEvaluator:
         """
         self.java_executor = java_executor
         self.sandbox_manager = sandbox_manager
+        self.surefire_parser = SurefireParser()
 
     def evaluate_mutant(
         self,
@@ -114,18 +117,52 @@ class MutationEvaluator:
             if test_result.get("stdout"):
                 logger.debug(f"  测试stdout: {test_result['stdout'][:200]}")
 
-            # 解析结果
+            # 解析 Surefire 报告，获取精确的测试结果
+            reports_dir = str(Path(sandbox_path) / "target" / "surefire-reports")
+            failed_tests = self.surefire_parser.get_failed_test_names(reports_dir)
+
+            # 构建测试用例名称到ID的映射
+            # 假设 TestCase.id 包含测试方法名或类名.方法名
             results = {}
+
             if test_result.get("success"):
                 # 所有测试通过 = 变异体幸存
                 logger.debug(f"  所有测试通过，变异体 {mutant.id} 幸存")
                 for test_case in test_cases:
                     results[test_case.id] = True
             else:
-                # 测试失败 = 变异体被击杀
-                logger.debug(f"  测试失败，变异体 {mutant.id} 被击杀")
+                # 有测试失败 - 精确识别哪个测试失败了
+                logger.debug(f"  检测到 {len(failed_tests)} 个失败的测试")
+
                 for test_case in test_cases:
-                    results[test_case.id] = False
+                    # 检查这个测试用例是否失败
+                    # TestCase 可能存储为 class_name.method_name 或仅 method_name
+                    test_failed = False
+
+                    for failed_test in failed_tests:
+                        # 匹配策略：
+                        # 1. 完全匹配 test_case.id
+                        # 2. 失败测试的方法名匹配 test_case.id
+                        # 3. 失败测试包含 test_case.id（后缀匹配）
+                        if (test_case.id == failed_test or
+                            failed_test.endswith("." + test_case.id) or
+                            test_case.id in failed_test):
+                            test_failed = True
+                            logger.debug(f"    测试 {test_case.id} 击杀了变异体")
+                            break
+
+                    # True = 测试通过（变异体幸存）
+                    # False = 测试失败（变异体被击杀）
+                    results[test_case.id] = not test_failed
+
+                # 如果有失败但没有匹配到任何测试用例，可能是编译错误或其他问题
+                if not any(not passed for passed in results.values()) and failed_tests:
+                    logger.warning(
+                        f"  检测到测试失败但无法匹配到具体测试用例: {failed_tests}"
+                    )
+                    # 保守策略：标记所有测试为失败
+                    for test_case in test_cases:
+                        results[test_case.id] = False
 
             return results
 

@@ -571,6 +571,7 @@ class AgentTools:
         refined_test_case = self.test_generator.refine_tests(
             test_case=test_case,
             class_code=class_code,
+            target_method=method_name,
             survived_mutants=survived,
             coverage_gaps=gaps,
             evaluation_feedback=evaluation_feedback,

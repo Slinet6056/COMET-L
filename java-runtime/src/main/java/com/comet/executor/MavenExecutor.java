@@ -204,41 +204,6 @@ public class MavenExecutor {
     }
 
     /**
-     * 解析测试结果
-     */
-    public JsonObject parseTestResults(String projectPath) {
-        JsonObject result = new JsonObject();
-
-        // 读取 Surefire 测试报告
-        Path reportsDir = Paths.get(projectPath, "target", "surefire-reports");
-        File reportsDirFile = reportsDir.toFile();
-
-        if (!reportsDirFile.exists() || !reportsDirFile.isDirectory()) {
-            result.addProperty("error", "Test reports directory not found");
-            return result;
-        }
-
-        int totalTests = 0;
-        int passedTests = 0;
-        int failedTests = 0;
-
-        File[] reportFiles = reportsDirFile.listFiles((dir, name) -> name.endsWith(".xml"));
-        if (reportFiles != null) {
-            for (File reportFile : reportFiles) {
-                // 简化：这里应该解析 XML 文件
-                // 目前返回文件数量
-                totalTests++;
-            }
-        }
-
-        result.addProperty("totalTests", totalTests);
-        result.addProperty("passed", passedTests);
-        result.addProperty("failed", failedTests);
-
-        return result;
-    }
-
-    /**
      * 命令行接口
      */
     public static void main(String[] args) {
