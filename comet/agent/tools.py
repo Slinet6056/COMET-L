@@ -2,6 +2,7 @@
 
 import logging
 import os
+from datetime import datetime
 from typing import Dict, Any, List, Callable, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -245,18 +246,26 @@ class AgentTools:
         self,
         test_case,
         class_code: str,
-        max_fix_retries: int = 3,
+        max_compile_retries: int = 3,
+        max_test_retries: int = 3,
     ):
         """
-        验证并修复测试方法（使用 Surefire 报告精确识别失败的方法）
+        验证并修复测试方法
+
+        流程：
+        1. 编译测试，如果失败最多重试max_compile_retries次
+        2. 如果编译通过，运行测试
+        3. 如果有失败的测试方法，单独重新生成这些方法（最多max_test_retries次）
+        4. 如果方法重新生成失败，从测试用例中移除
 
         Args:
             test_case: 测试用例
             class_code: 被测类代码
-            max_fix_retries: 每个方法的最大修复次数
+            max_compile_retries: 编译失败时的最大重试次数
+            max_test_retries: 测试失败时的最大重试次数
 
         Returns:
-            修复后的测试用例，失败的方法会被移除
+            修复后的测试用例
         """
         from ..executor.surefire_parser import SurefireParser
         from ..utils.project_utils import write_test_file
@@ -265,60 +274,141 @@ class AgentTools:
         surefire_parser = SurefireParser()
         reports_dir = os.path.join(self.project_path, "target", "surefire-reports")
 
-        # 1. 编译测试
-        compile_result = self.java_executor.compile_tests(self.project_path)
-        if not compile_result.get("success"):
-            compile_error = compile_result.get('error', 'Unknown error')
-            logger.warning(f"测试编译失败: {compile_error}")
+        # ===== 步骤1: 编译测试，最多重试max_compile_retries次 =====
+        compile_retry_count = 0
+        while compile_retry_count < max_compile_retries:
+            logger.debug(f"编译测试（第 {compile_retry_count + 1}/{max_compile_retries} 次尝试）...")
+            compile_result = self.java_executor.compile_tests(self.project_path)
 
-            # 尝试修复整个测试类的编译错误
-            logger.info("尝试修复编译错误...")
+            if compile_result.get("success"):
+                logger.info(f"✓ 测试编译成功: {test_case.class_name}")
+                test_case.compile_success = True
+                break
+
+            # 编译失败
+            compile_error = compile_result.get('error', 'Unknown error')
+            compile_retry_count += 1
+
+            if compile_retry_count >= max_compile_retries:
+                logger.error(f"✗ 编译失败且已达到最大重试次数（{max_compile_retries}次）")
+                test_case.compile_success = False
+                test_case.compile_error = f"编译失败（已重试{max_compile_retries}次）: {compile_error}"
+                return test_case
+
+            # 尝试修复编译错误
+            logger.warning(f"编译失败（第 {compile_retry_count} 次），尝试修复...")
+            logger.debug(f"编译错误: {compile_error[:500]}")  # 只记录前500字符
+
             fixed_test_case = self.test_generator.regenerate_with_feedback(
                 test_case=test_case,
                 compile_error=compile_error,
-                max_retries=2,
+                max_retries=1,  # 每次只重新生成一次
             )
 
-            if fixed_test_case:
-                # 重新写入并验证
-                test_file = write_test_file(
-                    project_path=self.project_path,
-                    package_name=fixed_test_case.package_name,
-                    test_code=fixed_test_case.full_code,
-                    test_class_name=fixed_test_case.class_name,
-                )
-
-                compile_result = self.java_executor.compile_tests(self.project_path)
-                if compile_result.get("success"):
-                    logger.info("编译错误修复成功")
-                    test_case = fixed_test_case
-                else:
-                    logger.error("编译错误修复失败，测试用例无效")
-                    test_case.compile_success = False
-                    test_case.compile_error = "编译失败且无法修复"
-                    return test_case
-            else:
-                logger.error("编译错误修复失败")
+            if not fixed_test_case:
+                logger.error("LLM 未能生成修复后的测试代码")
                 test_case.compile_success = False
-                test_case.compile_error = compile_error
+                test_case.compile_error = f"编译失败（已重试{compile_retry_count}次）且无法修复"
                 return test_case
 
-        test_case.compile_success = True
-        logger.info(f"测试编译成功: {test_case.class_name}")
+            # 写入修复后的测试文件
+            test_file = write_test_file(
+                project_path=self.project_path,
+                package_name=fixed_test_case.package_name,
+                test_code=fixed_test_case.full_code,
+                test_class_name=fixed_test_case.class_name,
+                merge=False,
+            )
 
-        # 2. 运行测试
+            if not test_file:
+                logger.error("写入修复后的测试文件失败")
+                test_case.compile_success = False
+                test_case.compile_error = "写入测试文件失败"
+                return test_case
+
+            test_case = fixed_test_case
+
+        # ===== 步骤2: 运行测试 =====
         logger.info("运行测试验证...")
         test_result = self.java_executor.run_tests(self.project_path)
 
+        # 如果所有测试通过，直接返回
+        if test_result.get("success"):
+            logger.info("✓ 所有测试方法都通过了！")
+            test_case.compile_error = None
+            return test_case
+
+        # ===== 步骤3: 处理测试失败 =====
         # 检查是否超时
         if test_result.get("error") == "Timeout":
-            logger.error("测试运行超时，将丢弃所有测试方法")
-            test_case.compile_success = False
-            # 动态获取实际配置的超时值
-            timeout_value = self.java_executor.test_timeout if self.java_executor else 30
-            test_case.compile_error = f"测试运行超时（>{timeout_value}秒）"
-            test_case.methods = []  # 清空所有方法
-            return test_case
+            logger.error("测试运行超时，开始逐个测试方法以识别超时方法...")
+
+            # 逐个运行测试方法来识别超时的方法
+            timeout_methods = self._identify_timeout_methods(test_case)
+
+            if timeout_methods:
+                logger.warning(f"识别到 {len(timeout_methods)} 个超时或失败的方法，将移除它们")
+                # 保留没有超时的方法
+                valid_methods = [m for m in test_case.methods if m.method_name not in timeout_methods]
+
+                if not valid_methods:
+                    logger.error("所有测试方法都超时或失败")
+                    test_case.compile_success = False
+                    timeout_value = self.java_executor.test_timeout if self.java_executor else 30
+                    test_case.compile_error = f"所有测试方法都超时或失败（>{timeout_value}秒）"
+                    test_case.methods = []
+                    return test_case
+
+                # 更新测试用例，只保留有效的方法
+                test_case.methods = valid_methods
+                method_codes = [m.code for m in valid_methods]
+                test_case.full_code = build_test_class(
+                    test_class_name=test_case.class_name,
+                    target_class=test_case.target_class,
+                    package_name=test_case.package_name,
+                    imports=test_case.imports,
+                    test_methods=method_codes,
+                )
+
+                # 写入更新后的测试文件（不合并，完全替换）
+                write_test_file(
+                    project_path=self.project_path,
+                    package_name=test_case.package_name,
+                    test_code=test_case.full_code,
+                    test_class_name=test_case.class_name,
+                    merge=False,
+                )
+
+                logger.info(f"保留了 {len(valid_methods)} 个有效的测试方法，开始验证...")
+
+                # 重新编译和测试，确保剩余方法一起工作正常
+                compile_result = self.java_executor.compile_tests(self.project_path)
+                if not compile_result.get("success"):
+                    logger.error("过滤后的测试用例编译失败")
+                    test_case.compile_success = False
+                    test_case.compile_error = "Filtered test case compilation failed"
+                    test_case.methods = []
+                    return test_case
+
+                test_result = self.java_executor.run_tests(self.project_path)
+                if test_result.get("success"):
+                    logger.info(f"✓ 过滤后的测试用例验证成功，保留 {len(valid_methods)} 个方法")
+                    test_case.compile_success = True
+                    test_case.compile_error = None
+                    return test_case
+                else:
+                    logger.error("过滤后的测试用例运行失败，可能存在测试间依赖")
+                    test_case.compile_success = False
+                    test_case.compile_error = "Filtered test case execution failed"
+                    test_case.methods = []
+                    return test_case
+            else:
+                logger.error("无法识别超时方法")
+                test_case.compile_success = False
+                timeout_value = self.java_executor.test_timeout if self.java_executor else 30
+                test_case.compile_error = f"测试运行超时但无法识别具体方法（>{timeout_value}秒）"
+                test_case.methods = []
+                return test_case
 
         if test_result.get("success"):
             logger.info("所有测试方法都通过了！")
@@ -385,7 +475,7 @@ class AgentTools:
                 method_code=method_code,
                 class_code=class_code,
                 error_message=error_message,
-                max_retries=max_fix_retries,
+                max_retries=max_test_retries,
             )
 
             if fixed_code:
@@ -400,12 +490,13 @@ class AgentTools:
                     test_methods=temp_methods,
                 )
 
-                # 写入并测试
+                # 写入并测试（不合并，确保只测试当前修复的方法）
                 write_test_file(
                     project_path=self.project_path,
                     package_name=test_case.package_name,
                     test_code=temp_full_code,
                     test_class_name=test_case.class_name,
+                    merge=False,
                 )
 
                 compile_res = self.java_executor.compile_tests(self.project_path)
@@ -462,12 +553,13 @@ class AgentTools:
             test_methods=method_codes,
         )
 
-        # 最后写入并验证
+        # 最后写入并验证（不合并，完全替换为最终版本）
         write_test_file(
             project_path=self.project_path,
             package_name=test_case.package_name,
             test_code=test_case.full_code,
             test_class_name=test_case.class_name,
+            merge=False,
         )
 
         final_compile = self.java_executor.compile_tests(self.project_path)
@@ -490,17 +582,96 @@ class AgentTools:
 
         return test_case
 
+    def _identify_timeout_methods(self, test_case) -> set:
+        """
+        通过逐个运行测试方法来识别导致超时的方法
+
+        Args:
+            test_case: TestCase 对象
+
+        Returns:
+            导致超时的方法名集合
+        """
+        from comet.utils import write_test_file, build_test_class
+
+        timeout_methods = set()
+
+        # 构建完整的测试类名（包含包名）
+        if test_case.package_name:
+            full_class_name = f"{test_case.package_name}.{test_case.class_name}"
+        else:
+            full_class_name = test_case.class_name
+
+        logger.info(f"开始逐个测试 {len(test_case.methods)} 个方法以识别超时方法...")
+
+        for method in test_case.methods:
+            method_name = method.method_name
+            logger.debug(f"测试方法: {method_name}")
+
+            # 构建只包含这个方法的测试类
+            temp_methods = [method.code]
+            temp_full_code = build_test_class(
+                test_class_name=test_case.class_name,
+                target_class=test_case.target_class,
+                package_name=test_case.package_name,
+                imports=test_case.imports,
+                test_methods=temp_methods,
+            )
+
+            # 写入测试文件（不合并，确保只测试当前方法）
+            write_test_file(
+                project_path=self.project_path,
+                package_name=test_case.package_name,
+                test_code=temp_full_code,
+                test_class_name=test_case.class_name,
+                merge=False,
+            )
+
+            # 编译测试
+            compile_result = self.java_executor.compile_tests(self.project_path)
+            if not compile_result.get("success"):
+                logger.warning(f"方法 {method_name} 编译失败，标记为有问题")
+                timeout_methods.add(method_name)
+                continue
+
+            # 运行单个测试方法
+            test_result = self.java_executor.run_single_test_method(
+                self.project_path,
+                full_class_name,
+                method_name
+            )
+
+            # 检查是否超时
+            if test_result.get("error") == "Timeout":
+                logger.warning(f"✗ 方法 {method_name} 超时")
+                timeout_methods.add(method_name)
+            elif not test_result.get("success"):
+                logger.warning(f"✗ 方法 {method_name} 运行失败")
+                timeout_methods.add(method_name)
+            else:
+                logger.debug(f"✓ 方法 {method_name} 正常")
+
+        logger.info(f"识别完成: {len(timeout_methods)} 个方法超时或失败")
+        return timeout_methods
+
     # 工具实现
 
     def select_target(self, criteria: str = "coverage") -> Dict[str, Any]:
-        """选择目标类和方法"""
+        """选择目标类和方法（跳过黑名单中的目标）"""
         if not self.project_path or not self.java_executor or not self.db:
             logger.error("select_target: 缺少必要组件")
             return {"class_name": None, "method_name": None}
 
         from .target_selector import TargetSelector
         selector = TargetSelector(self.project_path, self.java_executor, self.db)
-        target = selector.select(criteria)
+
+        # 获取黑名单
+        blacklist = set()
+        if self.state and self.state.failed_targets:
+            blacklist = {ft.get("target") for ft in self.state.failed_targets if ft.get("target")}
+            logger.debug(f"黑名单中有 {len(blacklist)} 个失败的目标")
+
+        target = selector.select(criteria, blacklist=blacklist)
 
         # 获取目标方法的覆盖率
         if target.get("class_name") and target.get("method_name"):
@@ -654,13 +825,41 @@ class AgentTools:
             logger.error("写入测试文件失败")
             return {"generated": 0}
 
-        # 使用新的验证和修复流程（使用 Surefire 报告精确识别失败的方法）
+        # 使用新的验证和修复流程（编译失败最多重试3次）
         logger.info("开始验证和修复测试方法...")
         test_case = self._verify_and_fix_tests(
             test_case=test_case,
             class_code=class_code,
-            max_fix_retries=3,
+            max_compile_retries=3,
+            max_test_retries=3,
         )
+
+        # 只有编译成功才保存
+        if not test_case.compile_success:
+            logger.error(f"✗ 测试用例编译失败（已重试3次），不保存到数据库")
+            logger.error(f"编译错误: {test_case.compile_error}")
+
+            # 将这个目标添加到失败黑名单
+            if self.state:
+                target_key = f"{class_name}.{method_name}"
+                if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
+                    self.state.failed_targets.append({
+                        "target": target_key,
+                        "class_name": class_name,
+                        "method_name": method_name,
+                        "reason": "测试生成后编译失败（已重试3次）",
+                        "error": test_case.compile_error[:500] if test_case.compile_error else "Unknown",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    logger.warning(f"已将 {target_key} 添加到失败黑名单")
+
+            return {
+                "generated": 0,
+                "test_id": test_case.id,
+                "compile_success": False,
+                "error": test_case.compile_error,
+                "message": "测试编译失败（已重试3次），已加入黑名单"
+            }
 
         # 保存
         logger.debug(f"准备保存新生成的测试用例: ID={test_case.id}, version={test_case.version}")
@@ -763,13 +962,41 @@ class AgentTools:
             logger.error("写入测试文件失败")
             return {"refined": 0}
 
-        # 使用新的验证和修复流程（使用 Surefire 报告精确识别失败的方法）
+        # 使用新的验证和修复流程（编译失败最多重试3次）
         logger.info("开始验证和修复完善后的测试方法...")
         refined_test_case = self._verify_and_fix_tests(
             test_case=refined_test_case,
             class_code=class_code,
-            max_fix_retries=3,
+            max_compile_retries=3,
+            max_test_retries=3,
         )
+
+        # 只有编译成功才保存
+        if not refined_test_case.compile_success:
+            logger.error(f"✗ 测试用例编译失败（已重试3次），不保存到数据库")
+            logger.error(f"编译错误: {refined_test_case.compile_error}")
+
+            # 将这个目标添加到失败黑名单
+            if self.state:
+                target_key = f"{class_name}.{method_name}"
+                if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
+                    self.state.failed_targets.append({
+                        "target": target_key,
+                        "class_name": class_name,
+                        "method_name": method_name,
+                        "reason": "测试完善后编译失败（已重试3次）",
+                        "error": refined_test_case.compile_error[:500] if refined_test_case.compile_error else "Unknown",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    logger.warning(f"已将 {target_key} 添加到失败黑名单")
+
+            return {
+                "refined": 0,
+                "test_id": refined_test_case.id,
+                "compile_success": False,
+                "error": refined_test_case.compile_error,
+                "message": "测试编译失败（已重试3次），已加入黑名单"
+            }
 
         # 保存
         logger.debug(f"准备保存完善后的测试用例: ID={refined_test_case.id}, version={refined_test_case.version}")
@@ -827,61 +1054,171 @@ class AgentTools:
 
         # ===== 步骤1: 预验证测试用例 =====
         logger.info("步骤1: 预验证测试用例...")
+
+        # 首先检查编译是否成功
+        logger.debug("检查测试编译...")
+        compile_result = self.java_executor.compile_tests(self.project_path)
+        if not compile_result.get("success"):
+            compile_error = compile_result.get('error', 'Unknown error')
+            logger.error(f"✗ 测试编译失败，无法进行评估")
+            logger.error(f"编译错误: {compile_error[:500]}")
+
+            # 删除整个类的所有测试用例
+            if current_target and current_target.get("class_name"):
+                target_class = current_target["class_name"]
+                logger.warning(f"删除 {target_class} 类的所有测试用例...")
+
+                # 获取该类的所有测试用例
+                class_tests = self.db.get_tests_by_target_class(target_class)
+                deleted_count = 0
+                for test_case in class_tests:
+                    self.db.delete_test_case(test_case.id)
+                    deleted_count += 1
+
+                logger.warning(f"已删除 {deleted_count} 个测试用例")
+
+                # 将目标添加到黑名单
+                if self.state:
+                    method_name = current_target.get("method_name", "")
+                    target_key = f"{target_class}.{method_name}" if method_name else target_class
+                    if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
+                        self.state.failed_targets.append({
+                            "target": target_key,
+                            "class_name": target_class,
+                            "method_name": method_name,
+                            "reason": "评估时编译失败，已删除所有测试",
+                            "error": compile_error[:500],
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        logger.warning(f"已将 {target_key} 添加到失败黑名单")
+
+            return {"evaluated": len(mutants), "killed": 0, "mutation_score": 0.0, "error": "Compilation failed, tests deleted"}
+
         test_result = self.java_executor.run_tests(self.project_path)
 
         # 检查是否超时或失败
         if test_result.get("error") == "Timeout":
-            logger.error("测试运行超时，开始识别有问题的测试方法...")
-            # 尝试解析 Surefire 报告识别具体的失败测试
-            from ..executor.surefire_parser import SurefireParser
-            surefire_parser = SurefireParser()
-            reports_dir = os.path.join(self.project_path, "target", "surefire-reports")
-            suite_results = surefire_parser.parse_surefire_reports(reports_dir)
+            logger.error("测试运行超时，开始逐个测试方法以识别超时方法...")
 
-            if suite_results:
-                # 识别失败/超时的测试方法
-                # 注意：Surefire 报告中的 class_name 是完全限定名（如 com.example.CalculatorTest）
-                failed_test_methods = set()
-                for suite in suite_results:
-                    for test in suite.test_cases:
-                        if not test.passed:
-                            # 存储完全限定的测试名称：package.Class.method
-                            full_test_name = f"{test.class_name}.{test.method_name}"
-                            failed_test_methods.add(full_test_name)
+            # 超时时不应该解析 Surefire 报告，因为测试没有完成，报告可能不存在或不完整
+            # 应该逐个运行测试方法来识别哪些方法导致超时
+            all_timeout_methods = set()
 
-                if failed_test_methods:
-                    logger.warning(f"发现 {len(failed_test_methods)} 个有问题的测试方法")
-                    # 从数据库中删除有问题的测试方法
-                    for test_case in list(test_cases):
-                        methods_to_remove = []
-                        for method in test_case.methods:
-                            # 构建完整的测试名称，与 Surefire 报告格式一致
-                            if test_case.package_name:
-                                full_name = f"{test_case.package_name}.{test_case.class_name}.{method.method_name}"
-                            else:
-                                full_name = f"{test_case.class_name}.{method.method_name}"
+            for test_case in list(test_cases):
+                # 逐个测试这个测试用例中的方法
+                timeout_methods = self._identify_timeout_methods(test_case)
 
-                            if full_name in failed_test_methods:
-                                logger.warning(f"删除有问题的测试方法: {full_name}")
-                                methods_to_remove.append(method)
+                if timeout_methods:
+                    logger.warning(f"测试用例 {test_case.class_name} 中有 {len(timeout_methods)} 个超时方法")
 
-                        # 从测试用例中移除有问题的方法
-                        for method in methods_to_remove:
-                            test_case.methods.remove(method)
-
-                        # 如果测试用例没有方法了，从列表中移除
-                        if not test_case.methods:
-                            logger.warning(f"测试用例 {test_case.class_name} 的所有方法都有问题，删除整个测试用例")
-                            test_cases.remove(test_case)
-                            self.db.delete_test_case(test_case.id)
+                    # 构建完整方法名并添加到全局集合
+                    for method_name in timeout_methods:
+                        if test_case.package_name:
+                            full_name = f"{test_case.package_name}.{test_case.class_name}.{method_name}"
                         else:
-                            # 更新数据库中的测试用例
-                            self.db.save_test_case(test_case)
-            else:
-                logger.error("无法解析 Surefire 报告，将清空所有测试用例")
-                test_cases = []
+                            full_name = f"{test_case.class_name}.{method_name}"
+                        all_timeout_methods.add(full_name)
 
-        elif not test_result.get("success"):
+                    # 从测试用例中移除超时的方法
+                    methods_to_remove = [m for m in test_case.methods if m.method_name in timeout_methods]
+                    for method in methods_to_remove:
+                        test_case.methods.remove(method)
+                        logger.warning(f"删除超时的测试方法: {test_case.class_name}.{method.method_name}")
+
+                    # 如果测试用例没有方法了，从列表中移除
+                    if not test_case.methods:
+                        logger.warning(f"测试用例 {test_case.class_name} 的所有方法都超时，删除整个测试用例")
+                        test_cases.remove(test_case)
+                        self.db.delete_test_case(test_case.id)
+                    else:
+                        # 更新测试用例的代码
+                        from comet.utils import build_test_class, write_test_file
+                        method_codes = [m.code for m in test_case.methods]
+                        test_case.full_code = build_test_class(
+                            test_class_name=test_case.class_name,
+                            target_class=test_case.target_class,
+                            package_name=test_case.package_name,
+                            imports=test_case.imports,
+                            test_methods=method_codes,
+                        )
+                        # 写入更新后的测试文件（不合并，完全替换）
+                        write_test_file(
+                            project_path=self.project_path,
+                            package_name=test_case.package_name,
+                            test_code=test_case.full_code,
+                            test_class_name=test_case.class_name,
+                            merge=False,
+                        )
+
+                        # 更新数据库（稍后会统一验证）
+                        self.db.save_test_case(test_case)
+
+            if all_timeout_methods:
+                logger.info(f"总共识别并删除了 {len(all_timeout_methods)} 个超时的测试方法")
+
+                # 重新检查是否还有测试用例
+                if not test_cases:
+                    logger.error("所有测试用例都因超时被删除")
+                    return {"evaluated": len(mutants), "killed": 0, "mutation_score": 0.0}
+
+                # 统一验证所有过滤后的测试用例
+                logger.info("重新编译和验证所有过滤后的测试用例...")
+                compile_result = self.java_executor.compile_tests(self.project_path)
+                if not compile_result.get("success"):
+                    logger.error("过滤后的测试用例编译失败")
+                    return {"evaluated": len(mutants), "killed": 0, "mutation_score": 0.0}
+
+                verify_result = self.java_executor.run_tests(self.project_path)
+                if verify_result.get("error") == "Timeout":
+                    logger.error("过滤后的测试用例仍然超时，放弃评估")
+                    return {"evaluated": len(mutants), "killed": 0, "mutation_score": 0.0}
+                elif not verify_result.get("success"):
+                    logger.warning("过滤后的测试用例仍有失败，继续处理失败的测试方法")
+                    # 直接处理失败的测试方法（不能依赖 elif，因为已经在 if 块中）
+                    test_result = verify_result
+                    # 继续到下面的失败处理逻辑
+                else:
+                    logger.info("✓ 所有过滤后的测试用例验证通过")
+                    # 验证通过，跳过失败处理
+                    test_result = verify_result
+            else:
+                # 测试整体超时，但逐个测试无法识别具体超时方法
+                # 这可能是测试间依赖或资源竞争导致的，无法处理
+                logger.error("✗ 测试整体超时，但无法识别具体的超时方法（可能是测试间依赖或资源问题）")
+
+                # 删除整个类的所有测试用例
+                if current_target and current_target.get("class_name"):
+                    target_class = current_target["class_name"]
+                    logger.warning(f"删除 {target_class} 类的所有测试用例...")
+
+                    # 获取该类的所有测试用例
+                    class_tests = self.db.get_tests_by_target_class(target_class)
+                    deleted_count = 0
+                    for test_case in class_tests:
+                        self.db.delete_test_case(test_case.id)
+                        deleted_count += 1
+
+                    logger.warning(f"已删除 {deleted_count} 个测试用例")
+
+                    # 将目标添加到黑名单
+                    if self.state:
+                        method_name = current_target.get("method_name", "")
+                        target_key = f"{target_class}.{method_name}" if method_name else target_class
+                        if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
+                            self.state.failed_targets.append({
+                                "target": target_key,
+                                "class_name": target_class,
+                                "method_name": method_name,
+                                "reason": "测试整体超时但无法识别具体方法（可能测试间依赖）",
+                                "error": "Timeout without identifiable method",
+                                "timestamp": datetime.now().isoformat()
+                            })
+                            logger.warning(f"已将 {target_key} 添加到失败黑名单")
+
+                return {"evaluated": len(mutants), "killed": 0, "mutation_score": 0.0, "error": "Timeout without identifiable method"}
+
+        # 处理测试失败（可能来自初始运行，也可能来自超时过滤后的验证）
+        if not test_result.get("success") and test_result.get("error") != "Timeout":
             logger.warning("部分测试失败，识别有问题的测试方法...")
             from ..executor.surefire_parser import SurefireParser
             surefire_parser = SurefireParser()

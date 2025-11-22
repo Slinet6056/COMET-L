@@ -33,76 +33,96 @@ class TargetSelector:
         self.db = database
         self._class_cache: Optional[List[str]] = None
 
-    def select(self, criteria: str = "coverage") -> Dict[str, Any]:
+    def select(self, criteria: str = "coverage", blacklist: Optional[set] = None) -> Dict[str, Any]:
         """
         根据策略选择目标
 
         Args:
             criteria: 选择策略（coverage/mutations/priority/random）
+            blacklist: 黑名单（格式为"ClassName.methodName"）
 
         Returns:
             目标信息字典
         """
+        if blacklist is None:
+            blacklist = set()
+
         if criteria == "coverage":
-            return self.select_by_coverage()
+            return self.select_by_coverage(blacklist)
         elif criteria == "mutations":
-            return self.select_by_mutations()
+            return self.select_by_mutations(blacklist)
         elif criteria == "priority":
-            return self.select_by_priority()
+            return self.select_by_priority(blacklist)
         elif criteria == "random":
-            return self.select_random()
+            return self.select_random(blacklist)
         else:
             logger.warning(f"未知策略: {criteria}，使用默认策略")
-            return self.select_by_priority()
+            return self.select_by_priority(blacklist)
 
-    def select_by_coverage(self) -> Dict[str, Any]:
+    def select_by_coverage(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
         """
         选择覆盖率最低的方法
 
         优先选择覆盖率低于 80% 的方法，如果所有方法都达标则选择覆盖率最低的
 
+        Args:
+            blacklist: 黑名单（格式为"ClassName.methodName"）
+
         Returns:
             目标信息字典
         """
+        if blacklist is None:
+            blacklist = set()
+
         # 尝试从数据库获取低覆盖率方法
         low_cov_methods = self.db.get_low_coverage_methods(threshold=0.8)
 
         if low_cov_methods:
-            # 选择覆盖率最低的方法
-            selected = low_cov_methods[0]
-            logger.info(
-                f"选择目标（低覆盖率）: {selected.class_name}.{selected.method_name} "
-                f"(覆盖率: {selected.line_coverage_rate:.1%})"
-            )
+            # 过滤黑名单，选择覆盖率最低的方法
+            for selected in low_cov_methods:
+                target_key = f"{selected.class_name}.{selected.method_name}"
+                if target_key not in blacklist:
+                    # 不在黑名单中，选择这个目标
+                    logger.info(
+                        f"选择目标（低覆盖率）: {selected.class_name}.{selected.method_name} "
+                        f"(覆盖率: {selected.line_coverage_rate:.1%})"
+                    )
 
-            # 获取方法签名
-            methods = self._get_public_methods(selected.class_name)
-            selected_method_info = None
-            method_signature = None
+                    # 获取方法签名
+                    methods = self._get_public_methods(selected.class_name)
+                    selected_method_info = None
+                    method_signature = None
 
-            if methods:
-                for method in methods:
-                    if isinstance(method, dict) and method.get("name") == selected.method_name:
-                        selected_method_info = method
-                        method_signature = method.get("signature")
-                        break
+                    if methods:
+                        for method in methods:
+                            if isinstance(method, dict) and method.get("name") == selected.method_name:
+                                selected_method_info = method
+                                method_signature = method.get("signature")
+                                break
 
-            return {
-                "class_name": selected.class_name,
-                "method_name": selected.method_name,
-                "method_signature": method_signature,
-                "method_info": selected_method_info,
-                "strategy": "coverage",
-                "coverage_rate": selected.line_coverage_rate,
-                "missed_lines": selected.missed_lines,
-            }
+                    return {
+                        "class_name": selected.class_name,
+                        "method_name": selected.method_name,
+                        "method_signature": method_signature,
+                        "method_info": selected_method_info,
+                        "strategy": "coverage",
+                        "coverage_rate": selected.line_coverage_rate,
+                        "missed_lines": selected.missed_lines,
+                    }
+
+            logger.info("所有低覆盖率方法都在黑名单中")
 
         # 如果没有低覆盖率方法，尝试获取所有覆盖率数据
         all_coverage = self.db.get_all_method_coverage()
 
         if all_coverage:
-            # 选择覆盖率最低的方法
-            selected = min(all_coverage, key=lambda x: x.line_coverage_rate)
+            # 过滤黑名单，选择覆盖率最低的方法
+            filtered = [c for c in all_coverage if f"{c.class_name}.{c.method_name}" not in blacklist]
+            if not filtered:
+                logger.warning("所有方法都在黑名单中，无法选择目标")
+                return {"class_name": None, "method_name": None}
+
+            selected = min(filtered, key=lambda x: x.line_coverage_rate)
             logger.info(
                 f"选择目标（最低覆盖率）: {selected.class_name}.{selected.method_name} "
                 f"(覆盖率: {selected.line_coverage_rate:.1%})"
