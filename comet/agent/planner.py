@@ -478,6 +478,9 @@ class PlannerAgent:
                 result=self._simplify_result(result)
             )
 
+            # 执行自动化工作流
+            self._auto_execute_workflow(action, result)
+
             return result
         except Exception as e:
             logger.error(f"工具执行失败: {action} - {e}")
@@ -491,6 +494,170 @@ class PlannerAgent:
             )
 
             return None
+
+    def _auto_execute_workflow(self, action: str, result: Any) -> None:
+        """
+        执行自动化工作流
+
+        在特定工具执行后，自动执行后续操作：
+        - select_target: 如果新目标没有测试/变异体，自动生成并评估
+        - refine_tests/refine_mutants: 自动执行评估
+
+        Args:
+            action: 已执行的工具名称
+            result: 工具执行结果
+        """
+        if not result:
+            return
+
+        # 自动化流程1: select_target 后的自动生成和评估
+        if action == "select_target":
+            self._auto_workflow_for_new_target(result)
+
+        # 自动化流程2: refine_tests 或 refine_mutants 后自动评估
+        elif action in ["refine_tests", "refine_mutants"]:
+            self._auto_workflow_for_refine(action)
+
+    def _auto_workflow_for_new_target(self, target_result: Dict[str, Any]) -> None:
+        """
+        新目标的自动化工作流
+
+        流程：
+        1. 如果目标没有测试，自动生成测试
+        2. 如果目标没有变异体，自动生成变异体
+        3. 无论是否生成，只要有测试和变异体，就自动评估以获取最新指标
+
+        顺序：generate_tests（如需要）→ generate_mutants（如需要）→ run_evaluation
+
+        Args:
+            target_result: select_target 的返回结果
+        """
+        if not isinstance(target_result, dict):
+            return
+
+        class_name = target_result.get("class_name")
+        method_name = target_result.get("method_name")
+
+        if not class_name or not method_name:
+            logger.debug("目标信息不完整，跳过自动化流程")
+            return
+
+        logger.info(f"{'='*60}")
+        logger.info(f"开始新目标自动化流程: {class_name}.{method_name}")
+        logger.info(f"{'='*60}")
+
+        # 标记是否需要评估
+        need_evaluation = False
+
+        # 检查是否需要生成测试
+        existing_tests = self.tools.db.get_tests_by_target_class(class_name) if self.tools.db else []
+        if not existing_tests:
+            logger.info("→ 自动执行: generate_tests（目标没有测试）")
+            try:
+                test_result = self.tools.call("generate_tests", class_name=class_name, method_name=method_name)
+                if test_result and test_result.get("generated", 0) > 0:
+                    logger.info(f"  ✓ 成功生成 {test_result.get('generated')} 个测试")
+                    need_evaluation = True
+                    # 记录自动执行的操作
+                    self.state.add_action(
+                        action="generate_tests",
+                        params={"class_name": class_name, "method_name": method_name},
+                        success=True,
+                        result=self._simplify_result(test_result)
+                    )
+                else:
+                    logger.warning("  ✗ 测试生成失败或未生成任何测试，停止自动流程")
+                    return
+            except Exception as e:
+                logger.error(f"  ✗ 自动生成测试失败: {e}")
+                return
+        else:
+            logger.info("→ 跳过 generate_tests（已有测试）")
+
+        # 检查是否需要生成变异体
+        existing_mutants = self.tools.db.get_mutants_by_method(class_name, method_name, status="valid") if self.tools.db else []
+        if not existing_mutants:
+            logger.info("→ 自动执行: generate_mutants（目标没有变异体）")
+            try:
+                mutant_result = self.tools.call("generate_mutants", class_name=class_name, method_name=method_name)
+                if mutant_result and mutant_result.get("generated", 0) > 0:
+                    logger.info(f"  ✓ 成功生成 {mutant_result.get('generated')} 个变异体")
+                    need_evaluation = True
+                    # 记录自动执行的操作
+                    self.state.add_action(
+                        action="generate_mutants",
+                        params={"class_name": class_name, "method_name": method_name},
+                        success=True,
+                        result=self._simplify_result(mutant_result)
+                    )
+                else:
+                    logger.warning("  ✗ 变异体生成失败或未生成任何变异体，停止自动流程")
+                    return
+            except Exception as e:
+                logger.error(f"  ✗ 自动生成变异体失败: {e}")
+                return
+        else:
+            logger.info("→ 跳过 generate_mutants（已有变异体）")
+
+        # 检查是否需要评估：如果既有测试又有变异体（即使没有生成新的），也应该评估以获取最新指标
+        if not need_evaluation and existing_tests and existing_mutants:
+            logger.info("→ 目标已有测试和变异体，执行评估以获取最新指标")
+            need_evaluation = True
+
+        # 如果需要评估（生成了新内容或已有测试和变异体），自动评估
+        if need_evaluation:
+            logger.info("→ 自动执行: run_evaluation（完成生成操作后）")
+            try:
+                eval_result = self.tools.call("run_evaluation")
+                if eval_result:
+                    logger.info(f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体")
+                    # 记录自动执行的操作
+                    self.state.add_action(
+                        action="run_evaluation",
+                        params={},
+                        success=True,
+                        result=self._simplify_result(eval_result)
+                    )
+                else:
+                    logger.warning("  ✗ 评估失败")
+            except Exception as e:
+                logger.error(f"  ✗ 自动评估失败: {e}")
+
+        logger.info(f"{'='*60}")
+        logger.info("新目标自动化流程完成")
+        logger.info(f"{'='*60}")
+
+    def _auto_workflow_for_refine(self, refine_action: str) -> None:
+        """
+        完善操作后的自动化工作流
+
+        流程：refine_tests/refine_mutants → run_evaluation
+
+        Args:
+            refine_action: 完善操作名称（refine_tests 或 refine_mutants）
+        """
+        logger.info(f"{'='*60}")
+        logger.info(f"{refine_action} 完成，自动执行评估")
+        logger.info(f"{'='*60}")
+
+        logger.info("→ 自动执行: run_evaluation")
+        try:
+            eval_result = self.tools.call("run_evaluation")
+            if eval_result:
+                logger.info(f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体")
+                # 记录自动执行的操作
+                self.state.add_action(
+                    action="run_evaluation",
+                    params={},
+                    success=True,
+                    result=self._simplify_result(eval_result)
+                )
+            else:
+                logger.warning("  ✗ 评估失败")
+        except Exception as e:
+            logger.error(f"  ✗ 自动评估失败: {e}")
+
+        logger.info(f"{'='*60}")
 
     def _simplify_result(self, result: Any) -> Any:
         """简化结果用于记录（避免过大的对象）"""
