@@ -15,11 +15,21 @@ class AgentState:
     def __init__(self):
         """初始化状态"""
         self.iteration = 0
+
+        # 全局统计（所有目标的累积，包括 outdated 的变异体）
+        self.global_total_mutants = 0
+        self.global_killed_mutants = 0
+        self.global_survived_mutants = 0
+        self.global_mutation_score = 0.0
+
+        # 当前目标统计（只统计当前目标方法的 valid 变异体）
         self.total_mutants = 0
         self.killed_mutants = 0
         self.survived_mutants = 0
-        self.total_tests = 0
         self.mutation_score = 0.0
+
+        # 通用统计
+        self.total_tests = 0
         self.line_coverage = 0.0
         self.branch_coverage = 0.0
         self.current_method_coverage: Optional[float] = None  # 当前方法的覆盖率
@@ -145,11 +155,18 @@ class AgentState:
         """转换为字典"""
         return {
             "iteration": self.iteration,
+            # 全局统计
+            "global_total_mutants": self.global_total_mutants,
+            "global_killed_mutants": self.global_killed_mutants,
+            "global_survived_mutants": self.global_survived_mutants,
+            "global_mutation_score": self.global_mutation_score,
+            # 当前目标统计
             "total_mutants": self.total_mutants,
             "killed_mutants": self.killed_mutants,
             "survived_mutants": self.survived_mutants,
-            "total_tests": self.total_tests,
             "mutation_score": self.mutation_score,
+            # 通用统计
+            "total_tests": self.total_tests,
             "line_coverage": self.line_coverage,
             "branch_coverage": self.branch_coverage,
             "current_method_coverage": self.current_method_coverage,
@@ -171,13 +188,21 @@ class AgentState:
         """从字典创建"""
         state = cls()
         state.iteration = data.get("iteration", 0)
+        # 全局统计
+        state.global_total_mutants = data.get("global_total_mutants", 0)
+        state.global_killed_mutants = data.get("global_killed_mutants", 0)
+        state.global_survived_mutants = data.get("global_survived_mutants", 0)
+        state.global_mutation_score = data.get("global_mutation_score", 0.0)
+        # 当前目标统计
         state.total_mutants = data.get("total_mutants", 0)
         state.killed_mutants = data.get("killed_mutants", 0)
         state.survived_mutants = data.get("survived_mutants", 0)
-        state.total_tests = data.get("total_tests", 0)
         state.mutation_score = data.get("mutation_score", 0.0)
+        # 通用统计
+        state.total_tests = data.get("total_tests", 0)
         state.line_coverage = data.get("line_coverage", 0.0)
         state.branch_coverage = data.get("branch_coverage", 0.0)
+        state.current_method_coverage = data.get("current_method_coverage")
         state.llm_calls = data.get("llm_calls", 0)
         state.budget = data.get("budget", 1000)
         state.current_target = data.get("current_target")
