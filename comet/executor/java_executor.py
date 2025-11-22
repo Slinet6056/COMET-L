@@ -12,16 +12,20 @@ logger = logging.getLogger(__name__)
 class JavaExecutor:
     """Java 执行器 - Python 侧接口，调用 Java 模块"""
 
-    def __init__(self, java_runtime_jar: str, java_cmd: str = "java"):
+    def __init__(self, java_runtime_jar: str, java_cmd: str = "java", test_timeout: int = 30, coverage_timeout: int = 300):
         """
         初始化 Java 执行器
 
         Args:
             java_runtime_jar: Java 运行时 JAR 路径
             java_cmd: Java 命令路径
+            test_timeout: 测试执行超时时间（秒），默认 30 秒
+            coverage_timeout: 覆盖率收集超时时间（秒），默认 300 秒
         """
         self.java_runtime_jar = java_runtime_jar
         self.java_cmd = java_cmd
+        self.test_timeout = test_timeout
+        self.coverage_timeout = coverage_timeout
 
         # 检查 JAR 文件是否存在
         if not Path(java_runtime_jar).exists():
@@ -253,7 +257,7 @@ class JavaExecutor:
         result = self._run_java_command(
             "com.comet.executor.MavenExecutor",
             ["test", project_path],
-            timeout=600,  # 测试可能需要更长时间
+            timeout=self.test_timeout,  # 使用配置的超时时间
         )
 
         if result.get("success"):
@@ -280,7 +284,7 @@ class JavaExecutor:
         result = self._run_java_command(
             "com.comet.executor.MavenExecutor",
             ["testWithCoverage", project_path],
-            timeout=600,
+            timeout=self.coverage_timeout,  # 使用覆盖率专用的超时时间（更长）
         )
 
         if result.get("success"):

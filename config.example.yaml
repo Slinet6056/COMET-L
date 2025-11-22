@@ -7,6 +7,8 @@ llm:
 
 execution:
   timeout: 300  # 秒
+  test_timeout: 30  # 测试执行超时时间（秒），默认30秒快速失败
+  coverage_timeout: 300  # 覆盖率收集超时时间（秒），JaCoCo需要更多时间
   max_retries: 3
   parallel_jobs: 4
   maven_home: null  # 留空使用系统默认
@@ -22,6 +24,10 @@ evolution:
   min_improvement_threshold: 0.01
   budget_llm_calls: 1000
   stop_on_no_improvement_rounds: 3
+  # 优秀水平阈值（达到后可提前停止，可根据项目调整）
+  excellent_mutation_score: 0.95      # 变异分数阈值（默认 95%）
+  excellent_line_coverage: 0.90       # 行覆盖率阈值（默认 90%）
+  excellent_branch_coverage: 0.85     # 分支覆盖率阈值（默认 85%）
 
 knowledge:
   enable_dynamic_update: true

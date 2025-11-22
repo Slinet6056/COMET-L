@@ -342,3 +342,64 @@ class TestGenerator:
 
         logger.error(f"经过 {max_retries} 次尝试仍无法修复编译错误")
         return None
+
+    def fix_single_method(
+        self,
+        method_name: str,
+        method_code: str,
+        class_code: str,
+        error_message: str,
+        max_retries: int = 3,
+    ) -> Optional[str]:
+        """
+        修复单个测试方法
+
+        Args:
+            method_name: 测试方法名
+            method_code: 方法代码
+            class_code: 被测类代码
+            error_message: 错误信息
+            max_retries: 最大重试次数
+
+        Returns:
+            修复后的方法代码，如果失败则返回 None
+        """
+        logger.info(f"尝试修复单个测试方法: {method_name}")
+
+        for attempt in range(max_retries):
+            logger.debug(f"修复尝试 {attempt + 1}/{max_retries}")
+
+            try:
+                # 使用提示词管理器生成修复提示词
+                system_prompt, user_prompt = self.prompt_manager.render_fix_single_method(
+                    method_code=method_code,
+                    class_code=class_code,
+                    error_message=error_message,
+                )
+
+                # 调用 LLM
+                response = self.llm.chat_with_system(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.3,
+                    response_format={"type": "json_object"},
+                )
+
+                # 解析响应
+                data = json.loads(response)
+                fixed_code = data.get("fixed_method_code")
+                changes = data.get("changes", "未说明")
+
+                if not fixed_code:
+                    logger.warning(f"修复尝试 {attempt + 1} 失败: 未返回修复代码")
+                    continue
+
+                logger.info(f"修复说明: {changes}")
+                return fixed_code
+
+            except Exception as e:
+                logger.error(f"修复尝试 {attempt + 1} 失败: {e}")
+                continue
+
+        logger.error(f"经过 {max_retries} 次尝试仍无法修复方法 {method_name}")
+        return None
