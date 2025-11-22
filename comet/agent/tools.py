@@ -242,6 +242,60 @@ class AgentTools:
 
     # 辅助方法
 
+    def _rebuild_test_file_from_db(
+        self,
+        test_case,
+        discarded_methods: set,
+    ):
+        """
+        从数据库重建完整的测试文件，确保丢弃的方法被删除，同时保留其他TestCase的方法
+
+        Args:
+            test_case: 当前TestCase
+            discarded_methods: 需要丢弃的方法名集合
+        """
+        from ..utils.project_utils import write_test_file
+        from ..utils.code_utils import build_test_class
+
+        # 从数据库获取所有针对同一个目标类的TestCase
+        all_test_cases = self.db.get_tests_by_target_class(test_case.target_class)
+
+        # 收集所有有效的测试方法
+        all_valid_methods = []
+
+        for tc in all_test_cases:
+            if tc.id == test_case.id:
+                # 当前TestCase：使用过滤后的方法
+                all_valid_methods.extend(test_case.methods)
+            else:
+                # 其他TestCase：使用数据库中的方法
+                all_valid_methods.extend(tc.methods)
+
+        if not all_valid_methods:
+            logger.warning("没有有效的测试方法，跳过写入")
+            return
+
+        # 构建完整的测试类代码
+        method_codes = [m.code for m in all_valid_methods]
+        full_code = build_test_class(
+            test_class_name=test_case.class_name,
+            target_class=test_case.target_class,
+            package_name=test_case.package_name,
+            imports=test_case.imports,
+            test_methods=method_codes,
+        )
+
+        # 写入文件（不使用merge，因为我们已经有了完整的代码）
+        write_test_file(
+            project_path=self.project_path,
+            package_name=test_case.package_name,
+            test_code=full_code,
+            test_class_name=test_case.class_name,
+            merge=False,
+        )
+
+        logger.info(f"从数据库重建测试文件: 总共 {len(all_valid_methods)} 个方法 ({len(test_case.methods)} 来自当前TestCase, {len(all_valid_methods) - len(test_case.methods)} 来自其他TestCase)")
+
     def _verify_and_fix_tests(
         self,
         test_case,
@@ -311,13 +365,13 @@ class AgentTools:
                 test_case.compile_error = f"编译失败（已重试{compile_retry_count}次）且无法修复"
                 return test_case
 
-            # 写入修复后的测试文件
+            # 写入修复后的测试文件（使用合并模式，保留现有测试方法）
             test_file = write_test_file(
                 project_path=self.project_path,
                 package_name=fixed_test_case.package_name,
                 test_code=fixed_test_case.full_code,
                 test_class_name=fixed_test_case.class_name,
-                merge=False,
+                merge=True,
             )
 
             if not test_file:
@@ -339,8 +393,8 @@ class AgentTools:
             return test_case
 
         # ===== 步骤3: 处理测试失败 =====
-        # 检查是否超时
-        if test_result.get("error") == "Timeout":
+        # 检查是否超时（匹配 "Timeout after X seconds" 格式）
+        if test_result.get("error", "").startswith("Timeout"):
             logger.error("测试运行超时，开始逐个测试方法以识别超时方法...")
 
             # 逐个运行测试方法来识别超时的方法
@@ -370,13 +424,10 @@ class AgentTools:
                     test_methods=method_codes,
                 )
 
-                # 写入更新后的测试文件（不合并，完全替换）
-                write_test_file(
-                    project_path=self.project_path,
-                    package_name=test_case.package_name,
-                    test_code=test_case.full_code,
-                    test_class_name=test_case.class_name,
-                    merge=False,
+                # 写入更新后的测试文件（从数据库重建完整测试类，确保失败方法被删除）
+                self._rebuild_test_file_from_db(
+                    test_case=test_case,
+                    discarded_methods=timeout_methods,
                 )
 
                 logger.info(f"保留了 {len(valid_methods)} 个有效的测试方法，开始验证...")
@@ -553,13 +604,10 @@ class AgentTools:
             test_methods=method_codes,
         )
 
-        # 最后写入并验证（不合并，完全替换为最终版本）
-        write_test_file(
-            project_path=self.project_path,
-            package_name=test_case.package_name,
-            test_code=test_case.full_code,
-            test_class_name=test_case.class_name,
-            merge=False,
+        # 最后写入并验证（从数据库重建完整测试类，确保丢弃的方法被删除）
+        self._rebuild_test_file_from_db(
+            test_case=test_case,
+            discarded_methods=discarded_methods,
         )
 
         final_compile = self.java_executor.compile_tests(self.project_path)
@@ -641,8 +689,8 @@ class AgentTools:
                 method_name
             )
 
-            # 检查是否超时
-            if test_result.get("error") == "Timeout":
+            # 检查是否超时（匹配 "Timeout after X seconds" 格式）
+            if test_result.get("error", "").startswith("Timeout"):
                 logger.warning(f"✗ 方法 {method_name} 超时")
                 timeout_methods.add(method_name)
             elif not test_result.get("success"):
@@ -1097,8 +1145,8 @@ class AgentTools:
 
         test_result = self.java_executor.run_tests(self.project_path)
 
-        # 检查是否超时或失败
-        if test_result.get("error") == "Timeout":
+        # 检查是否超时或失败（匹配 "Timeout after X seconds" 格式）
+        if test_result.get("error", "").startswith("Timeout"):
             logger.error("测试运行超时，开始逐个测试方法以识别超时方法...")
 
             # 超时时不应该解析 Surefire 报告，因为测试没有完成，报告可能不存在或不完整
