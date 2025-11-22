@@ -247,7 +247,7 @@ def _merge_test_methods(existing_code: str, new_code: str) -> str:
 
 def _extract_test_methods(code: str) -> dict:
     """
-    从代码中提取所有@Test测试方法
+    从代码中提取所有@Test和@ParameterizedTest测试方法
 
     Args:
         code: Java测试代码
@@ -263,11 +263,25 @@ def _extract_test_methods(code: str) -> dict:
     while i < len(lines):
         line = lines[i].strip()
 
-        # 找到@Test注解
-        if line.startswith('@Test'):
-            # 下一行应该是方法签名
+        # 找到@Test或@ParameterizedTest注解（支持多行注解）
+        if line.startswith('@Test') or line.startswith('@ParameterizedTest'):
             method_start = i
+
+            # 收集所有注解行（@Test, @ParameterizedTest, @CsvSource, @ValueSource等）
+            annotation_lines = [lines[i]]
             i += 1
+
+            # 继续收集后续的注解行
+            while i < len(lines):
+                current_line = lines[i].strip()
+                # 如果是注解相关的行（@开头或注解内容如CsvSource的值）
+                if current_line.startswith('@') or (annotation_lines and (current_line.startswith('"') or current_line.startswith('}') or current_line.startswith('{'))):
+                    annotation_lines.append(lines[i])
+                    i += 1
+                else:
+                    # 到达方法签名行
+                    break
+
             if i >= len(lines):
                 break
 
@@ -277,8 +291,8 @@ def _extract_test_methods(code: str) -> dict:
                 continue
             method_name = match.group(1)
 
-            # 初始化方法行和大括号计数
-            method_lines = [lines[method_start], lines[i]]
+            # 初始化方法行（包含所有注解行和方法签名）
+            method_lines = annotation_lines + [lines[i]]
 
             # 计算方法签名行中的大括号
             brace_count = lines[i].count('{') - lines[i].count('}')

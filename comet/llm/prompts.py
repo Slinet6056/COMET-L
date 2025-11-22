@@ -708,15 +708,6 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
 无（尚未选择）
 {% endif %}
 
-{% if state.test_cases %}
-现有测试用例：
-{% for tc in state.test_cases %}
-- {{ tc.class_name }} (v{{ tc.version }}) - 目标: {{ tc.target_class }}
-  测试方法数: {{ tc.num_methods }}, 编译: {% if tc.compile_success %}成功{% else %}失败{% endif %}, 击杀变异体: {{ tc.kills_count }}
-  方法: {{ tc.method_names | join(', ') }}
-{% endfor %}
-{% endif %}
-
 {% if state.action_history %}
 最近操作历史（最近 {{ state.action_history|length }} 次）：
 {% for act in state.action_history %}

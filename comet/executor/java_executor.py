@@ -2,7 +2,10 @@
 
 import json
 import logging
+import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -38,7 +41,7 @@ class JavaExecutor:
         timeout: int = 300,
     ) -> Dict[str, Any]:
         """
-        运行 Java 命令
+        运行 Java 命令，支持超时后清理整个进程树
 
         Args:
             main_class: 主类名
@@ -55,32 +58,99 @@ class JavaExecutor:
             main_class,
         ] + args
 
+        process = None
         try:
-            result = subprocess.run(
+            # 使用 Popen 代替 run，以便更好地控制进程
+            # start_new_session=True 会创建新的进程组，方便后续清理整个进程树
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
+                start_new_session=True,  # 创建新的会话，避免子进程成为孤儿
             )
 
-            return {
-                "success": result.returncode == 0,
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-        except subprocess.TimeoutExpired:
-            logger.error(f"命令超时: {' '.join(cmd)}")
-            return {
-                "success": False,
-                "error": "Timeout",
-            }
+            try:
+                # 等待进程完成或超时
+                stdout, stderr = process.communicate(timeout=timeout)
+
+                return {
+                    "success": process.returncode == 0,
+                    "returncode": process.returncode,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                }
+            except subprocess.TimeoutExpired as e:
+                logger.error(f"命令超时 ({timeout}秒): {' '.join(cmd)}")
+
+                # 超时后清理整个进程组
+                self._kill_process_tree(process)
+
+                # 从异常对象中获取已捕获的输出
+                stdout = e.stdout or ""
+                stderr = e.stderr or ""
+
+                return {
+                    "success": False,
+                    "error": f"Timeout after {timeout} seconds",
+                    "stdout": stdout,
+                    "stderr": stderr,
+                }
         except Exception as e:
             logger.error(f"命令执行失败: {e}")
+            if process:
+                self._kill_process_tree(process)
             return {
                 "success": False,
                 "error": str(e),
             }
+
+    def _kill_process_tree(self, process: subprocess.Popen) -> None:
+        """
+        杀死进程及其所有子进程
+
+        Args:
+            process: 要终止的进程
+        """
+        if process is None or process.poll() is not None:
+            return
+
+        try:
+            # 获取进程组 ID
+            pgid = os.getpgid(process.pid)
+            logger.warning(f"终止进程组 {pgid} (PID {process.pid})")
+
+            # 先尝试优雅终止 (SIGTERM)
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+
+                # 等待最多 3 秒
+                for _ in range(30):
+                    if process.poll() is not None:
+                        logger.info(f"进程组 {pgid} 已优雅终止")
+                        return
+                    time.sleep(0.1)
+            except ProcessLookupError:
+                # 进程组已经不存在
+                return
+
+            # 如果还没终止，强制杀死 (SIGKILL)
+            logger.warning(f"强制终止进程组 {pgid}")
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+                process.wait(timeout=2)
+                logger.info(f"进程组 {pgid} 已强制终止")
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                pass
+
+        except Exception as e:
+            logger.error(f"清理进程树失败: {e}")
+            # 最后尝试直接杀死进程
+            try:
+                process.kill()
+                process.wait(timeout=1)
+            except:
+                pass
 
     def analyze_code(self, file_path: str) -> Optional[Dict[str, Any]]:
         """
