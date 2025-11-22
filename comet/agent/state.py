@@ -40,9 +40,6 @@ class AgentState:
         self.current_target: Optional[Dict[str, Any]] = None
         self.previous_target: Optional[Dict[str, Any]] = None  # 追踪目标切换
 
-        # 测试用例信息（新增）
-        self.test_cases: List[Dict[str, Any]] = []  # 测试用例列表
-
         # 历史记录
         self.action_history: List[Dict[str, Any]] = []  # 操作历史
         self.recent_improvements: List[Dict[str, Any]] = []
@@ -108,26 +105,6 @@ class AgentState:
         # 只保留最近 10 次操作
         self.action_history = self.action_history[-10:]
 
-    def set_test_cases(self, test_cases: List[Any]) -> None:
-        """
-        设置测试用例列表（供 Agent 查看）
-
-        Args:
-            test_cases: TestCase 对象列表
-        """
-        self.test_cases = []
-        for tc in test_cases:
-            self.test_cases.append({
-                "class_name": tc.class_name,
-                "target_class": tc.target_class,
-                "version": tc.version,
-                "num_methods": len(tc.methods),
-                "method_names": [m.method_name for m in tc.methods],
-                "compile_success": tc.compile_success,
-                "kills_count": len(tc.kills),
-            })
-        self.total_tests = sum(tc["num_methods"] for tc in self.test_cases)
-
     def update_target(self, new_target: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         更新当前目标，并记录上一个目标
@@ -152,6 +129,32 @@ class AgentState:
             return self.previous_target
         return None
 
+    def add_failed_target(self, class_name: str, method_name: str, reason: str) -> None:
+        """
+        将目标添加到失败黑名单
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+            reason: 失败原因
+        """
+        target_key = f"{class_name}.{method_name}"
+
+        # 检查是否已经在黑名单中
+        if any(ft.get("target") == target_key for ft in self.failed_targets):
+            logger.debug(f"目标 {target_key} 已在黑名单中")
+            return
+
+        self.failed_targets.append({
+            "target": target_key,
+            "class_name": class_name,
+            "method_name": method_name,
+            "reason": reason,
+            "iteration": self.iteration,
+        })
+        logger.warning(f"已将 {target_key} 添加到黑名单，原因: {reason}")
+        logger.info(f"当前黑名单大小: {len(self.failed_targets)}")
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -175,7 +178,6 @@ class AgentState:
             "budget": self.budget,
             "current_target": self.current_target,
             "previous_target": self.previous_target,
-            "test_cases": self.test_cases,
             "action_history": self.action_history,
             "recent_improvements": self.recent_improvements,
             "processed_targets": self.processed_targets,
@@ -209,7 +211,6 @@ class AgentState:
         state.budget = data.get("budget", 1000)
         state.current_target = data.get("current_target")
         state.previous_target = data.get("previous_target")
-        state.test_cases = data.get("test_cases", [])
         state.action_history = data.get("action_history", [])
         state.recent_improvements = data.get("recent_improvements", [])
         state.processed_targets = data.get("processed_targets", [])

@@ -99,6 +99,12 @@ class PlannerAgent:
             action = decision.get("action")
             result = self._execute_tool(decision)
 
+            # 检查 select_target 的结果，如果没有可选目标则停止
+            if action == "select_target":
+                if not result or not result.get("class_name"):
+                    logger.info("select_target 返回空结果，没有更多可选目标，停止")
+                    break
+
             # 更新迭代计数
             self.state.iteration += 1
 
@@ -151,8 +157,52 @@ class PlannerAgent:
 
             # 检查停止条件：连续多轮无改进
             if no_improvement_count >= stop_on_no_improvement_rounds:
-                logger.info(f"连续 {no_improvement_count} 轮无改进，停止")
-                break
+                logger.info(f"连续 {no_improvement_count} 轮无改进")
+
+                # 将当前目标加入黑名单并重新选择
+                if self.state.current_target and self.state.current_target.get("class_name"):
+                    current_class = self.state.current_target["class_name"]
+                    current_method = self.state.current_target.get("method_name", "")
+
+                    logger.info(f"将当前目标 {current_class}.{current_method} 加入黑名单")
+                    self.state.add_failed_target(
+                        current_class,
+                        current_method,
+                        f"连续 {no_improvement_count} 轮无改进"
+                    )
+
+                    # 重置无改进计数器
+                    no_improvement_count = 0
+
+                    # 尝试重新选择目标
+                    logger.info("尝试重新选择新目标...")
+                    new_target = self.tools.select_target(criteria="coverage")
+
+                    # 检查是否还有可选目标
+                    if not new_target or not new_target.get("class_name"):
+                        logger.info("没有更多可选目标，停止")
+                        break
+
+                    logger.info(f"已切换到新目标: {new_target.get('class_name')}.{new_target.get('method_name')}")
+
+                    # 确保状态已更新（虽然 select_target 内部也会更新，但显式调用确保一致性）
+                    self.state.update_target(new_target)
+
+                    # 更新当前方法覆盖率
+                    if "method_coverage" in new_target:
+                        self.state.current_method_coverage = new_target["method_coverage"]
+
+                    # 记录切换动作
+                    self.state.add_action(
+                        action="select_target",
+                        params={},
+                        success=True,
+                        result=new_target
+                    )
+                else:
+                    # 没有当前目标，直接停止
+                    logger.info("没有当前目标，停止")
+                    break
 
         logger.info("协同进化循环结束")
         self._log_final_summary()
@@ -331,6 +381,14 @@ class PlannerAgent:
             except Exception as e:
                 logger.warning(f"同步覆盖率数据失败: {e}")
 
+            # 同步测试数量
+            try:
+                all_tests = self.tools.db.get_all_test_cases()
+                self.state.total_tests = sum(len(tc.methods) for tc in all_tests)
+                logger.debug(f"已更新测试总数: {self.state.total_tests}")
+            except Exception as e:
+                logger.warning(f"同步测试数量失败: {e}")
+
             # 显示全局统计和当前目标统计
             if self.state.current_target:
                 logger.debug(
@@ -360,14 +418,6 @@ class PlannerAgent:
             决策字典 {action, params, reasoning}
         """
         try:
-            # 更新测试用例信息（让 Agent 知道当前有哪些测试）
-            if self.tools.db:
-                try:
-                    all_test_cases = self.tools.db.get_all_test_cases()
-                    self.state.set_test_cases(all_test_cases)
-                except Exception as e:
-                    logger.warning(f"获取测试用例列表失败: {e}")
-
             # 动态获取工具描述
             tools_description = self.tools.get_tools_description()
 
