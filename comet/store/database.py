@@ -377,6 +377,21 @@ class Database:
             logger.debug(f"查询到 {len(results)} 个测试用例: {results[0].id}")
         return results
 
+    def delete_test_case(self, test_id: str) -> None:
+        """删除测试用例及其所有测试方法"""
+        cursor = self.conn.cursor()
+        try:
+            # 删除测试方法
+            cursor.execute("DELETE FROM test_methods WHERE test_case_id = ?", (test_id,))
+            # 删除测试用例
+            cursor.execute("DELETE FROM test_cases WHERE id = ?", (test_id,))
+            self.conn.commit()
+            logger.info(f"已删除测试用例: {test_id}")
+        except Exception as e:
+            logger.error(f"删除测试用例失败: {e}")
+            self.conn.rollback()
+            raise
+
     def save_evaluation_result(self, result: EvaluationResult) -> None:
         """保存评估结果"""
         cursor = self.conn.cursor()

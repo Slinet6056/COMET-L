@@ -19,6 +19,8 @@ class LLMConfig(BaseModel):
 class ExecutionConfig(BaseModel):
     """执行配置"""
     timeout: int = Field(default=300, ge=1, description="超时时间（秒）")
+    test_timeout: int = Field(default=30, ge=1, description="测试执行超时时间（秒）")
+    coverage_timeout: int = Field(default=300, ge=1, description="覆盖率收集超时时间（秒）")
     max_retries: int = Field(default=3, ge=0, description="最大重试次数")
     parallel_jobs: int = Field(default=4, ge=1, description="并行任务数")
     maven_home: Optional[str] = Field(default=None, description="Maven 安装路径")
@@ -41,6 +43,17 @@ class EvolutionConfig(BaseModel):
     budget_llm_calls: int = Field(default=1000, ge=1, description="LLM 调用预算")
     stop_on_no_improvement_rounds: int = Field(
         default=3, ge=1, description="无改进时停止的轮数"
+    )
+
+    # 优秀水平阈值（用于提前停止）
+    excellent_mutation_score: float = Field(
+        default=0.95, ge=0.0, le=1.0, description="优秀变异分数阈值"
+    )
+    excellent_line_coverage: float = Field(
+        default=0.90, ge=0.0, le=1.0, description="优秀行覆盖率阈值"
+    )
+    excellent_branch_coverage: float = Field(
+        default=0.85, ge=0.0, le=1.0, description="优秀分支覆盖率阈值"
     )
 
 

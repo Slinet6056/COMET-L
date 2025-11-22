@@ -133,7 +133,11 @@ def initialize_system(config: Settings):
             "请先构建 Java 模块: cd java-runtime && mvn clean package"
         )
 
-    java_executor = JavaExecutor(java_runtime_jar)
+    java_executor = JavaExecutor(
+        java_runtime_jar,
+        test_timeout=config.execution.test_timeout,
+        coverage_timeout=config.execution.coverage_timeout
+    )
     static_guard = StaticGuard(java_runtime_jar)
 
     # 初始化沙箱和执行器
@@ -167,6 +171,9 @@ def initialize_system(config: Settings):
         tools=tools,
         max_iterations=max_iterations,
         budget=budget,
+        excellent_mutation_score=config.evolution.excellent_mutation_score,
+        excellent_line_coverage=config.evolution.excellent_line_coverage,
+        excellent_branch_coverage=config.evolution.excellent_branch_coverage,
     )
 
     # 共享状态
@@ -230,7 +237,8 @@ def run_evolution(project_path: str, components: dict, resume_state: str = None)
     # 运行主循环
     try:
         final_state = planner.run(
-            stop_on_no_improvement_rounds=config.evolution.stop_on_no_improvement_rounds
+            stop_on_no_improvement_rounds=config.evolution.stop_on_no_improvement_rounds,
+            min_improvement_threshold=config.evolution.min_improvement_threshold
         )
 
         # 保存最终状态

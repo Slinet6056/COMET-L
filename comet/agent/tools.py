@@ -1,8 +1,10 @@
 """Agent 工具集"""
 
 import logging
+import os
 from typing import Dict, Any, List, Callable, Optional
 from dataclasses import dataclass, field
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +239,257 @@ class AgentTools:
 
         return "\n".join(lines)
 
+    # 辅助方法
+
+    def _verify_and_fix_tests(
+        self,
+        test_case,
+        class_code: str,
+        max_fix_retries: int = 3,
+    ):
+        """
+        验证并修复测试方法（使用 Surefire 报告精确识别失败的方法）
+
+        Args:
+            test_case: 测试用例
+            class_code: 被测类代码
+            max_fix_retries: 每个方法的最大修复次数
+
+        Returns:
+            修复后的测试用例，失败的方法会被移除
+        """
+        from ..executor.surefire_parser import SurefireParser
+        from ..utils.project_utils import write_test_file
+        from ..utils.code_utils import build_test_class
+
+        surefire_parser = SurefireParser()
+        reports_dir = os.path.join(self.project_path, "target", "surefire-reports")
+
+        # 1. 编译测试
+        compile_result = self.java_executor.compile_tests(self.project_path)
+        if not compile_result.get("success"):
+            compile_error = compile_result.get('error', 'Unknown error')
+            logger.warning(f"测试编译失败: {compile_error}")
+
+            # 尝试修复整个测试类的编译错误
+            logger.info("尝试修复编译错误...")
+            fixed_test_case = self.test_generator.regenerate_with_feedback(
+                test_case=test_case,
+                compile_error=compile_error,
+                max_retries=2,
+            )
+
+            if fixed_test_case:
+                # 重新写入并验证
+                test_file = write_test_file(
+                    project_path=self.project_path,
+                    package_name=fixed_test_case.package_name,
+                    test_code=fixed_test_case.full_code,
+                    test_class_name=fixed_test_case.class_name,
+                )
+
+                compile_result = self.java_executor.compile_tests(self.project_path)
+                if compile_result.get("success"):
+                    logger.info("编译错误修复成功")
+                    test_case = fixed_test_case
+                else:
+                    logger.error("编译错误修复失败，测试用例无效")
+                    test_case.compile_success = False
+                    test_case.compile_error = "编译失败且无法修复"
+                    return test_case
+            else:
+                logger.error("编译错误修复失败")
+                test_case.compile_success = False
+                test_case.compile_error = compile_error
+                return test_case
+
+        test_case.compile_success = True
+        logger.info(f"测试编译成功: {test_case.class_name}")
+
+        # 2. 运行测试
+        logger.info("运行测试验证...")
+        test_result = self.java_executor.run_tests(self.project_path)
+
+        # 检查是否超时
+        if test_result.get("error") == "Timeout":
+            logger.error("测试运行超时，将丢弃所有测试方法")
+            test_case.compile_success = False
+            # 动态获取实际配置的超时值
+            timeout_value = self.java_executor.test_timeout if self.java_executor else 30
+            test_case.compile_error = f"测试运行超时（>{timeout_value}秒）"
+            test_case.methods = []  # 清空所有方法
+            return test_case
+
+        if test_result.get("success"):
+            logger.info("所有测试方法都通过了！")
+            test_case.compile_error = None
+            return test_case
+
+        # 3. 解析 Surefire 报告，识别失败的方法
+        logger.warning("部分测试方法失败，开始精确识别...")
+        suite_results = surefire_parser.parse_surefire_reports(reports_dir)
+
+        if not suite_results:
+            logger.error("无法解析 Surefire 报告")
+            test_case.compile_success = False
+            test_case.compile_error = "测试运行失败且无法解析报告"
+            return test_case
+
+        # 收集失败的方法
+        failed_methods = {}  # {method_name: error_message}
+        passed_methods = set()
+
+        for suite in suite_results:
+            for test in suite.test_cases:
+                if test.passed:
+                    passed_methods.add(test.method_name)
+                else:
+                    error_msg = test.error_message or test.failure_message or "Unknown error"
+                    failed_methods[test.method_name] = error_msg
+
+        logger.info(f"测试结果: {len(passed_methods)} 个通过, {len(failed_methods)} 个失败")
+
+        if failed_methods:
+            for method_name, error in failed_methods.items():
+                logger.info(f"  失败: {method_name}")
+                logger.debug(f"    错误: {error[:200]}")
+
+        # 4. 尝试修复失败的方法
+        fixed_methods = {}  # {method_name: fixed_code}
+        discarded_methods = set()
+
+        for method_name, error_message in failed_methods.items():
+            # 对于超时错误，直接丢弃，不尝试修复
+            if "timeout" in error_message.lower() or "timed out" in error_message.lower():
+                logger.warning(f"方法 {method_name} 超时，直接丢弃")
+                discarded_methods.add(method_name)
+                continue
+
+            logger.info(f"开始修复方法: {method_name}")
+
+            # 从 TestCase.methods 中查找方法代码
+            method_code = None
+            for method in test_case.methods:
+                if method.method_name == method_name:
+                    method_code = method.code
+                    break
+
+            if not method_code:
+                logger.warning(f"无法找到方法代码: {method_name}，将丢弃该方法")
+                discarded_methods.add(method_name)
+                continue
+
+            # 尝试修复
+            fixed_code = self.test_generator.fix_single_method(
+                method_name=method_name,
+                method_code=method_code,
+                class_code=class_code,
+                error_message=error_message,
+                max_retries=max_fix_retries,
+            )
+
+            if fixed_code:
+                # 验证修复后的方法
+                # 临时构建只包含这个方法的测试类
+                temp_methods = [fixed_code]
+                temp_full_code = build_test_class(
+                    test_class_name=test_case.class_name,
+                    target_class=test_case.target_class,
+                    package_name=test_case.package_name,
+                    imports=test_case.imports,
+                    test_methods=temp_methods,
+                )
+
+                # 写入并测试
+                write_test_file(
+                    project_path=self.project_path,
+                    package_name=test_case.package_name,
+                    test_code=temp_full_code,
+                    test_class_name=test_case.class_name,
+                )
+
+                compile_res = self.java_executor.compile_tests(self.project_path)
+                if compile_res.get("success"):
+                    test_res = self.java_executor.run_tests(self.project_path)
+                    if test_res.get("success"):
+                        logger.info(f"✓ 方法 {method_name} 修复成功")
+                        fixed_methods[method_name] = fixed_code
+                    else:
+                        logger.warning(f"✗ 方法 {method_name} 修复后仍然失败，将丢弃")
+                        discarded_methods.add(method_name)
+                else:
+                    logger.warning(f"✗ 方法 {method_name} 修复后无法编译，将丢弃")
+                    discarded_methods.add(method_name)
+            else:
+                logger.warning(f"✗ 无法修复方法 {method_name}，将丢弃")
+                discarded_methods.add(method_name)
+
+        # 5. 重建测试用例（保留通过的方法 + 修复成功的方法）
+        final_methods = []
+
+        for method in test_case.methods:
+            method_name = method.method_name
+
+            if method_name in passed_methods:
+                # 保留原来通过的方法
+                final_methods.append(method)
+                logger.debug(f"保留通过的方法: {method_name}")
+            elif method_name in fixed_methods:
+                # 使用修复后的代码
+                method.code = fixed_methods[method_name]
+                final_methods.append(method)
+                logger.debug(f"使用修复后的方法: {method_name}")
+            elif method_name in discarded_methods:
+                logger.warning(f"丢弃失败的方法: {method_name}")
+            else:
+                # 不在失败列表中，可能是新方法，保留
+                final_methods.append(method)
+
+        if not final_methods:
+            logger.error("所有测试方法都失败了，无有效测试")
+            test_case.compile_success = False
+            test_case.compile_error = "所有测试方法都失败"
+            return test_case
+
+        # 更新测试用例
+        test_case.methods = final_methods
+        method_codes = [m.code for m in final_methods]
+        test_case.full_code = build_test_class(
+            test_class_name=test_case.class_name,
+            target_class=test_case.target_class,
+            package_name=test_case.package_name,
+            imports=test_case.imports,
+            test_methods=method_codes,
+        )
+
+        # 最后写入并验证
+        write_test_file(
+            project_path=self.project_path,
+            package_name=test_case.package_name,
+            test_code=test_case.full_code,
+            test_class_name=test_case.class_name,
+        )
+
+        final_compile = self.java_executor.compile_tests(self.project_path)
+        if final_compile.get("success"):
+            final_test = self.java_executor.run_tests(self.project_path)
+            if final_test.get("success"):
+                logger.info(f"✓ 最终测试验证成功！保留 {len(final_methods)} 个方法")
+                test_case.compile_success = True
+                test_case.compile_error = None
+            else:
+                logger.warning("最终测试运行失败（但这不应该发生）")
+                test_case.compile_success = False
+                test_case.compile_error = "Final test run failed"
+        else:
+            logger.error("最终编译失败（但这不应该发生）")
+            test_case.compile_success = False
+            test_case.compile_error = "Final compilation failed"
+
+        logger.info(f"测试验证完成: 丢弃了 {len(discarded_methods)} 个方法, 保留了 {len(final_methods)} 个方法")
+
+        return test_case
+
     # 工具实现
 
     def select_target(self, criteria: str = "coverage") -> Dict[str, Any]:
@@ -401,101 +654,13 @@ class AgentTools:
             logger.error("写入测试文件失败")
             return {"generated": 0}
 
-        # 验证编译和运行
-        compile_result = self.java_executor.compile_tests(self.project_path)
-        if compile_result.get("success"):
-            test_case.compile_success = True
-            logger.info(f"测试编译成功: {test_case.class_name}")
-
-            # 运行测试以确保没有运行时错误
-            logger.info("运行测试验证...")
-            test_result = self.java_executor.run_tests(self.project_path)
-
-            if not test_result.get("success"):
-                # 测试运行失败（可能是测试断言错误）
-                test_error = test_result.get('output', 'Unknown test failure')
-                logger.warning(f"测试运行失败，尝试修复...")
-                logger.debug(f"测试失败详情: {test_error[:500]}")
-
-                # 尝试自动修复测试失败
-                fixed_test_case = self.test_generator.regenerate_with_feedback(
-                    test_case=test_case,
-                    compile_error=f"测试运行失败:\n{test_error}",
-                    max_retries=2,
-                )
-
-                if fixed_test_case:
-                    # 重新写入并验证
-                    test_file = write_test_file(
-                        project_path=self.project_path,
-                        package_name=fixed_test_case.package_name,
-                        test_code=fixed_test_case.full_code,
-                        test_class_name=fixed_test_case.class_name,
-                    )
-
-                    compile_result2 = self.java_executor.compile_tests(self.project_path)
-                    if compile_result2.get("success"):
-                        test_result2 = self.java_executor.run_tests(self.project_path)
-                        if test_result2.get("success"):
-                            fixed_test_case.compile_success = True
-                            fixed_test_case.compile_error = None
-                            logger.info(f"修复成功！测试现在可以正常运行")
-                            test_case = fixed_test_case
-                        else:
-                            logger.warning(f"修复后测试仍然失败")
-                            fixed_test_case.compile_error = "Test execution failed after fix"
-                            test_case = fixed_test_case
-                    else:
-                        logger.error(f"修复后无法编译")
-                        fixed_test_case.compile_error = str(compile_result2.get('error'))
-                        test_case = fixed_test_case
-                else:
-                    logger.error("自动修复失败")
-                    test_case.compile_error = "Test execution failed"
-            else:
-                logger.info("测试运行成功！")
-        else:
-            compile_error = compile_result.get('error', 'Unknown error')
-            logger.warning(f"测试编译失败: {compile_error}")
-            test_case.compile_error = str(compile_error)
-
-            # 尝试自动修复编译错误
-            logger.info("尝试自动修复编译错误...")
-            fixed_test_case = self.test_generator.regenerate_with_feedback(
-                test_case=test_case,
-                compile_error=compile_error,
-                max_retries=2,
-            )
-
-            if fixed_test_case:
-                # 重新写入修复后的测试文件
-                from ..utils.project_utils import write_test_file
-                test_file = write_test_file(
-                    project_path=self.project_path,
-                    package_name=fixed_test_case.package_name,
-                    test_code=fixed_test_case.full_code,
-                    test_class_name=fixed_test_case.class_name,
-                )
-
-                # 重新编译和运行验证
-                compile_result2 = self.java_executor.compile_tests(self.project_path)
-                if compile_result2.get("success"):
-                    test_result2 = self.java_executor.run_tests(self.project_path)
-                    if test_result2.get("success"):
-                        fixed_test_case.compile_success = True
-                        fixed_test_case.compile_error = None
-                        logger.info(f"修复成功！测试现在可以编译和运行")
-                        test_case = fixed_test_case
-                    else:
-                        logger.warning(f"修复后测试运行失败")
-                        fixed_test_case.compile_error = "Test execution failed after fix"
-                        test_case = fixed_test_case
-                else:
-                    logger.error(f"修复后仍无法编译: {compile_result2.get('error', 'Unknown error')}")
-                    fixed_test_case.compile_error = str(compile_result2.get('error'))
-                    test_case = fixed_test_case
-            else:
-                logger.error("自动修复失败")
+        # 使用新的验证和修复流程（使用 Surefire 报告精确识别失败的方法）
+        logger.info("开始验证和修复测试方法...")
+        test_case = self._verify_and_fix_tests(
+            test_case=test_case,
+            class_code=class_code,
+            max_fix_retries=3,
+        )
 
         # 保存
         logger.debug(f"准备保存新生成的测试用例: ID={test_case.id}, version={test_case.version}")
@@ -598,100 +763,13 @@ class AgentTools:
             logger.error("写入测试文件失败")
             return {"refined": 0}
 
-        # 验证编译和运行
-        compile_result = self.java_executor.compile_tests(self.project_path)
-        if compile_result.get("success"):
-            refined_test_case.compile_success = True
-            logger.info(f"完善后的测试编译成功: {refined_test_case.class_name}")
-
-            # 运行测试以确保没有运行时错误
-            logger.info("运行测试验证...")
-            test_result = self.java_executor.run_tests(self.project_path)
-
-            if not test_result.get("success"):
-                # 测试运行失败（可能是测试断言错误）
-                test_error = test_result.get('output', 'Unknown test failure')
-                logger.warning(f"完善后的测试运行失败，尝试修复...")
-                logger.debug(f"测试失败详情: {test_error[:500]}")
-
-                # 尝试自动修复测试失败
-                fixed_test_case = self.test_generator.regenerate_with_feedback(
-                    test_case=refined_test_case,
-                    compile_error=f"测试运行失败:\n{test_error}",
-                    max_retries=2,
-                )
-
-                if fixed_test_case:
-                    # 重新写入并验证
-                    test_file = write_test_file(
-                        project_path=self.project_path,
-                        package_name=fixed_test_case.package_name,
-                        test_code=fixed_test_case.full_code,
-                        test_class_name=fixed_test_case.class_name,
-                    )
-
-                    compile_result2 = self.java_executor.compile_tests(self.project_path)
-                    if compile_result2.get("success"):
-                        test_result2 = self.java_executor.run_tests(self.project_path)
-                        if test_result2.get("success"):
-                            fixed_test_case.compile_success = True
-                            fixed_test_case.compile_error = None
-                            logger.info(f"修复成功！测试现在可以正常运行")
-                            refined_test_case = fixed_test_case
-                        else:
-                            logger.warning(f"修复后测试仍然失败")
-                            fixed_test_case.compile_error = "Test execution failed after fix"
-                            refined_test_case = fixed_test_case
-                    else:
-                        logger.error(f"修复后无法编译")
-                        fixed_test_case.compile_error = str(compile_result2.get('error'))
-                        refined_test_case = fixed_test_case
-                else:
-                    logger.error("自动修复失败")
-                    refined_test_case.compile_error = "Test execution failed"
-            else:
-                logger.info("完善后的测试运行成功！")
-        else:
-            compile_error = compile_result.get('error', 'Unknown error')
-            logger.warning(f"完善后的测试编译失败: {compile_error}")
-            refined_test_case.compile_error = str(compile_error)
-
-            # 尝试自动修复编译错误
-            logger.info("尝试自动修复编译错误...")
-            fixed_test_case = self.test_generator.regenerate_with_feedback(
-                test_case=refined_test_case,
-                compile_error=compile_error,
-                max_retries=2,
-            )
-
-            if fixed_test_case:
-                # 重新写入
-                test_file = write_test_file(
-                    project_path=self.project_path,
-                    package_name=fixed_test_case.package_name,
-                    test_code=fixed_test_case.full_code,
-                    test_class_name=fixed_test_case.class_name,
-                )
-
-                # 重新编译和运行
-                compile_result2 = self.java_executor.compile_tests(self.project_path)
-                if compile_result2.get("success"):
-                    test_result2 = self.java_executor.run_tests(self.project_path)
-                    if test_result2.get("success"):
-                        fixed_test_case.compile_success = True
-                        fixed_test_case.compile_error = None
-                        logger.info(f"修复成功！测试现在可以编译和运行")
-                        refined_test_case = fixed_test_case
-                    else:
-                        logger.warning(f"修复后测试运行失败")
-                        fixed_test_case.compile_error = "Test execution failed after fix"
-                        refined_test_case = fixed_test_case
-                else:
-                    logger.error(f"修复后仍无法编译")
-                    fixed_test_case.compile_error = str(compile_result2.get('error'))
-                    refined_test_case = fixed_test_case
-            else:
-                logger.error("自动修复失败")
+        # 使用新的验证和修复流程（使用 Surefire 报告精确识别失败的方法）
+        logger.info("开始验证和修复完善后的测试方法...")
+        refined_test_case = self._verify_and_fix_tests(
+            test_case=refined_test_case,
+            class_code=class_code,
+            max_fix_retries=3,
+        )
 
         # 保存
         logger.debug(f"准备保存完善后的测试用例: ID={refined_test_case.id}, version={refined_test_case.version}")
@@ -747,22 +825,111 @@ class AgentTools:
 
         logger.info(f"开始评估 {len(mutants)} 个变异体 和 {len(test_cases)} 个测试")
 
-        # 构建击杀矩阵（使用工作路径，因为测试文件在工作沙箱中）
-        kill_matrix = self.mutation_evaluator.build_kill_matrix(
-            mutants=mutants,
-            test_cases=test_cases,
-            project_path=self.project_path,
-        )
+        # ===== 步骤1: 预验证测试用例 =====
+        logger.info("步骤1: 预验证测试用例...")
+        test_result = self.java_executor.run_tests(self.project_path)
 
-        # 保存更新后的变异体状态到数据库
-        for mutant in mutants:
-            self.db.save_mutant(mutant)
-        logger.debug(f"已保存 {len(mutants)} 个变异体的评估状态")
+        # 检查是否超时或失败
+        if test_result.get("error") == "Timeout":
+            logger.error("测试运行超时，开始识别有问题的测试方法...")
+            # 尝试解析 Surefire 报告识别具体的失败测试
+            from ..executor.surefire_parser import SurefireParser
+            surefire_parser = SurefireParser()
+            reports_dir = os.path.join(self.project_path, "target", "surefire-reports")
+            suite_results = surefire_parser.parse_surefire_reports(reports_dir)
 
-        # 运行覆盖率分析（在工作沙箱上，针对原始代码）
+            if suite_results:
+                # 识别失败/超时的测试方法
+                # 注意：Surefire 报告中的 class_name 是完全限定名（如 com.example.CalculatorTest）
+                failed_test_methods = set()
+                for suite in suite_results:
+                    for test in suite.test_cases:
+                        if not test.passed:
+                            # 存储完全限定的测试名称：package.Class.method
+                            full_test_name = f"{test.class_name}.{test.method_name}"
+                            failed_test_methods.add(full_test_name)
+
+                if failed_test_methods:
+                    logger.warning(f"发现 {len(failed_test_methods)} 个有问题的测试方法")
+                    # 从数据库中删除有问题的测试方法
+                    for test_case in list(test_cases):
+                        methods_to_remove = []
+                        for method in test_case.methods:
+                            # 构建完整的测试名称，与 Surefire 报告格式一致
+                            if test_case.package_name:
+                                full_name = f"{test_case.package_name}.{test_case.class_name}.{method.method_name}"
+                            else:
+                                full_name = f"{test_case.class_name}.{method.method_name}"
+
+                            if full_name in failed_test_methods:
+                                logger.warning(f"删除有问题的测试方法: {full_name}")
+                                methods_to_remove.append(method)
+
+                        # 从测试用例中移除有问题的方法
+                        for method in methods_to_remove:
+                            test_case.methods.remove(method)
+
+                        # 如果测试用例没有方法了，从列表中移除
+                        if not test_case.methods:
+                            logger.warning(f"测试用例 {test_case.class_name} 的所有方法都有问题，删除整个测试用例")
+                            test_cases.remove(test_case)
+                            self.db.delete_test_case(test_case.id)
+                        else:
+                            # 更新数据库中的测试用例
+                            self.db.save_test_case(test_case)
+            else:
+                logger.error("无法解析 Surefire 报告，将清空所有测试用例")
+                test_cases = []
+
+        elif not test_result.get("success"):
+            logger.warning("部分测试失败，识别有问题的测试方法...")
+            from ..executor.surefire_parser import SurefireParser
+            surefire_parser = SurefireParser()
+            reports_dir = os.path.join(self.project_path, "target", "surefire-reports")
+            failed_test_names = surefire_parser.get_failed_test_names(reports_dir)
+
+            if failed_test_names:
+                logger.warning(f"发现 {len(failed_test_names)} 个失败的测试")
+                # 从数据库中删除失败的测试方法
+                for test_case in list(test_cases):
+                    methods_to_remove = []
+                    for method in test_case.methods:
+                        # 构建完整的测试名称
+                        if test_case.package_name:
+                            full_name = f"{test_case.package_name}.{test_case.class_name}.{method.method_name}"
+                        else:
+                            full_name = f"{test_case.class_name}.{method.method_name}"
+
+                        if full_name in failed_test_names:
+                            logger.warning(f"删除失败的测试方法: {full_name}")
+                            methods_to_remove.append(method)
+
+                    # 从测试用例中移除失败的方法
+                    for method in methods_to_remove:
+                        test_case.methods.remove(method)
+
+                    # 如果测试用例没有方法了，从列表中移除
+                    if not test_case.methods:
+                        logger.warning(f"测试用例 {test_case.class_name} 的所有方法都失败，删除整个测试用例")
+                        test_cases.remove(test_case)
+                        self.db.delete_test_case(test_case.id)
+                    else:
+                        # 更新数据库中的测试用例
+                        self.db.save_test_case(test_case)
+        else:
+            logger.info("所有测试通过验证")
+
+        # 重新检查是否还有可用的测试用例
+        if not test_cases:
+            logger.error("预验证后没有可用的测试用例")
+            return {"evaluated": len(mutants), "killed": 0, "mutation_score": 0.0}
+
+        logger.info(f"预验证完成，剩余 {len(test_cases)} 个测试用例")
+
+        # ===== 步骤2: 收集覆盖率信息 =====
+        logger.info("步骤2: 收集覆盖率信息...")
         coverage_data = None
         try:
-            logger.info("收集覆盖率数据（针对原始代码）...")
             coverage_result = self.java_executor.run_tests_with_coverage(self.project_path)
 
             if coverage_result.get("success"):
@@ -787,7 +954,6 @@ class AgentTools:
                     logger.info(f"已保存 {len(method_coverages)} 个方法的覆盖率数据")
 
                     # 计算聚合覆盖率数据用于 metrics
-                    # 注意：详细的行号信息已保存到数据库，这里只传递统计数据给 metrics
                     if method_coverages:
                         total_lines = sum(c.total_lines for c in method_coverages)
                         covered_lines_count = sum(len(c.covered_lines) for c in method_coverages)
@@ -807,6 +973,21 @@ class AgentTools:
         except Exception as e:
             logger.warning(f"覆盖率分析失败: {e}")
 
+        # ===== 步骤3: 构建击杀矩阵 =====
+        logger.info("步骤3: 构建击杀矩阵...")
+        kill_matrix = self.mutation_evaluator.build_kill_matrix(
+            mutants=mutants,
+            test_cases=test_cases,
+            project_path=self.project_path,
+        )
+
+        # 保存更新后的变异体状态到数据库
+        for mutant in mutants:
+            self.db.save_mutant(mutant)
+        logger.debug(f"已保存 {len(mutants)} 个变异体的评估状态")
+
+        # ===== 步骤4: 更新度量指标 =====
+        logger.info("步骤4: 更新度量指标...")
         # 更新度量指标
         if self.metrics_collector:
             self.metrics_collector.update_from_evaluation(

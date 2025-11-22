@@ -21,6 +21,9 @@ class PlannerAgent:
         tools: AgentTools,
         max_iterations: int = 10,
         budget: int = 1000,
+        excellent_mutation_score: float = 0.95,
+        excellent_line_coverage: float = 0.90,
+        excellent_branch_coverage: float = 0.85,
     ):
         """
         初始化调度器
@@ -30,6 +33,9 @@ class PlannerAgent:
             tools: 工具集
             max_iterations: 最大迭代次数
             budget: LLM 调用预算
+            excellent_mutation_score: 优秀变异分数阈值（默认 0.95）
+            excellent_line_coverage: 优秀行覆盖率阈值（默认 0.90）
+            excellent_branch_coverage: 优秀分支覆盖率阈值（默认 0.85）
         """
         self.llm = llm_client
         self.tools = tools
@@ -37,21 +43,31 @@ class PlannerAgent:
         self.max_iterations = max_iterations
         self.budget = budget
 
+        # 优秀水平阈值（可配置）
+        self.excellent_mutation_score = excellent_mutation_score
+        self.excellent_line_coverage = excellent_line_coverage
+        self.excellent_branch_coverage = excellent_branch_coverage
+
         self.state = AgentState()
         self.state.budget = budget
 
-    def run(self, stop_on_no_improvement_rounds: int = 3) -> AgentState:
+    def run(self, stop_on_no_improvement_rounds: int = 3, min_improvement_threshold: float = 0.01) -> AgentState:
         """
         运行调度循环
 
         Args:
             stop_on_no_improvement_rounds: 无改进时停止的轮数
+            min_improvement_threshold: 最小改进阈值
 
         Returns:
             最终状态
         """
         logger.info("开始协同进化循环")
         no_improvement_count = 0
+
+        # 记录上一轮的关键指标
+        prev_mutation_score = 0.0
+        prev_line_coverage = 0.0
 
         while not self._should_stop():
             logger.info(f"{'='*60}")
@@ -61,6 +77,11 @@ class PlannerAgent:
             # 从数据库同步状态
             self._sync_state_from_db()
 
+            # 检查是否达到优秀水平（可以提前停止）
+            if self._check_excellent_quality():
+                logger.info("已达到优秀质量水平，提前结束")
+                break
+
             # LLM 决策
             decision = self._make_decision()
 
@@ -69,21 +90,72 @@ class PlannerAgent:
                 self.state.iteration += 1
                 continue
 
+            # 检查 agent 是否建议停止
+            if decision.get("action") == "stop" or decision.get("should_stop", False):
+                logger.info(f"Agent 决策停止: {decision.get('reasoning', '无理由')}")
+                break
+
             # 执行工具
+            action = decision.get("action")
             result = self._execute_tool(decision)
 
-            # 更新状态（由具体工具更新）
-            # 检查改进
-            # 这里简化处理
-
+            # 更新迭代计数
             self.state.iteration += 1
 
-            # 检查停止条件
+            # 只有在执行评估后才检查改进
+            # 因为只有 run_evaluation 会更新变异分数和覆盖率等指标
+            if action == "run_evaluation":
+                # 检查评估是否成功执行
+                evaluation_succeeded = (
+                    result is not None and
+                    isinstance(result, dict) and
+                    result.get("evaluated", 0) > 0
+                )
+
+                if not evaluation_succeeded:
+                    logger.warning("评估执行失败或没有评估任何变异体，跳过改进检查")
+                    # 同步状态但不检查改进
+                    self._sync_state_from_db()
+                else:
+                    # 评估成功，再次同步状态以获取最新指标
+                    self._sync_state_from_db()
+
+                    # 检查改进
+                    has_improvement = self._check_improvement(
+                        prev_mutation_score,
+                        prev_line_coverage,
+                        min_improvement_threshold
+                    )
+
+                    if has_improvement:
+                        logger.info(f"检测到改进，重置无改进计数器")
+                        no_improvement_count = 0
+                        # 记录改进
+                        self.state.add_improvement({
+                            "iteration": self.state.iteration,
+                            "mutation_score": self.state.mutation_score,
+                            "line_coverage": self.state.line_coverage,
+                            "mutation_score_delta": self.state.mutation_score - prev_mutation_score,
+                            "coverage_delta": self.state.line_coverage - prev_line_coverage,
+                        })
+                    else:
+                        no_improvement_count += 1
+                        logger.info(f"评估后无显著改进 (连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)")
+
+                    # 更新上一轮指标（只在评估后更新）
+                    prev_mutation_score = self.state.mutation_score
+                    prev_line_coverage = self.state.line_coverage
+            else:
+                # 非评估操作，同步状态但不检查改进
+                self._sync_state_from_db()
+
+            # 检查停止条件：连续多轮无改进
             if no_improvement_count >= stop_on_no_improvement_rounds:
                 logger.info(f"连续 {no_improvement_count} 轮无改进，停止")
                 break
 
         logger.info("协同进化循环结束")
+        self._log_final_summary()
         return self.state
 
     def _should_stop(self) -> bool:
@@ -97,6 +169,84 @@ class PlannerAgent:
             return True
 
         return False
+
+    def _check_improvement(
+        self,
+        prev_mutation_score: float,
+        prev_line_coverage: float,
+        threshold: float = 0.01
+    ) -> bool:
+        """
+        检查是否有显著改进
+
+        Args:
+            prev_mutation_score: 上一轮的变异分数
+            prev_line_coverage: 上一轮的行覆盖率
+            threshold: 改进阈值
+
+        Returns:
+            是否有显著改进
+        """
+        mutation_score_delta = self.state.mutation_score - prev_mutation_score
+        coverage_delta = self.state.line_coverage - prev_line_coverage
+
+        has_improvement = mutation_score_delta >= threshold or coverage_delta >= threshold
+
+        if has_improvement:
+            logger.info(
+                f"检测到改进: "
+                f"变异分数 {prev_mutation_score:.1%} -> {self.state.mutation_score:.1%} (Δ{mutation_score_delta:+.1%}), "
+                f"行覆盖率 {prev_line_coverage:.1%} -> {self.state.line_coverage:.1%} (Δ{coverage_delta:+.1%})"
+            )
+
+        return has_improvement
+
+    def _check_excellent_quality(self) -> bool:
+        """
+        检查是否达到优秀质量水平（可提前结束）
+
+        Returns:
+            是否达到优秀水平
+        """
+        is_excellent = (
+            self.state.mutation_score >= self.excellent_mutation_score and
+            self.state.line_coverage >= self.excellent_line_coverage and
+            self.state.branch_coverage >= self.excellent_branch_coverage
+        )
+
+        if is_excellent:
+            logger.info(
+                f"达到优秀质量水平: "
+                f"变异分数={self.state.mutation_score:.1%} (阈值≥{self.excellent_mutation_score:.1%}), "
+                f"行覆盖率={self.state.line_coverage:.1%} (阈值≥{self.excellent_line_coverage:.1%}), "
+                f"分支覆盖率={self.state.branch_coverage:.1%} (阈值≥{self.excellent_branch_coverage:.1%})"
+            )
+
+        return is_excellent
+
+    def _log_final_summary(self) -> None:
+        """记录最终总结"""
+        logger.info(f"{'='*60}")
+        logger.info("协同进化最终总结")
+        logger.info(f"{'='*60}")
+        logger.info(f"总迭代次数: {self.state.iteration}")
+        logger.info(f"LLM 调用次数: {self.state.llm_calls}/{self.budget}")
+        logger.info(f"变异分数: {self.state.mutation_score:.1%}")
+        logger.info(f"行覆盖率: {self.state.line_coverage:.1%}")
+        logger.info(f"分支覆盖率: {self.state.branch_coverage:.1%}")
+        logger.info(f"总变异体数: {self.state.total_mutants}")
+        logger.info(f"已击杀: {self.state.killed_mutants}, 幸存: {self.state.survived_mutants}")
+        logger.info(f"总测试数: {self.state.total_tests}")
+
+        if self.state.recent_improvements:
+            logger.info(f"改进历史 (最近 {len(self.state.recent_improvements)} 次):")
+            for imp in self.state.recent_improvements:
+                logger.info(
+                    f"  迭代 {imp['iteration']}: "
+                    f"变异分数 Δ{imp.get('mutation_score_delta', 0):+.1%}, "
+                    f"覆盖率 Δ{imp.get('coverage_delta', 0):+.1%}"
+                )
+        logger.info(f"{'='*60}")
 
     def _sync_state_from_db(self) -> None:
         """从数据库同步状态信息"""

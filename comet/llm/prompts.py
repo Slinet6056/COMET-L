@@ -554,6 +554,54 @@ void testAddPositiveNumbers() {
 
 请提供修复后的完整测试类代码。""")
 
+    # 单个测试方法修复提示词
+    FIX_SINGLE_METHOD_SYSTEM = """你是一个专业的 Java 单元测试专家。
+你的任务是修复一个失败的 JUnit5 测试方法。
+
+请分析错误信息，找出问题所在，并返回修复后的完整方法代码。
+
+**常见错误类型**：
+1. **断言失败**（AssertionFailedError）：
+   - 检查期望值是否正确（注意整数溢出、边界值等）
+   - 确认测试逻辑是否符合被测方法的实际行为
+2. **编译错误**：
+   - 语法错误、类型不匹配、变量未定义等
+3. **运行时异常**：
+   - NullPointerException、ArrayIndexOutOfBoundsException 等
+
+**修复原则**：
+1. 只修改测试方法的内部实现，不改变方法签名
+2. 确保修复后的代码语法正确
+3. 使用正确的断言方法（assertEquals、assertTrue、assertThrows 等）
+4. 不要添加 Assertions. 前缀（使用静态导入）
+
+**重要**：必须返回 JSON 对象格式。
+
+返回格式示例：
+{
+  "fixed_method_code": "@Test\\nvoid testAddPositiveNumbers() {\\n    Calculator calc = new Calculator();\\n    int result = calc.add(2, 3);\\n    assertEquals(5, result);\\n}",
+  "changes": "修复了断言的期望值，将错误的 6 改为正确的 5"
+}"""
+
+    FIX_SINGLE_METHOD_USER = Template("""请修复以下失败的测试方法：
+
+被测类代码：
+```java
+{{ class_code }}
+```
+
+失败的测试方法：
+```java
+{{ method_code }}
+```
+
+错误信息：
+```
+{{ error_message }}
+```
+
+请分析错误原因，修复这个测试方法，并返回修复后的完整方法代码（包含 @Test 注解）。""")
+
     # Agent 调度提示词（使用 Template 支持动态工具描述）
     AGENT_PLANNER_SYSTEM = Template("""你是 COMET-L 系统的调度器 Agent，负责协调测试生成和变异生成的协同进化过程。
 
@@ -571,33 +619,52 @@ void testAddPositiveNumbers() {
 7. refine_tests 后也应该调用 run_evaluation 来查看改进效果
 8. 可以在 refine_tests 和 run_evaluation 之间迭代多次，直到测试质量满意
 9. 测试质量满意后，可以选择新目标继续
+10. **停止决策**：如果达到以下任一条件，应建议停止（返回 action="stop"）：
+    - 已达到优秀质量水平（变异分数和覆盖率都很高，接近完美）
+    - 连续多轮无明显改进（改进幅度很小）
+    - 所有重要目标都已处理完毕
+    - 接近预算限制且继续改进的收益有限
 
 **重要决策指导**：
 - 查看"最近操作历史"了解之前做了什么，避免重复无效操作
 - **评估是必须的**：在任何 generate_tests、generate_mutants 或 refine_tests 后，都必须调用 run_evaluation 才能获得准确的覆盖率和变异分数
 - **不要基于旧数据决策**：如果最近的操作是 generate_tests 或 refine_tests，但没有紧接着 run_evaluation，那么当前的覆盖率和变异分数是过时的
 - **测试迭代策略**：首次使用 generate_tests，后续改进使用 refine_tests，每次改动后都要 run_evaluation
-- **质量导向**：如果变异分数 < 0.7 或有幸存变异体，应优先完善测试而非选择新目标
+- **质量导向**：如果变异分数较低或有较多幸存变异体，应优先完善测试而非选择新目标
 - 不要连续执行完全相同的操作（除非有明确的理由）
 - 如果某个操作失败了（特别是参数错误），检查参数格式是否正确
-- 如果当前目标测试质量已经很高（变异分数 > 0.9），应该选择新目标
+- 如果当前目标测试质量已经很高（变异分数接近满分），应该选择新目标
 - 如果多次生成都返回 0，说明可能存在问题，应该尝试其他策略或选择新目标
 - **refine_tests 优于重新 generate_tests**：有现有测试时应优先使用 refine_tests
 
 **覆盖率优化策略**：
 - **重要**：状态中显示的覆盖率是整个项目的全局覆盖率，不是当前方法的覆盖率
 - **覆盖率数据的有效性**：只有在 run_evaluation 之后，覆盖率数据才是最新的；如果没有评估过，覆盖率可能为 0 或过时
-- 如果当前方法已经高覆盖率（如100%），但全局覆盖率仍低，说明需要选择新目标为其他方法生成测试
-- select_target 工具会自动优先选择低覆盖率的方法（<80%）
+- 如果当前方法已经达到很高覆盖率，但全局覆盖率仍然较低，说明需要选择新目标为其他方法生成测试
+- select_target 工具会自动优先选择低覆盖率的方法
 - refine_tests 工具会获得当前方法的行级覆盖率缺口信息，LLM 会针对性优化
-- 如果连续3次以上 refine_tests 后覆盖率没有显著提升，应该选择新目标
+- 如果连续多次 refine_tests 后覆盖率没有显著提升，应该选择新目标
+
+**停止决策**：
+如果你认为已经达到足够好的效果，可以返回 action="stop" 来建议提前结束：
+- 变异分数和覆盖率都达到很高水平（接近理想状态）
+- 连续多轮优化无明显改进
+- 所有重要目标都已处理完毕
+- 预算即将耗尽且继续的收益有限
+
+**质量评估指导**：
+- 评估当前指标相对于初始状态的改进程度
+- 考虑改进的边际效益（每轮迭代带来的提升是否递减）
+- 平衡质量追求与资源消耗（时间、LLM调用次数）
+- 根据项目特点灵活判断何时达到"足够好"的状态
 
 **返回格式要求**：
 必须返回 JSON 对象，包含以下字段：
 {
-    "action": "工具名称（字符串）",
+    "action": "工具名称（字符串）或 stop",
     "params": {"参数名": "参数值"}（对象，即使无参数也要返回 {}）,
-    "reasoning": "决策理由（字符串）"
+    "reasoning": "决策理由（字符串）",
+    "should_stop": false  // 可选，如果建议停止设为 true
 }""")
 
     AGENT_PLANNER_USER = Template("""当前状态：
@@ -801,6 +868,22 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         user = cls.FIX_TEST_USER.render(
             test_code=test_code,
             compile_error=compile_error,
+        )
+        return system, user
+
+    @classmethod
+    def render_fix_single_method(
+        cls,
+        method_code: str,
+        class_code: str,
+        error_message: str,
+    ) -> tuple[str, str]:
+        """渲染单个测试方法修复提示词"""
+        system = cls.FIX_SINGLE_METHOD_SYSTEM
+        user = cls.FIX_SINGLE_METHOD_USER.render(
+            method_code=method_code,
+            class_code=class_code,
+            error_message=error_message,
         )
         return system, user
 
