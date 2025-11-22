@@ -884,11 +884,12 @@ class AgentTools:
         from ..utils.project_utils import find_java_file, write_test_file
         from ..utils.code_utils import extract_class_from_file
 
-        # 获取现有测试
-        existing_tests = self.db.get_tests_by_target_class(class_name)
+        # 获取现有测试（按方法查询，确保针对的是当前目标方法）
+        existing_tests = self.db.get_tests_by_target_method(class_name, method_name)
         if not existing_tests:
-            logger.warning(f"没有找到 {class_name} 的现有测试，无法完善")
-            return {"refined": 0, "message": "No existing tests found"}
+            logger.warning(f"没有找到 {class_name}.{method_name} 的现有测试，无法完善")
+            logger.info(f"提示：应该先使用 generate_tests 为 {class_name}.{method_name} 生成测试")
+            return {"refined": 0, "message": f"No existing tests found for {class_name}.{method_name}"}
 
         # 选择最新的测试用例
         test_case = existing_tests[0]

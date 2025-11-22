@@ -549,10 +549,10 @@ class PlannerAgent:
         # 标记是否需要评估
         need_evaluation = False
 
-        # 检查是否需要生成测试
-        existing_tests = self.tools.db.get_tests_by_target_class(class_name) if self.tools.db else []
+        # 检查是否需要生成测试（检查目标方法是否有测试，而不是整个类）
+        existing_tests = self.tools.db.get_tests_by_target_method(class_name, method_name) if self.tools.db else []
         if not existing_tests:
-            logger.info("→ 自动执行: generate_tests（目标没有测试）")
+            logger.info("→ 自动执行: generate_tests（目标方法没有测试）")
             try:
                 test_result = self.tools.call("generate_tests", class_name=class_name, method_name=method_name)
                 if test_result and test_result.get("generated", 0) > 0:
@@ -572,7 +572,7 @@ class PlannerAgent:
                 logger.error(f"  ✗ 自动生成测试失败: {e}")
                 return
         else:
-            logger.info("→ 跳过 generate_tests（已有测试）")
+            logger.info("→ 跳过 generate_tests（目标方法已有测试）")
 
         # 检查是否需要生成变异体
         existing_mutants = self.tools.db.get_mutants_by_method(class_name, method_name, status="valid") if self.tools.db else []

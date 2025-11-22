@@ -390,6 +390,42 @@ class Database:
             logger.debug(f"查询到 {len(results)} 个测试用例: {results[0].id}")
         return results
 
+    def get_tests_by_target_method(self, class_name: str, method_name: str) -> List[TestCase]:
+        """
+        获取针对指定方法的测试用例
+
+        通过检查测试用例中的测试方法的 target_method 字段来判断
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+
+        Returns:
+            测试用例列表，按更新时间倒序排列
+        """
+        cursor = self.conn.cursor()
+        # 先获取所有编译成功的目标类的测试用例
+        cursor.execute("""
+            SELECT * FROM test_cases
+            WHERE target_class = ? AND compile_success = 1
+            ORDER BY updated_at DESC
+        """, (class_name,))
+
+        results = []
+        for row in cursor.fetchall():
+            test_case = self._row_to_test_case(row)
+            # 检查这个测试用例是否包含针对指定方法的测试方法
+            has_target_method = any(
+                tm.target_method == method_name
+                for tm in test_case.methods
+            )
+            if has_target_method:
+                results.append(test_case)
+
+        if results:
+            logger.debug(f"查询到 {len(results)} 个针对 {class_name}.{method_name} 的测试用例")
+        return results
+
     def delete_test_case(self, test_id: str) -> None:
         """删除测试用例及其所有测试方法"""
         cursor = self.conn.cursor()
