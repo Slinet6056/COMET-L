@@ -120,7 +120,7 @@ class PlannerAgent:
                     # 评估成功，再次同步状态以获取最新指标
                     self._sync_state_from_db()
 
-                    # 检查改进
+                    # 检查改进（使用全局指标）
                     has_improvement = self._check_improvement(
                         prev_mutation_score,
                         prev_line_coverage,
@@ -130,20 +130,20 @@ class PlannerAgent:
                     if has_improvement:
                         logger.info(f"检测到改进，重置无改进计数器")
                         no_improvement_count = 0
-                        # 记录改进
+                        # 记录改进（使用全局指标）
                         self.state.add_improvement({
                             "iteration": self.state.iteration,
-                            "mutation_score": self.state.mutation_score,
+                            "mutation_score": self.state.global_mutation_score,
                             "line_coverage": self.state.line_coverage,
-                            "mutation_score_delta": self.state.mutation_score - prev_mutation_score,
+                            "mutation_score_delta": self.state.global_mutation_score - prev_mutation_score,
                             "coverage_delta": self.state.line_coverage - prev_line_coverage,
                         })
                     else:
                         no_improvement_count += 1
                         logger.info(f"评估后无显著改进 (连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)")
 
-                    # 更新上一轮指标（只在评估后更新）
-                    prev_mutation_score = self.state.mutation_score
+                    # 更新上一轮指标（只在评估后更新，使用全局指标）
+                    prev_mutation_score = self.state.global_mutation_score
                     prev_line_coverage = self.state.line_coverage
             else:
                 # 非评估操作，同步状态但不检查改进
@@ -177,25 +177,25 @@ class PlannerAgent:
         threshold: float = 0.01
     ) -> bool:
         """
-        检查是否有显著改进
+        检查是否有显著改进（使用全局指标）
 
         Args:
-            prev_mutation_score: 上一轮的变异分数
-            prev_line_coverage: 上一轮的行覆盖率
+            prev_mutation_score: 上一轮的全局变异分数
+            prev_line_coverage: 上一轮的全局行覆盖率
             threshold: 改进阈值
 
         Returns:
             是否有显著改进
         """
-        mutation_score_delta = self.state.mutation_score - prev_mutation_score
+        mutation_score_delta = self.state.global_mutation_score - prev_mutation_score
         coverage_delta = self.state.line_coverage - prev_line_coverage
 
         has_improvement = mutation_score_delta >= threshold or coverage_delta >= threshold
 
         if has_improvement:
             logger.info(
-                f"检测到改进: "
-                f"变异分数 {prev_mutation_score:.1%} -> {self.state.mutation_score:.1%} (Δ{mutation_score_delta:+.1%}), "
+                f"检测到改进（全局指标）: "
+                f"变异分数 {prev_mutation_score:.1%} -> {self.state.global_mutation_score:.1%} (Δ{mutation_score_delta:+.1%}), "
                 f"行覆盖率 {prev_line_coverage:.1%} -> {self.state.line_coverage:.1%} (Δ{coverage_delta:+.1%})"
             )
 
@@ -204,22 +204,23 @@ class PlannerAgent:
     def _check_excellent_quality(self) -> bool:
         """
         检查是否达到优秀质量水平（可提前结束）
+        使用全局指标评估整个项目的质量
 
         Returns:
             是否达到优秀水平
         """
         is_excellent = (
-            self.state.mutation_score >= self.excellent_mutation_score and
+            self.state.global_mutation_score >= self.excellent_mutation_score and
             self.state.line_coverage >= self.excellent_line_coverage and
             self.state.branch_coverage >= self.excellent_branch_coverage
         )
 
         if is_excellent:
             logger.info(
-                f"达到优秀质量水平: "
-                f"变异分数={self.state.mutation_score:.1%} (阈值≥{self.excellent_mutation_score:.1%}), "
-                f"行覆盖率={self.state.line_coverage:.1%} (阈值≥{self.excellent_line_coverage:.1%}), "
-                f"分支覆盖率={self.state.branch_coverage:.1%} (阈值≥{self.excellent_branch_coverage:.1%})"
+                f"达到优秀质量水平（全局指标）: "
+                f"全局变异分数={self.state.global_mutation_score:.1%} (阈值≥{self.excellent_mutation_score:.1%}), "
+                f"全局行覆盖率={self.state.line_coverage:.1%} (阈值≥{self.excellent_line_coverage:.1%}), "
+                f"全局分支覆盖率={self.state.branch_coverage:.1%} (阈值≥{self.excellent_branch_coverage:.1%})"
             )
 
         return is_excellent
@@ -231,14 +232,19 @@ class PlannerAgent:
         logger.info(f"{'='*60}")
         logger.info(f"总迭代次数: {self.state.iteration}")
         logger.info(f"LLM 调用次数: {self.state.llm_calls}/{self.budget}")
-        logger.info(f"变异分数: {self.state.mutation_score:.1%}")
-        logger.info(f"行覆盖率: {self.state.line_coverage:.1%}")
-        logger.info(f"分支覆盖率: {self.state.branch_coverage:.1%}")
-        logger.info(f"总变异体数: {self.state.total_mutants}")
-        logger.info(f"已击杀: {self.state.killed_mutants}, 幸存: {self.state.survived_mutants}")
-        logger.info(f"总测试数: {self.state.total_tests}")
+        logger.info("")
+        logger.info("全局统计（所有目标的累积）:")
+        logger.info(f"  变异分数: {self.state.global_mutation_score:.1%}")
+        logger.info(f"  总变异体数: {self.state.global_total_mutants}")
+        logger.info(f"  已击杀: {self.state.global_killed_mutants}, 幸存: {self.state.global_survived_mutants}")
+        logger.info("")
+        logger.info("覆盖率:")
+        logger.info(f"  行覆盖率: {self.state.line_coverage:.1%}")
+        logger.info(f"  分支覆盖率: {self.state.branch_coverage:.1%}")
+        logger.info(f"  总测试数: {self.state.total_tests}")
 
         if self.state.recent_improvements:
+            logger.info("")
             logger.info(f"改进历史 (最近 {len(self.state.recent_improvements)} 次):")
             for imp in self.state.recent_improvements:
                 logger.info(
@@ -254,17 +260,48 @@ class PlannerAgent:
             return
 
         try:
-            # 获取变异体统计
-            mutants = self.tools.db.get_valid_mutants()
-            self.state.total_mutants = len(mutants)
-            self.state.survived_mutants = len([m for m in mutants if m.survived])
-            self.state.killed_mutants = self.state.total_mutants - self.state.survived_mutants
+            # ===== 全局统计（包括所有已评估的变异体：valid + outdated）=====
+            all_evaluated_mutants = self.tools.db.get_all_evaluated_mutants()
+            self.state.global_total_mutants = len(all_evaluated_mutants)
+            self.state.global_survived_mutants = len([m for m in all_evaluated_mutants if m.survived])
+            self.state.global_killed_mutants = self.state.global_total_mutants - self.state.global_survived_mutants
 
-            # 计算变异分数
-            if self.state.total_mutants > 0:
-                self.state.mutation_score = self.state.killed_mutants / self.state.total_mutants
+            # 计算全局变异分数
+            if self.state.global_total_mutants > 0:
+                self.state.global_mutation_score = self.state.global_killed_mutants / self.state.global_total_mutants
             else:
-                self.state.mutation_score = 0.0
+                self.state.global_mutation_score = 0.0
+
+            # ===== 当前目标统计（仅当前目标方法的 valid 变异体）=====
+            current_target = self.state.current_target
+            if current_target and current_target.get("class_name") and current_target.get("method_name"):
+                # 获取当前目标方法的 valid 变异体
+                current_mutants = self.tools.db.get_mutants_by_method(
+                    class_name=current_target["class_name"],
+                    method_name=current_target["method_name"],
+                    status="valid"
+                )
+                self.state.total_mutants = len(current_mutants)
+                self.state.survived_mutants = len([m for m in current_mutants if m.survived])
+                self.state.killed_mutants = self.state.total_mutants - self.state.survived_mutants
+
+                # 计算当前目标变异分数
+                if self.state.total_mutants > 0:
+                    self.state.mutation_score = self.state.killed_mutants / self.state.total_mutants
+                else:
+                    self.state.mutation_score = 0.0
+            else:
+                # 没有当前目标时，使用所有 valid 变异体
+                valid_mutants = self.tools.db.get_valid_mutants()
+                self.state.total_mutants = len(valid_mutants)
+                self.state.survived_mutants = len([m for m in valid_mutants if m.survived])
+                self.state.killed_mutants = self.state.total_mutants - self.state.survived_mutants
+
+                # 计算变异分数
+                if self.state.total_mutants > 0:
+                    self.state.mutation_score = self.state.killed_mutants / self.state.total_mutants
+                else:
+                    self.state.mutation_score = 0.0
 
             # 获取覆盖率统计
             try:
@@ -294,11 +331,24 @@ class PlannerAgent:
             except Exception as e:
                 logger.warning(f"同步覆盖率数据失败: {e}")
 
-            logger.debug(
-                f"状态已同步: {self.state.total_mutants} 个变异体 "
-                f"({self.state.killed_mutants} 击杀, {self.state.survived_mutants} 幸存), "
-                f"全局行覆盖率={self.state.line_coverage:.1%}, 全局分支覆盖率={self.state.branch_coverage:.1%}"
-            )
+            # 显示全局统计和当前目标统计
+            if self.state.current_target:
+                logger.debug(
+                    f"状态已同步: 全局 {self.state.global_total_mutants} 个变异体 "
+                    f"(击杀 {self.state.global_killed_mutants}, 幸存 {self.state.global_survived_mutants}, "
+                    f"分数 {self.state.global_mutation_score:.1%}), "
+                    f"当前目标 {self.state.total_mutants} 个变异体 "
+                    f"(击杀 {self.state.killed_mutants}, 幸存 {self.state.survived_mutants}, "
+                    f"分数 {self.state.mutation_score:.1%}), "
+                    f"全局行覆盖率={self.state.line_coverage:.1%}, 全局分支覆盖率={self.state.branch_coverage:.1%}"
+                )
+            else:
+                logger.debug(
+                    f"状态已同步: 全局 {self.state.global_total_mutants} 个变异体 "
+                    f"(击杀 {self.state.global_killed_mutants}, 幸存 {self.state.global_survived_mutants}, "
+                    f"分数 {self.state.global_mutation_score:.1%}), "
+                    f"全局行覆盖率={self.state.line_coverage:.1%}, 全局分支覆盖率={self.state.branch_coverage:.1%}"
+                )
         except Exception as e:
             logger.warning(f"同步状态失败: {e}")
 

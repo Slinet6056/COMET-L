@@ -193,6 +193,19 @@ class Database:
         """获取有效的变异体（已通过静态检查）"""
         return self.get_all_mutants(status="valid")
 
+    def get_all_evaluated_mutants(self) -> List[Mutant]:
+        """
+        获取所有已评估的变异体（包括 valid 和 outdated 状态）
+        用于计算全局变异分数
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM mutants
+            WHERE status IN ('valid', 'outdated')
+            AND evaluated_at IS NOT NULL
+        """)
+        return [self._row_to_mutant(row) for row in cursor.fetchall()]
+
     def get_mutants_by_class(self, class_name: str) -> List[Mutant]:
         """获取指定类的所有变异体"""
         cursor = self.conn.cursor()

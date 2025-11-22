@@ -620,10 +620,11 @@ void testAddPositiveNumbers() {
 8. 可以在 refine_tests 和 run_evaluation 之间迭代多次，直到测试质量满意
 9. 测试质量满意后，可以选择新目标继续
 10. **停止决策**：如果达到以下任一条件，应建议停止（返回 action="stop"）：
-    - 已达到优秀质量水平（变异分数和覆盖率都很高，接近完美）
-    - 连续多轮无明显改进（改进幅度很小）
-    - 所有重要目标都已处理完毕
+    - 已达到优秀质量水平（**全局变异分数和全局覆盖率**都很高，整体测试质量显著提升）
+    - 连续多轮无明显改进（**全局指标**改进幅度很小，边际收益递减）
+    - 所有重要目标都已处理完毕（已为主要方法生成了高质量测试）
     - 接近预算限制且继续改进的收益有限
+    - **注意**：即使当前目标方法达到完美状态（方法覆盖率100%、变异分数1.0），如果全局覆盖率仍然较低，也应该选择新目标继续，而不是停止
 
 **重要决策指导**：
 - 查看"最近操作历史"了解之前做了什么，避免重复无效操作
@@ -638,25 +639,35 @@ void testAddPositiveNumbers() {
 - **refine_tests 优于重新 generate_tests**：有现有测试时应优先使用 refine_tests
 
 **覆盖率优化策略**：
-- **重要**：状态中显示的覆盖率是整个项目的全局覆盖率，不是当前方法的覆盖率
+- **关键区别**：
+  * "全局行覆盖率"/"全局分支覆盖率" = 整个项目所有方法的总体覆盖率
+  * "当前方法行覆盖率" = 仅针对当前选中目标方法的覆盖率
+  * 停止决策必须基于**全局覆盖率**，不能因为单个方法达到100%就停止
 - **覆盖率数据的有效性**：只有在 run_evaluation 之后，覆盖率数据才是最新的；如果没有评估过，覆盖率可能为 0 或过时
-- 如果当前方法已经达到很高覆盖率，但全局覆盖率仍然较低，说明需要选择新目标为其他方法生成测试
+- 如果当前方法覆盖率已经很高（如≥90%）但全局覆盖率仍然较低，说明需要 select_target 选择新目标为其他方法生成测试
 - select_target 工具会自动优先选择低覆盖率的方法
 - refine_tests 工具会获得当前方法的行级覆盖率缺口信息，LLM 会针对性优化
-- 如果连续多次 refine_tests 后覆盖率没有显著提升，应该选择新目标
+- 如果当前方法连续多次 refine_tests 后覆盖率没有显著提升，应该选择新目标
 
-**停止决策**：
-如果你认为已经达到足够好的效果，可以返回 action="stop" 来建议提前结束：
-- 变异分数和覆盖率都达到很高水平（接近理想状态）
-- 连续多轮优化无明显改进
-- 所有重要目标都已处理完毕
+**停止决策指导**：
+评估是否应该停止时，必须综合考虑**全局指标**，而非仅看当前目标方法：
+
+**应该停止的情况**：
+- **全局变异分数和全局覆盖率**都达到很高水平，整体质量显著提升
+- 连续多轮优化后**全局指标**改进幅度很小，边际收益递减明显
+- 已为多个重要目标方法生成了高质量测试，项目整体测试质量良好
 - 预算即将耗尽且继续的收益有限
 
-**质量评估指导**：
-- 评估当前指标相对于初始状态的改进程度
-- 考虑改进的边际效益（每轮迭代带来的提升是否递减）
+**不应该停止的情况**：
+- ✗ 即使当前目标方法达到完美（方法覆盖率100%、变异分数1.0），但**全局覆盖率仍然较低**时，应该 select_target 选择新目标继续
+- ✗ 仅处理了一两个目标方法就停止（除非项目极其简单）
+- ✗ 全局指标还有明显提升空间且预算充足
+
+**质量评估原则**：
+- 关注**全局指标的整体趋势**，而非单一目标方法的局部成就
+- 评估改进的边际效益（每轮迭代对全局指标的提升是否递减）
 - 平衡质量追求与资源消耗（时间、LLM调用次数）
-- 根据项目特点灵活判断何时达到"足够好"的状态
+- 根据项目复杂度灵活判断"足够好"的状态（不设固定阈值）
 
 **返回格式要求**：
 必须返回 JSON 对象，包含以下字段：
@@ -670,27 +681,31 @@ void testAddPositiveNumbers() {
     AGENT_PLANNER_USER = Template("""当前状态：
 
 迭代次数: {{ state.iteration }}
-总变异体数: {{ state.total_mutants }}
-已击杀变异体: {{ state.killed_mutants }}
-幸存变异体: {{ state.survived_mutants }}
-总测试数: {{ state.total_tests }}
-变异分数: {{ state.mutation_score | round(3) }}
-全局行覆盖率: {{ state.line_coverage | round(3) }}（整个项目）
-全局分支覆盖率: {{ state.branch_coverage | round(3) }}（整个项目）
 LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
 
+=== 全局统计（所有目标的累积）===
+全局变异分数: {{ state.global_mutation_score | round(3) }}
+全局总变异体: {{ state.global_total_mutants }} (已击杀: {{ state.global_killed_mutants }}, 幸存: {{ state.global_survived_mutants }})
+全局行覆盖率: {{ state.line_coverage | round(3) }}（整个项目）
+全局分支覆盖率: {{ state.branch_coverage | round(3) }}（整个项目）
+总测试数: {{ state.total_tests }}
+
 {% if state.current_target %}
-当前选中的目标：
+=== 当前选中的目标 ===
 - 类名: {{ state.current_target.class_name }}
 - 方法名: {{ state.current_target.method_name }}
 {% if state.current_target.method_signature %}
 - 方法签名: {{ state.current_target.method_signature }}
 {% endif %}
+- 当前目标变异体: {{ state.total_mutants }} (已击杀: {{ state.killed_mutants }}, 幸存: {{ state.survived_mutants }})
+- 当前目标变异分数: {{ state.mutation_score | round(3) }}
 {% if state.current_method_coverage is not none %}
 - 当前方法行覆盖率: {{ (state.current_method_coverage * 100) | round(1) }}%
 {% endif %}
 {% else %}
-当前选中的目标: 无（尚未选择）
+
+=== 当前选中的目标 ===
+无（尚未选择）
 {% endif %}
 
 {% if state.test_cases %}
