@@ -48,6 +48,7 @@ class AgentState:
         self.recent_improvements: List[Dict[str, Any]] = []
         self.processed_targets: List[str] = []
         self.available_targets: List[Dict[str, Any]] = []
+        self.failed_targets: List[Dict[str, Any]] = []  # 失败的目标（黑名单），包含类名、方法名和失败原因
 
         # 时间戳
         self.start_time: Optional[datetime] = None
@@ -179,6 +180,7 @@ class AgentState:
             "recent_improvements": self.recent_improvements,
             "processed_targets": self.processed_targets,
             "available_targets": self.available_targets,
+            "failed_targets": self.failed_targets,
             "start_time": self.start_time.isoformat() if self.start_time else None,
             "last_update": self.last_update.isoformat() if self.last_update else None,
         }
@@ -212,6 +214,7 @@ class AgentState:
         state.recent_improvements = data.get("recent_improvements", [])
         state.processed_targets = data.get("processed_targets", [])
         state.available_targets = data.get("available_targets", [])
+        state.failed_targets = data.get("failed_targets", [])
 
         if data.get("start_time"):
             state.start_time = datetime.fromisoformat(data["start_time"])

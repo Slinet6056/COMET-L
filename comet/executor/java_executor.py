@@ -296,3 +296,34 @@ class JavaExecutor:
                     "raw_output": result["stdout"],
                 }
         return result
+
+    def run_single_test_method(self, project_path: str, test_class: str, test_method: str) -> Dict[str, Any]:
+        """
+        运行单个测试方法
+
+        Args:
+            project_path: 项目路径
+            test_class: 测试类名（完整类名，如 com.example.CalculatorTest）
+            test_method: 测试方法名
+
+        Returns:
+            测试结果
+        """
+        # Maven 的 test 参数格式: ClassName#methodName
+        test_pattern = f"{test_class}#{test_method}"
+
+        result = self._run_java_command(
+            "com.comet.executor.MavenExecutor",
+            ["singleTest", project_path, test_pattern],
+            timeout=self.test_timeout,
+        )
+
+        if result.get("success"):
+            try:
+                return json.loads(result["stdout"])
+            except json.JSONDecodeError:
+                return {
+                    "success": True,
+                    "raw_output": result["stdout"],
+                }
+        return result
