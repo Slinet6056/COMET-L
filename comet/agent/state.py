@@ -155,6 +155,15 @@ class AgentState:
         logger.warning(f"已将 {target_key} 添加到黑名单，原因: {reason}")
         logger.info(f"当前黑名单大小: {len(self.failed_targets)}")
 
+        # 如果当前目标是被加入黑名单的目标，清除当前目标选中
+        if self.current_target:
+            current_class = self.current_target.get("class_name")
+            current_method = self.current_target.get("method_name", "")
+            current_target_key = f"{current_class}.{current_method}" if current_class else None
+            if current_target_key == target_key:
+                logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
+                self.update_target(None)
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
