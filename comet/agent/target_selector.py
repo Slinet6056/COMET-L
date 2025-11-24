@@ -80,7 +80,7 @@ class TargetSelector:
         if low_cov_methods:
             # 过滤黑名单，选择覆盖率最低的方法
             for selected in low_cov_methods:
-                target_key = f"{selected.class_name}.{selected.method_name}"
+                target_key = f"{selected.class_name}.{selected.method_name}" if selected.method_name else selected.class_name
                 if target_key not in blacklist:
                     # 不在黑名单中，选择这个目标
                     logger.info(
