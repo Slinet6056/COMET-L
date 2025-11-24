@@ -138,7 +138,7 @@ class AgentState:
             method_name: 方法名
             reason: 失败原因
         """
-        target_key = f"{class_name}.{method_name}"
+        target_key = f"{class_name}.{method_name}" if method_name else class_name
 
         # 检查是否已经在黑名单中
         if any(ft.get("target") == target_key for ft in self.failed_targets):
@@ -159,7 +159,7 @@ class AgentState:
         if self.current_target:
             current_class = self.current_target.get("class_name")
             current_method = self.current_target.get("method_name", "")
-            current_target_key = f"{current_class}.{current_method}" if current_class else None
+            current_target_key = f"{current_class}.{current_method}" if current_method and current_class else (current_class if current_class else None)
             if current_target_key == target_key:
                 logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
                 self.update_target(None)

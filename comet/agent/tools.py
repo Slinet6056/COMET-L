@@ -889,7 +889,7 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = f"{class_name}.{method_name}"
+                target_key = f"{class_name}.{method_name}" if method_name else class_name
                 if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
                     self.state.failed_targets.append({
                         "target": target_key,
@@ -904,7 +904,7 @@ class AgentTools:
                     if self.state.current_target:
                         current_class = self.state.current_target.get("class_name")
                         current_method = self.state.current_target.get("method_name", "")
-                        current_target_key = f"{current_class}.{current_method}" if current_class else None
+                        current_target_key = f"{current_class}.{current_method}" if current_method and current_class else (current_class if current_class else None)
                         if current_target_key == target_key:
                             logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
                             self.state.update_target(None)
@@ -1035,7 +1035,7 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = f"{class_name}.{method_name}"
+                target_key = f"{class_name}.{method_name}" if method_name else class_name
                 if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
                     self.state.failed_targets.append({
                         "target": target_key,
@@ -1050,7 +1050,7 @@ class AgentTools:
                     if self.state.current_target:
                         current_class = self.state.current_target.get("class_name")
                         current_method = self.state.current_target.get("method_name", "")
-                        current_target_key = f"{current_class}.{current_method}" if current_class else None
+                        current_target_key = f"{current_class}.{current_method}" if current_method and current_class else (current_class if current_class else None)
                         if current_target_key == target_key:
                             logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
                             self.state.update_target(None)
