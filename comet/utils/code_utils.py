@@ -115,13 +115,39 @@ def build_test_class(
 
     # 导入语句
     default_imports = [
+        # JUnit 5 核心注解
         "import org.junit.jupiter.api.Test;",
         "import org.junit.jupiter.api.BeforeEach;",
         "import org.junit.jupiter.api.AfterEach;",
+        "import org.junit.jupiter.api.BeforeAll;",
+        "import org.junit.jupiter.api.AfterAll;",
+        "import org.junit.jupiter.api.DisplayName;",
+        "import org.junit.jupiter.api.Disabled;",
+        "import org.junit.jupiter.api.Tag;",
+        "import org.junit.jupiter.api.Nested;",
+        "import org.junit.jupiter.api.RepeatedTest;",
+        "import org.junit.jupiter.api.Timeout;",
+        "import org.junit.jupiter.api.extension.ExtendWith;",
+        # JUnit 5 参数化测试
         "import org.junit.jupiter.params.ParameterizedTest;",
         "import org.junit.jupiter.params.provider.CsvSource;",
         "import org.junit.jupiter.params.provider.ValueSource;",
+        "import org.junit.jupiter.params.provider.MethodSource;",
+        "import org.junit.jupiter.params.provider.Arguments;",
+        # JUnit 5 断言（静态导入）
         "import static org.junit.jupiter.api.Assertions.*;",
+        "import static org.junit.jupiter.api.Assumptions.*;",
+        # Mockito 核心（静态导入）
+        "import static org.mockito.Mockito.*;",
+        "import static org.mockito.ArgumentMatchers.*;",
+        # Mockito 类和注解
+        "import org.mockito.ArgumentCaptor;",
+        "import org.mockito.Mock;",
+        "import org.mockito.InjectMocks;",
+        "import org.mockito.Spy;",
+        "import org.mockito.MockitoAnnotations;",
+        "import org.mockito.stubbing.Answer;",
+        "import org.mockito.junit.jupiter.MockitoExtension;",
     ]
 
     all_imports = default_imports + [imp for imp in imports if imp not in default_imports]
@@ -132,16 +158,6 @@ def build_test_class(
     lines.append(f"public class {test_class_name} {{")
     lines.append("")
 
-    # 被测对象
-    lines.append(f"    private {target_class} target;")
-    lines.append("")
-
-    # setUp 方法
-    lines.append("    @BeforeEach")
-    lines.append("    public void setUp() {")
-    lines.append(f"        target = new {target_class}();")
-    lines.append("    }")
-    lines.append("")
 
     # 测试方法
     for method_code in test_methods:

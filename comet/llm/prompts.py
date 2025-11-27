@@ -283,6 +283,7 @@ Bug 描述：
 4. 测试异常处理（使用 assertThrows 等）
 5. 只生成测试方法代码，不要生成完整的类定义
 6. 如果提供了现有测试，应避免重复，补充缺失的测试场景
+7. **当被测类有依赖项时，使用 Mockito 创建 mock 对象**
 
 **生成数量指导**：
 - 简单方法（如 getter/setter）：1-2 个测试
@@ -295,6 +296,43 @@ Bug 描述：
 - ✔ 正确：直接使用 `assertTrue(condition)`
 - ✖ 错误：不要使用 `Assertions.assertTrue(condition)`
 - 原因：测试类会使用静态导入 `import static org.junit.jupiter.api.Assertions.*`
+
+**Mockito 使用规范**：
+- 使用 Mockito 创建 mock 对象来隔离被测单元，避免依赖外部系统
+- ✔ 正确：直接使用 `mock(ClassName.class)` 创建 mock 对象
+- ✔ 正确：直接使用 `when(mock.method()).thenReturn(value)` 设置 mock 行为
+- ✔ 正确：直接使用 `verify(mock).method()` 验证方法调用
+- ✖ 错误：不要使用 `Mockito.mock()` 或 `Mockito.when()` 等带前缀的写法
+- 原因：测试类会使用静态导入 `import static org.mockito.Mockito.*`
+
+**何时使用 Mockito**：
+- 被测类依赖外部服务（数据库、API、文件系统等）
+- 被测类有复杂的依赖注入
+- 需要测试特定的异常场景（通过 mock 抛出异常）
+- 需要验证方法调用次数或参数
+
+**Mockito 示例**：
+```java
+@Test
+void testUserServiceWithMock() {
+    // 创建 mock 对象
+    UserRepository mockRepo = mock(UserRepository.class);
+    UserService service = new UserService(mockRepo);
+
+    // 设置 mock 行为
+    User mockUser = new User("test", "test@example.com");
+    when(mockRepo.findById(1L)).thenReturn(mockUser);
+
+    // 执行测试
+    User result = service.getUserById(1L);
+
+    // 验证结果
+    assertEquals("test", result.getName());
+
+    // 验证调用
+    verify(mockRepo).findById(1L);
+}
+```
 
 **重要**：必须返回 JSON 对象格式，包含 "tests" 键，其值为测试方法数组。
 
@@ -368,6 +406,7 @@ Bug 描述：
 4. 包含边界情况测试（如 Integer.MAX_VALUE, Integer.MIN_VALUE, 0）
 5. 如果方法可能抛出异常，使用 assertThrows 验证
 6. 根据方法复杂度自主决定生成多少个测试（简单方法 1-2 个，复杂方法 5-10 个）
+7. **如果被测类有依赖项，使用 Mockito 创建 mock 对象**（直接使用 mock()、when()、verify() 等，不要加 Mockito. 前缀）
 
 **示例（正确的断言写法）**：
 ```java
@@ -377,6 +416,25 @@ void testAddPositiveNumbers() {
     int result = calc.add(2, 3);
     assertEquals(5, result);  // ✔ 正确：直接使用 assertEquals
     // 错误示例：Assertions.assertEquals(5, result);  ✖ 不要这样写
+}
+```
+
+**示例（使用 Mockito）**：
+```java
+@Test
+void testServiceWithMockedDependency() {
+    // ✔ 正确：直接使用 mock()
+    DataRepository mockRepo = mock(DataRepository.class);
+    DataService service = new DataService(mockRepo);
+
+    // ✔ 正确：直接使用 when()
+    when(mockRepo.getData()).thenReturn("test data");
+
+    String result = service.processData();
+    assertEquals("processed: test data", result);
+
+    // ✔ 正确：直接使用 verify()
+    verify(mockRepo).getData();
 }
 ```
 
@@ -390,12 +448,14 @@ void testAddPositiveNumbers() {
 2. **补充新测试**：添加缺失的测试场景
 3. **删除冗余测试**：移除重复或无效的测试
 4. **重构测试**：提高测试质量和可维护性
+5. **使用 Mockito 增强隔离性**：对有依赖的场景使用 mock 对象
 
 **策略选择**：
 - 如果现有测试覆盖了基本场景但不够细致：改进现有测试
 - 如果存在明显的测试缺口：补充新测试
 - 如果现有测试有明显问题：修正或重写
 - 优先考虑击杀幸存变异体的测试
+- 如果测试依赖外部资源：引入 Mockito 进行隔离
 
 **断言方法使用规范**：
 - ✔ 正确：直接使用 `assertEquals(expected, actual)`
@@ -403,6 +463,13 @@ void testAddPositiveNumbers() {
 - ✔ 正确：直接使用 `assertTrue(condition)`
 - ✖ 错误：不要使用 `Assertions.assertTrue(condition)`
 - 原因：测试类会使用静态导入 `import static org.junit.jupiter.api.Assertions.*`
+
+**Mockito 使用规范**：
+- ✔ 正确：直接使用 `mock(ClassName.class)` 创建 mock 对象
+- ✔ 正确：直接使用 `when(mock.method()).thenReturn(value)` 设置 mock 行为
+- ✔ 正确：直接使用 `verify(mock).method()` 验证方法调用
+- ✖ 错误：不要使用 `Mockito.mock()` 或 `Mockito.when()` 等带前缀的写法
+- 原因：测试类会使用静态导入 `import static org.mockito.Mockito.*`
 
 **重要**：必须返回 JSON 对象格式，包含 "tests" 或 "refined_tests" 键。
 
