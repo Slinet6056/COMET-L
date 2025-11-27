@@ -5,12 +5,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.example</groupId>
-    <artifactId>calculator-demo</artifactId>
+    <artifactId>mockito-demo</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
 
-    <name>Calculator Demo</name>
-    <description>Simple calculator for COMET-L demonstration</description>
+    <name>Mockito Demo</name>
+    <description>Mockito for COMET-L demonstration</description>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

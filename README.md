@@ -11,6 +11,7 @@ COMET-L 是一个创新的测试生成系统，通过测试生成器和变异生
 - 🎯 **语义变异**：基于 LLM 生成有意义的语义变异，而非简单的语法变异
 - 🔄 **Agent 调度**：智能 Agent 自动选择目标、分配预算、调整策略
 - 🏖️ **沙箱隔离**：独立的执行环境确保测试和变异互不干扰
+- 🎭 **Mockito 支持**：自动识别依赖并使用 Mockito 创建隔离的单元测试
 
 ## 系统架构
 
@@ -120,7 +121,7 @@ COMET-L/
 ## 技术栈
 
 - **Python 侧**：Python 3.13, OpenAI API, SQLite, Pydantic
-- **Java 侧**：Java 8+, Maven, JUnit5, JaCoCo, JavaParser
+- **Java 侧**：Java 8+, Maven, JUnit5, JaCoCo, JavaParser, Mockito 5
 
 ## 文档
 
