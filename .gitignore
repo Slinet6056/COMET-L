@@ -47,7 +47,7 @@ workspace/
 cache/
 output/
 sandbox/
-examples/calculator-demo/src/test/
+examples/*/src/test/
 *.db
 *.sqlite
 
