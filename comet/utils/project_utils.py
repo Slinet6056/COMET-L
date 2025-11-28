@@ -40,11 +40,18 @@ def find_java_file(project_path: str, class_name: str) -> Optional[Path]:
 
     Args:
         project_path: 项目路径
-        class_name: 类名（不含包名）
+        class_name: 类名（不含包名），可能包含内部类标记 ($)
 
     Returns:
         文件路径，如果找不到则返回 None
     """
+    # 处理内部类：如果类名包含 $，则提取外部类名
+    # 例如：ShippingService$ShippingInfo -> ShippingService
+    if '$' in class_name:
+        outer_class = class_name.split('$')[0]
+        logger.debug(f"检测到内部类 {class_name}，使用外部类 {outer_class} 查找文件")
+        class_name = outer_class
+
     # 预期文件名
     expected_filename = f"{class_name}.java"
 

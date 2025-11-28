@@ -1371,21 +1371,12 @@ class AgentTools:
 
                     logger.info(f"已保存 {len(method_coverages)} 个方法的覆盖率数据")
 
-                    # 计算聚合覆盖率数据用于 metrics
-                    if method_coverages:
-                        total_lines = sum(c.total_lines for c in method_coverages)
-                        covered_lines_count = sum(len(c.covered_lines) for c in method_coverages)
-                        total_branches = sum(c.total_branches for c in method_coverages)
-                        covered_branches = sum(c.covered_branches for c in method_coverages)
-
-                        coverage_data = {
-                            "line_coverage": covered_lines_count / total_lines if total_lines > 0 else 0.0,
-                            "branch_coverage": covered_branches / total_branches if total_branches > 0 else 0.0,
-                            "total_lines": total_lines,
-                            "covered_lines": [],  # MetricsCollector 只需要百分比，不需要具体行号
-                            "covered_branches": covered_branches,
-                            "total_branches": total_branches,
-                        }
+                    # 直接从 XML 计算全局覆盖率（最准确的方式）
+                    coverage_data = parser.aggregate_global_coverage_from_xml(str(jacoco_path))
+                    logger.info(
+                        f"全局覆盖率（从 XML）: 行覆盖率 {coverage_data['line_coverage']:.1%}, "
+                        f"分支覆盖率 {coverage_data['branch_coverage']:.1%}"
+                    )
                 else:
                     logger.warning(f"JaCoCo 报告不存在: {jacoco_path}")
         except Exception as e:

@@ -22,7 +22,6 @@ class ExecutionConfig(BaseModel):
     test_timeout: int = Field(default=30, ge=1, description="测试执行超时时间（秒）")
     coverage_timeout: int = Field(default=300, ge=1, description="覆盖率收集超时时间（秒）")
     max_retries: int = Field(default=3, ge=0, description="最大重试次数")
-    parallel_jobs: int = Field(default=4, ge=1, description="并行任务数")
     maven_home: Optional[str] = Field(default=None, description="Maven 安装路径")
 
 

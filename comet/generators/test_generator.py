@@ -145,7 +145,10 @@ class TestGenerator:
             imports = extract_imports(class_code)
 
             # 构建完整测试类
-            test_class_name = f"{class_name}Test"
+            # 处理内部类：将 $ 替换为下划线，使测试类名合法
+            # 例如：ShippingService$ShippingInfo -> ShippingService_ShippingInfoTest
+            clean_class_name = class_name.replace('$', '_')
+            test_class_name = f"{clean_class_name}Test"
             method_codes = [m.code for m in test_methods]
 
             full_code = build_test_class(

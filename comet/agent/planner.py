@@ -353,18 +353,24 @@ class PlannerAgent:
                 else:
                     self.state.mutation_score = 0.0
 
-            # 获取覆盖率统计
+            # 获取覆盖率统计（直接从 JaCoCo XML 文件读取，最准确）
             try:
-                all_coverages = self.tools.db.get_all_method_coverage()
-                if all_coverages:
-                    # 计算所有方法的加权平均覆盖率
-                    total_lines = sum(c.total_lines for c in all_coverages)
-                    covered_lines = sum(len(c.covered_lines) for c in all_coverages)
-                    total_branches = sum(c.total_branches for c in all_coverages)
-                    covered_branches = sum(c.covered_branches for c in all_coverages)
+                from pathlib import Path
+                from ..executor.coverage_parser import CoverageParser
+                parser = CoverageParser()
 
-                    self.state.line_coverage = covered_lines / total_lines if total_lines > 0 else 0.0
-                    self.state.branch_coverage = covered_branches / total_branches if total_branches > 0 else 0.0
+                jacoco_path = Path(self.tools.project_path) / "target" / "site" / "jacoco" / "jacoco.xml"
+                if jacoco_path.exists():
+                    # 直接从 XML 文件读取全局覆盖率（最准确的方式）
+                    global_coverage = parser.aggregate_global_coverage_from_xml(str(jacoco_path))
+
+                    self.state.line_coverage = global_coverage['line_coverage']
+                    self.state.branch_coverage = global_coverage['branch_coverage']
+
+                    logger.debug(
+                        f"同步全局覆盖率（从 XML）: 行 {self.state.line_coverage:.1%}, "
+                        f"分支 {self.state.branch_coverage:.1%}"
+                    )
                 else:
                     self.state.line_coverage = 0.0
                     self.state.branch_coverage = 0.0
