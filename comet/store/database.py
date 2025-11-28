@@ -174,24 +174,24 @@ class Database:
         """保存变异体（线程安全）"""
         with self._lock:
             cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO mutants VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            mutant.id,
-            mutant.class_name,
-            mutant.method_name,
-            mutant.patch.model_dump_json(),
-            mutant.semantic_intent,
-            mutant.pattern_id,
-            mutant.status,
-            json.dumps(mutant.killed_by),
-            1 if mutant.survived else 0,
-            mutant.compile_error,
-            None,  # code_hash
-            mutant.created_at.isoformat() if mutant.created_at else None,
-            mutant.evaluated_at.isoformat() if mutant.evaluated_at else None,
-        ))
-        self.conn.commit()
+            cursor.execute("""
+                INSERT OR REPLACE INTO mutants VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                mutant.id,
+                mutant.class_name,
+                mutant.method_name,
+                mutant.patch.model_dump_json(),
+                mutant.semantic_intent,
+                mutant.pattern_id,
+                mutant.status,
+                json.dumps(mutant.killed_by),
+                1 if mutant.survived else 0,
+                mutant.compile_error,
+                None,  # code_hash
+                mutant.created_at.isoformat() if mutant.created_at else None,
+                mutant.evaluated_at.isoformat() if mutant.evaluated_at else None,
+            ))
+            self.conn.commit()
 
     def get_mutant(self, mutant_id: str) -> Optional[Mutant]:
         """获取变异体"""
