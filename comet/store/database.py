@@ -3,6 +3,7 @@
 import sqlite3
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -13,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 class Database:
-    """数据库管理类 - 使用 SQLite 存储测试用例、变异体和执行结果"""
+    """数据库管理类 - 使用 SQLite 存储测试用例、变异体和执行结果
+
+    线程安全：使用 RLock 保护所有数据库操作
+    """
 
     def __init__(self, db_path: str = "comet.db"):
         """
@@ -26,6 +30,7 @@ class Database:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()  # 使用可重入锁保证线程安全
         self._create_tables()
 
     def _create_tables(self) -> None:
@@ -120,6 +125,20 @@ class Database:
             )
         """)
 
+        # 类到文件映射表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS class_file_mapping (
+                class_name TEXT PRIMARY KEY,
+                simple_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                package_name TEXT,
+                is_public INTEGER DEFAULT 0,
+                is_interface INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        """)
+
         # 创建索引
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_mutants_status ON mutants(status)
@@ -142,12 +161,19 @@ class Database:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_coverage_iteration ON method_coverage(iteration)
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_class_mapping_file ON class_file_mapping(file_path)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_class_mapping_simple ON class_file_mapping(simple_name)
+        """)
 
         self.conn.commit()
 
     def save_mutant(self, mutant: Mutant) -> None:
-        """保存变异体"""
-        cursor = self.conn.cursor()
+        """保存变异体（线程安全）"""
+        with self._lock:
+            cursor = self.conn.cursor()
         cursor.execute("""
             INSERT OR REPLACE INTO mutants VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
@@ -725,6 +751,106 @@ class Database:
             line_coverage_rate=row["line_coverage"],
             branch_coverage_rate=row["branch_coverage"],
         )
+
+    def save_class_mapping(self, class_name: str, simple_name: str, file_path: str,
+                           package_name: Optional[str] = None, is_public: bool = False,
+                           is_interface: bool = False) -> None:
+        """
+        保存类到文件的映射
+
+        Args:
+            class_name: 完整类名
+            simple_name: 简单类名
+            file_path: 源文件路径
+            package_name: 包名
+            is_public: 是否为 public 类
+            is_interface: 是否为接口
+        """
+        cursor = self.conn.cursor()
+        now = datetime.now().isoformat()
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO class_file_mapping
+            (class_name, simple_name, file_path, package_name, is_public, is_interface, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?,
+                    COALESCE((SELECT created_at FROM class_file_mapping WHERE class_name = ?), ?),
+                    ?)
+        """, (class_name, simple_name, file_path, package_name,
+              1 if is_public else 0, 1 if is_interface else 0,
+              class_name, now, now))
+
+        self.conn.commit()
+        logger.debug(f"保存类映射: {class_name} -> {file_path}")
+
+    def get_class_file_path(self, class_name: str) -> Optional[str]:
+        """
+        根据类名获取源文件路径
+
+        Args:
+            class_name: 类名（完整类名或简单类名）
+
+        Returns:
+            文件路径，如果找不到则返回 None
+        """
+        cursor = self.conn.cursor()
+
+        # 先尝试完整类名
+        cursor.execute("""
+            SELECT file_path FROM class_file_mapping WHERE class_name = ?
+        """, (class_name,))
+        result = cursor.fetchone()
+
+        if result:
+            return result['file_path']
+
+        # 再尝试简单类名
+        cursor.execute("""
+            SELECT file_path FROM class_file_mapping WHERE simple_name = ?
+        """, (class_name,))
+        result = cursor.fetchone()
+
+        if result:
+            return result['file_path']
+
+        return None
+
+    def get_classes_in_file(self, file_path: str) -> List[Dict[str, Any]]:
+        """
+        获取指定文件中包含的所有类
+
+        Args:
+            file_path: 文件路径
+
+        Returns:
+            类信息列表
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM class_file_mapping WHERE file_path = ?
+        """, (file_path,))
+
+        results = cursor.fetchall()
+        return [dict(row) for row in results]
+
+    def get_all_class_mappings(self) -> List[Dict[str, Any]]:
+        """
+        获取所有类到文件的映射
+
+        Returns:
+            所有类映射信息列表
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM class_file_mapping ORDER BY class_name")
+
+        results = cursor.fetchall()
+        return [dict(row) for row in results]
+
+    def clear_class_mappings(self) -> None:
+        """清空类映射表"""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM class_file_mapping")
+        self.conn.commit()
+        logger.info("已清空类映射表")
 
     def close(self) -> None:
         """关闭数据库连接"""

@@ -18,84 +18,84 @@ public class Calculator {
         return a + b;
     }
 
-    /**
-     * 减法运算
-     *
-     * @param a 被减数
-     * @param b 减数
-     * @return 两数之差
-     */
-    public int subtract(int a, int b) {
-        return a - b;
-    }
+    // /**
+    //  * 减法运算
+    //  *
+    //  * @param a 被减数
+    //  * @param b 减数
+    //  * @return 两数之差
+    //  */
+    // public int subtract(int a, int b) {
+    //     return a - b;
+    // }
 
-    /**
-     * 乘法运算
-     *
-     * @param a 第一个乘数
-     * @param b 第二个乘数
-     * @return 两数之积
-     */
-    public int multiply(int a, int b) {
-        return a * b;
-    }
+    // /**
+    //  * 乘法运算
+    //  *
+    //  * @param a 第一个乘数
+    //  * @param b 第二个乘数
+    //  * @return 两数之积
+    //  */
+    // public int multiply(int a, int b) {
+    //     return a * b;
+    // }
 
-    /**
-     * 除法运算
-     * 注意：缺陷 1 - 没有检查除数为零的情况
-     *
-     * @param a 被除数
-     * @param b 除数
-     * @return 两数之商
-     * @throws ArithmeticException 当除数为零时
-     */
-    public int divide(int a, int b) {
-        // BUG: 应该先检查 b == 0
-        return a / b;
-    }
+    // /**
+    //  * 除法运算
+    //  * 注意：缺陷 1 - 没有检查除数为零的情况
+    //  *
+    //  * @param a 被除数
+    //  * @param b 除数
+    //  * @return 两数之商
+    //  * @throws ArithmeticException 当除数为零时
+    //  */
+    // public int divide(int a, int b) {
+    //     // BUG: 应该先检查 b == 0
+    //     return a / b;
+    // }
 
-    /**
-     * 计算阶乘
-     * 注意：缺陷 2 - 没有处理负数和溢出
-     *
-     * @param n 非负整数
-     * @return n 的阶乘
-     */
-    public long factorial(int n) {
-        // BUG: 没有检查负数
-        if (n == 0 || n == 1) {
-            return 1;
-        }
-        // BUG: 没有处理溢出
-        return n * factorial(n - 1);
-    }
+    // /**
+    //  * 计算阶乘
+    //  * 注意：缺陷 2 - 没有处理负数和溢出
+    //  *
+    //  * @param n 非负整数
+    //  * @return n 的阶乘
+    //  */
+    // public long factorial(int n) {
+    //     // BUG: 没有检查负数
+    //     if (n == 0 || n == 1) {
+    //         return 1;
+    //     }
+    //     // BUG: 没有处理溢出
+    //     return n * factorial(n - 1);
+    // }
 
-    /**
-     * 计算平方根（整数部分）
-     * 注意：缺陷 3 - 没有处理负数
-     *
-     * @param n 非负整数
-     * @return n 的平方根的整数部分
-     */
-    public int sqrt(int n) {
-        // BUG: 没有检查负数
-        return (int) Math.sqrt(n);
-    }
+    // /**
+    //  * 计算平方根（整数部分）
+    //  * 注意：缺陷 3 - 没有处理负数
+    //  *
+    //  * @param n 非负整数
+    //  * @return n 的平方根的整数部分
+    //  */
+    // public int sqrt(int n) {
+    //     // BUG: 没有检查负数
+    //     return (int) Math.sqrt(n);
+    // }
 
-    /**
-     * 计算两个数的最大公约数
-     *
-     * @param a 第一个数
-     * @param b 第二个数
-     * @return 最大公约数
-     */
-    public int gcd(int a, int b) {
-        // 欧几里得算法
-        if (b == 0) {
-            return a;
-        }
-        return gcd(b, a % b);
-    }
+    // /**
+    //  * 计算两个数的最大公约数
+    //  *
+    //  * @param a 第一个数
+    //  * @param b 第二个数
+    //  * @return 最大公约数
+    //  */
+    // public int gcd(int a, int b) {
+    //     // 欧几里得算法
+    //     if (b == 0) {
+    //         return a;
+    //     }
+    //     return gcd(b, a % b);
+    // }
 
     /**
      * 检查是否为质数

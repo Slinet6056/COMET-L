@@ -18,6 +18,8 @@ from .project_utils import (
     write_test_file,
     is_maven_project,
 )
+from .class_mapper import ClassMapper, ClassInfo
+from .project_scanner import ProjectScanner
 
 __all__ = [
     "SandboxManager",
@@ -35,4 +37,7 @@ __all__ = [
     "get_all_java_classes",
     "write_test_file",
     "is_maven_project",
+    "ClassMapper",
+    "ClassInfo",
+    "ProjectScanner",
 ]

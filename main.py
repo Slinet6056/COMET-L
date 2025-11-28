@@ -14,7 +14,7 @@ from comet.extractors import SpecExtractor, PatternExtractor
 from comet.generators import MutantGenerator, TestGenerator, StaticGuard
 from comet.executor import JavaExecutor, MutationEvaluator, MetricsCollector
 from comet.agent import PlannerAgent, AgentTools, AgentState
-from comet.utils import SandboxManager
+from comet.utils import SandboxManager, ProjectScanner
 
 # 配置日志
 logging.basicConfig(
@@ -25,6 +25,11 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('openai').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -179,6 +184,9 @@ def initialize_system(config: Settings):
     # 共享状态
     tools.state = planner.state
 
+    # 初始化项目扫描器
+    project_scanner = ProjectScanner(java_executor, db)
+
     logger.info("系统初始化完成")
 
     return {
@@ -196,6 +204,7 @@ def initialize_system(config: Settings):
         "mutation_evaluator": mutation_evaluator,
         "metrics_collector": metrics_collector,
         "planner": planner,
+        "project_scanner": project_scanner,
     }
 
 
@@ -216,6 +225,15 @@ def run_evolution(project_path: str, components: dict, resume_state: str = None)
     planner = components["planner"]
     config = components["config"]
     sandbox_manager = components["sandbox_manager"]
+    project_scanner = components["project_scanner"]
+
+    # 扫描项目，建立类到文件的映射
+    logger.info("扫描项目，建立类到文件的映射...")
+    scan_result = project_scanner.scan_project(project_path, use_cache=True)
+    logger.info(
+        f"项目扫描完成: {scan_result['total_classes']} 个类, "
+        f"{scan_result['total_files']} 个文件"
+    )
 
     # 创建工作空间沙箱
     logger.info("创建工作空间沙箱...")

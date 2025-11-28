@@ -10,7 +10,6 @@ execution:
   test_timeout: 30  # 测试执行超时时间（秒），默认30秒快速失败
   coverage_timeout: 300  # 覆盖率收集超时时间（秒），JaCoCo需要更多时间
   max_retries: 3
-  parallel_jobs: 4
   maven_home: null  # 留空使用系统默认
 
 paths:
