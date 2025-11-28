@@ -284,6 +284,7 @@ Bug 描述：
 5. 只生成测试方法代码，不要生成完整的类定义
 6. 如果提供了现有测试，应避免重复，补充缺失的测试场景
 7. **当被测类有依赖项时，使用 Mockito 创建 mock 对象**
+8. **每个测试方法必须在方法内部创建被测对象的实例**（不要依赖共享的类字段或 @BeforeEach 初始化）
 
 **生成数量指导**：
 - 简单方法（如 getter/setter）：1-2 个测试
@@ -407,6 +408,7 @@ void testUserServiceWithMock() {
 5. 如果方法可能抛出异常，使用 assertThrows 验证
 6. 根据方法复杂度自主决定生成多少个测试（简单方法 1-2 个，复杂方法 5-10 个）
 7. **如果被测类有依赖项，使用 Mockito 创建 mock 对象**（直接使用 mock()、when()、verify() 等，不要加 Mockito. 前缀）
+8. **每个测试方法必须在方法内部创建被测对象的实例**，不要使用类字段或假设存在 @BeforeEach 初始化
 
 **示例（正确的断言写法）**：
 ```java
@@ -470,6 +472,12 @@ void testServiceWithMockedDependency() {
 - ✔ 正确：直接使用 `verify(mock).method()` 验证方法调用
 - ✖ 错误：不要使用 `Mockito.mock()` 或 `Mockito.when()` 等带前缀的写法
 - 原因：测试类会使用静态导入 `import static org.mockito.Mockito.*`
+
+**对象实例化规范**：
+- **每个测试方法必须在方法内部创建被测对象的实例**
+- ✖ 错误：不要使用类字段（如 `private Calculator target;`）
+- ✖ 错误：不要依赖 `@BeforeEach` 初始化
+- ✔ 正确：在每个测试方法内部使用 `ClassName obj = new ClassName();` 创建实例
 
 **重要**：必须返回 JSON 对象格式，包含 "tests" 或 "refined_tests" 键。
 
@@ -552,6 +560,7 @@ void testServiceWithMockedDependency() {
 3. 补充缺失的测试场景（边界值、异常情况等）
 4. 改进现有测试的断言和验证逻辑
 5. 返回完整的测试方法列表（包括保留的、修改的和新增的）
+6. **每个测试方法必须在方法内部创建被测对象实例**，不要使用类字段或依赖 @BeforeEach 初始化
 
 请完善这些测试。""")
 
