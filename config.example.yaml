@@ -4,6 +4,7 @@ llm:
   model: "gpt-4"
   temperature: 0.7
   max_tokens: 4096
+  supports_json_mode: true # 如果使用本地模型不支持 JSON 模式，请设置为 false
 
 execution:
   timeout: 300  # 秒

@@ -20,6 +20,7 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         max_retries: int = 3,
+        supports_json_mode: bool = True,
     ):
         """
         初始化 LLM 客户端
@@ -31,6 +32,7 @@ class LLMClient:
             temperature: 温度参数
             max_tokens: 最大 token 数
             max_retries: 最大重试次数
+            supports_json_mode: 是否支持 JSON 模式
         """
         self.client = OpenAI(
             api_key=api_key,
@@ -40,6 +42,7 @@ class LLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries
+        self.supports_json_mode = supports_json_mode
 
         # 统计信息
         self.total_calls = 0
@@ -77,7 +80,7 @@ class LLMClient:
                     "max_tokens": max_tok,
                 }
 
-                if response_format:
+                if response_format and self.supports_json_mode:
                     kwargs["response_format"] = response_format
 
                 response: ChatCompletion = self.client.chat.completions.create(**kwargs)
