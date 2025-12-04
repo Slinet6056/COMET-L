@@ -53,7 +53,8 @@ def init_system(project_path: str, config_path: str = "config.yaml"):
         model=config.llm.model,
         base_url=config.llm.base_url,
         temperature=config.llm.temperature,
-        max_tokens=config.llm.max_tokens
+        max_tokens=config.llm.max_tokens,
+        supports_json_mode=config.llm.supports_json_mode
     )
     logger.info(f"LLM 客户端初始化: {config.llm.model}")
 

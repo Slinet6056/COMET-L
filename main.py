@@ -113,6 +113,7 @@ def initialize_system(config: Settings):
         temperature=config.llm.temperature,
         max_tokens=config.llm.max_tokens,
         max_retries=config.execution.max_retries,
+        supports_json_mode=config.llm.supports_json_mode,
     )
     logger.info(f"LLM 客户端初始化: {config.llm.model}")
 
