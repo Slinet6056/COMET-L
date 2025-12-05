@@ -431,6 +431,7 @@ class AgentTools:
             fixed_test_case = self.test_generator.regenerate_with_feedback(
                 test_case=test_case,
                 compile_error=compile_error,
+                class_code=class_code,
                 max_retries=1,  # 每次只重新生成一次
             )
 

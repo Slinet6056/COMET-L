@@ -338,6 +338,7 @@ class TestGenerator:
         self,
         test_case: TestCase,
         compile_error: str,
+        class_code: str = "",
         max_retries: int = 3,
     ) -> Optional[TestCase]:
         """
@@ -346,6 +347,7 @@ class TestGenerator:
         Args:
             test_case: 原测试用例
             compile_error: 编译错误信息
+            class_code: 被测类源代码
             max_retries: 最大重试次数
 
         Returns:
@@ -361,6 +363,7 @@ class TestGenerator:
                 system_prompt, user_prompt = self.prompt_manager.render_fix_test(
                     test_code=test_case.full_code or "",
                     compile_error=compile_error,
+                    class_code=class_code,
                 )
 
                 # 调用 LLM 修复

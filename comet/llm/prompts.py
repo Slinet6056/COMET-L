@@ -673,6 +673,11 @@ void testServiceWithMockedDependency() {
 
     FIX_TEST_USER = Template("""请修复以下测试代码的错误：
 
+被测类代码：
+```java
+{{ class_code }}
+```
+
 原始测试代码：
 ```java
 {{ test_code }}
@@ -685,16 +690,18 @@ void testServiceWithMockedDependency() {
 
 **修复要求**：
 1. 仔细查看错误信息，定位到具体的测试方法和行号
-2. 如果是**测试断言失败**（AssertionFailedError: expected X but was Y）：
+2. 参考被测类代码，理解被测方法的实际行为
+3. 如果是**测试断言失败**（AssertionFailedError: expected X but was Y）：
    - 分析期望值是否合理（注意整数溢出等边界情况）
-   - 修正不合理的期望值，或删除该断言
-3. 如果是**编译错误**：
+   - 根据被测类的实际行为修正期望值，或删除该断言
+4. 如果是**编译错误**：
    - 修正语法、类型、变量定义等问题
-4. **只修改出错的测试方法内部代码**，不要修改方法名
-5. **保持 import 语句、类声明、其他方法完全不变**
-6. 如果是静态导入问题，修改方法内调用方式，不要改 import
-7. 返回完整的测试类代码（包括未修改的部分）
-8. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
+   - 检查被测类的方法签名、返回类型等，确保测试代码与被测类匹配
+5. **只修改出错的测试方法内部代码**，不要修改方法名
+6. **保持 import 语句、类声明、其他方法完全不变**
+7. 如果是静态导入问题，修改方法内调用方式，不要改 import
+8. 返回完整的测试类代码（包括未修改的部分）
+9. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
 
 请提供修复后的完整测试类代码。""")
 
@@ -1030,12 +1037,14 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         cls,
         test_code: str,
         compile_error: str,
+        class_code: str = "",
     ) -> tuple[str, str]:
         """渲染测试修复提示词"""
         system = cls.FIX_TEST_SYSTEM
         user = cls.FIX_TEST_USER.render(
             test_code=test_code,
             compile_error=compile_error,
+            class_code=class_code,
         )
         return system, user
 
