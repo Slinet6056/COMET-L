@@ -296,6 +296,81 @@ class AgentTools:
 
         logger.info(f"从数据库重建测试文件: 总共 {len(all_valid_methods)} 个方法 ({len(test_case.methods)} 来自当前TestCase, {len(all_valid_methods) - len(test_case.methods)} 来自其他TestCase)")
 
+    def _restore_test_file_from_db(self, original_test_case):
+        """
+        从数据库恢复测试文件（用于验证失败后回滚）
+
+        Args:
+            original_test_case: 原始的 TestCase（数据库中的版本）
+        """
+        from ..utils.project_utils import write_test_file
+        from ..utils.code_utils import build_test_class
+
+        # 从数据库获取所有针对同一个目标类的TestCase
+        all_test_cases = self.db.get_tests_by_target_class(original_test_case.target_class)
+
+        # 收集所有测试方法（使用数据库中的原始数据）
+        all_methods = []
+        for tc in all_test_cases:
+            all_methods.extend(tc.methods)
+
+        if not all_methods:
+            logger.warning("数据库中没有有效的测试方法，无法恢复")
+            return
+
+        # 构建完整的测试类代码
+        method_codes = [m.code for m in all_methods]
+        full_code = build_test_class(
+            test_class_name=original_test_case.class_name,
+            target_class=original_test_case.target_class,
+            package_name=original_test_case.package_name,
+            imports=original_test_case.imports,
+            test_methods=method_codes,
+        )
+
+        # 写入文件
+        write_test_file(
+            project_path=self.project_path,
+            package_name=original_test_case.package_name,
+            test_code=full_code,
+            test_class_name=original_test_case.class_name,
+            merge=False,
+        )
+
+        logger.info(f"已从数据库恢复测试文件: {original_test_case.class_name} (共 {len(all_methods)} 个方法)")
+
+    def _delete_test_file(self, test_case):
+        """
+        删除磁盘上的测试文件
+
+        Args:
+            test_case: TestCase 对象
+        """
+        # 构建测试文件路径
+        if test_case.package_name:
+            package_path = test_case.package_name.replace(".", os.sep)
+            test_file_path = os.path.join(
+                self.project_path,
+                "src", "test", "java",
+                package_path,
+                f"{test_case.class_name}.java"
+            )
+        else:
+            test_file_path = os.path.join(
+                self.project_path,
+                "src", "test", "java",
+                f"{test_case.class_name}.java"
+            )
+
+        if os.path.exists(test_file_path):
+            try:
+                os.remove(test_file_path)
+                logger.info(f"已删除测试文件: {test_file_path}")
+            except OSError as e:
+                logger.warning(f"删除测试文件失败: {test_file_path}, 错误: {e}")
+        else:
+            logger.debug(f"测试文件不存在，无需删除: {test_file_path}")
+
     def _verify_and_fix_tests(
         self,
         test_case,
@@ -887,6 +962,11 @@ class AgentTools:
             logger.error(f"✗ 测试用例编译失败（已重试3次），不保存到数据库")
             logger.error(f"编译错误: {test_case.compile_error}")
 
+            # 如果已有其他测试用例，从数据库恢复测试文件
+            if existing_tests:
+                logger.info("从数据库恢复原有测试文件...")
+                self._restore_test_file_from_db(existing_tests[0])
+
             # 将这个目标添加到失败黑名单
             if self.state:
                 target_key = f"{class_name}.{method_name}" if method_name else class_name
@@ -1033,6 +1113,10 @@ class AgentTools:
             logger.error(f"✗ 测试用例编译失败（已重试3次），不保存到数据库")
             logger.error(f"编译错误: {refined_test_case.compile_error}")
 
+            # 恢复原始测试文件（从数据库中的原始数据）
+            logger.info("从数据库恢复原始测试文件...")
+            self._restore_test_file_from_db(test_case)
+
             # 将这个目标添加到失败黑名单
             if self.state:
                 target_key = f"{class_name}.{method_name}" if method_name else class_name
@@ -1137,6 +1221,8 @@ class AgentTools:
                 class_tests = self.db.get_tests_by_target_class(target_class)
                 deleted_count = 0
                 for test_case in class_tests:
+                    # 同时删除磁盘上的测试文件
+                    self._delete_test_file(test_case)
                     self.db.delete_test_case(test_case.id)
                     deleted_count += 1
 
@@ -1202,6 +1288,7 @@ class AgentTools:
                     if not test_case.methods:
                         logger.warning(f"测试用例 {test_case.class_name} 的所有方法都超时，删除整个测试用例")
                         test_cases.remove(test_case)
+                        self._delete_test_file(test_case)
                         self.db.delete_test_case(test_case.id)
                     else:
                         # 更新测试用例的代码
@@ -1268,6 +1355,7 @@ class AgentTools:
                     class_tests = self.db.get_tests_by_target_class(target_class)
                     deleted_count = 0
                     for test_case in class_tests:
+                        self._delete_test_file(test_case)
                         self.db.delete_test_case(test_case.id)
                         deleted_count += 1
 
@@ -1330,6 +1418,7 @@ class AgentTools:
                     if not test_case.methods:
                         logger.warning(f"测试用例 {test_case.class_name} 的所有方法都失败，删除整个测试用例")
                         test_cases.remove(test_case)
+                        self._delete_test_file(test_case)
                         self.db.delete_test_case(test_case.id)
                     else:
                         # 更新数据库中的测试用例
@@ -1377,10 +1466,16 @@ class AgentTools:
                         f"全局覆盖率（从 XML）: 行覆盖率 {coverage_data['line_coverage']:.1%}, "
                         f"分支覆盖率 {coverage_data['branch_coverage']:.1%}"
                     )
+
+                    # 更新 state 中的全局覆盖率
+                    if self.state:
+                        self.state.line_coverage = coverage_data['line_coverage']
+                        self.state.branch_coverage = coverage_data['branch_coverage']
+                        logger.debug(f"已更新 state 中的全局覆盖率: 行 {self.state.line_coverage:.1%}, 分支 {self.state.branch_coverage:.1%}")
                 else:
                     logger.warning(f"JaCoCo 报告不存在: {jacoco_path}")
         except Exception as e:
-            logger.warning(f"覆盖率分析失败: {e}")
+            logger.warning(f"覆盖率分析失败: {e}", exc_info=True)
 
         # ===== 步骤3: 构建击杀矩阵 =====
         logger.info("步骤3: 构建击杀矩阵...")

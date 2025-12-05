@@ -11,8 +11,41 @@ from ..models import TestCase, TestMethod, Contract, Mutant
 from ..knowledge.knowledge_base import KnowledgeBase
 from ..utils.hash_utils import generate_id
 from ..utils.code_utils import build_test_class, extract_imports, parse_java_class
+from ..utils.json_utils import extract_json_from_response
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_code(code: str) -> str:
+    """
+    规范化代码字符串，将字面的转义字符转换为实际的字符
+
+    Args:
+        code: 可能包含字面转义字符的代码字符串
+
+    Returns:
+        规范化后的代码字符串
+    """
+    if not code:
+        return code
+
+    # 如果代码中包含字面的 \n（反斜杠+n），但没有实际的换行符，进行转换
+    # 这种情况发生在 JSON 中存储了字面的 "\\n" 字符串
+    if "\\n" in code:
+        # 检查是否包含实际的换行符（排除字面的 \n）
+        has_actual_newline = "\n" in code.replace("\\n", "")
+        if not has_actual_newline:
+            # 使用 Python 的字符串转义处理
+            try:
+                code = code.encode().decode('unicode_escape')
+            except (UnicodeDecodeError, UnicodeEncodeError):
+                # 如果 unicode_escape 失败，直接替换
+                code = code.replace("\\n", "\n")
+        else:
+            # 如果既有字面的 \n 又有实际的换行符，只替换字面的 \n
+            code = code.replace("\\n", "\n")
+
+    return code
 
 
 class TestGenerator:
@@ -85,7 +118,9 @@ class TestGenerator:
 
             # 解析响应
             try:
-                data = json.loads(response)
+                # 先清理响应，去除可能的代码块标记
+                cleaned_response = extract_json_from_response(response)
+                data = json.loads(cleaned_response)
                 logger.debug(f"解析后的数据结构: {list(data.keys())}")
             except json.JSONDecodeError as e:
                 logger.error(f"JSON 解析失败: {e}")
@@ -120,9 +155,19 @@ class TestGenerator:
                     logger.debug(f"测试数据: {test_data}")
                     continue
 
+                # 处理转义字符：将字面的 \n 转换为实际的换行符
+                code = test_data.get("code", "")
+                # 如果代码中包含字面的 \n（而不是实际的换行符），进行转换
+                if "\\n" in code and "\n" not in code.replace("\\n", ""):
+                    # 使用 Python 的字符串转义处理
+                    code = code.encode().decode('unicode_escape')
+                elif "\\n" in code:
+                    # 如果既有字面的 \n 又有实际的换行符，只替换字面的 \n
+                    code = code.replace("\\n", "\n")
+
                 test_method = TestMethod(
                     method_name=test_data.get("method_name", f"test_{method_name}"),
-                    code=test_data.get("code", ""),
+                    code=code,
                     target_method=method_name,
                     description=test_data.get("description"),
                     version=1,  # 新生成的方法，版本号为1
@@ -227,7 +272,8 @@ class TestGenerator:
             )
 
             # 解析响应
-            data = json.loads(response)
+            cleaned_response = extract_json_from_response(response)
+            data = json.loads(cleaned_response)
 
             # 支持两种返回格式
             if "tests" in data:
@@ -247,9 +293,12 @@ class TestGenerator:
                 if not test_data.get("code"):
                     continue
 
+                # 处理转义字符：将字面的 \n 转换为实际的换行符
+                code = _normalize_code(test_data.get("code", ""))
+
                 test_method = TestMethod(
                     method_name=test_data.get("method_name", "test_method"),
-                    code=test_data.get("code", ""),
+                    code=code,
                     target_method=test_data.get("target_method", ""),
                     description=test_data.get("description"),
                     version=1,  # 版本号将在保存时根据是否已存在自动更新
@@ -323,13 +372,17 @@ class TestGenerator:
                 )
 
                 # 解析响应
-                data = json.loads(response)
+                cleaned_response = extract_json_from_response(response)
+                data = json.loads(cleaned_response)
                 fixed_code = data.get("fixed_code")
                 changes = data.get("changes", "未说明")
 
                 if not fixed_code:
                     logger.warning(f"修复尝试 {attempt + 1} 失败: 未返回修复代码")
                     continue
+
+                # 处理转义字符：将字面的 \n 转换为实际的换行符
+                fixed_code = _normalize_code(fixed_code)
 
                 logger.info(f"修复说明: {changes}")
 
@@ -389,13 +442,17 @@ class TestGenerator:
                 )
 
                 # 解析响应
-                data = json.loads(response)
+                cleaned_response = extract_json_from_response(response)
+                data = json.loads(cleaned_response)
                 fixed_code = data.get("fixed_method_code")
                 changes = data.get("changes", "未说明")
 
                 if not fixed_code:
                     logger.warning(f"修复尝试 {attempt + 1} 失败: 未返回修复代码")
                     continue
+
+                # 处理转义字符：将字面的 \n 转换为实际的换行符
+                fixed_code = _normalize_code(fixed_code)
 
                 logger.info(f"修复说明: {changes}")
                 return fixed_code

@@ -21,6 +21,7 @@ class LLMClient:
         max_tokens: int = 4096,
         max_retries: int = 3,
         supports_json_mode: bool = True,
+        timeout: float = 600.0,
     ):
         """
         初始化 LLM 客户端
@@ -33,16 +34,19 @@ class LLMClient:
             max_tokens: 最大 token 数
             max_retries: 最大重试次数
             supports_json_mode: 是否支持 JSON 模式
+            timeout: 请求超时时间（秒），默认 600 秒
         """
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
+            timeout=timeout,
         )
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.supports_json_mode = supports_json_mode
+        self.timeout = timeout
 
         # 统计信息
         self.total_calls = 0
@@ -83,6 +87,7 @@ class LLMClient:
                 if response_format and self.supports_json_mode:
                     kwargs["response_format"] = response_format
 
+                logger.debug(f"LLM 调用参数: model={self.model}, max_tokens={max_tok}, temperature={temp}")
                 response: ChatCompletion = self.client.chat.completions.create(**kwargs)
 
                 # 更新统计
@@ -91,8 +96,24 @@ class LLMClient:
                     self.total_tokens += response.usage.total_tokens
 
                 content = response.choices[0].message.content
-                if content is None:
-                    raise ValueError("模型返回空内容")
+                finish_reason = response.choices[0].finish_reason
+
+                # 记录详细的响应信息
+                if response.usage:
+                    logger.debug(
+                        f"LLM 响应: finish_reason={finish_reason}, "
+                        f"prompt_tokens={response.usage.prompt_tokens}, "
+                        f"completion_tokens={response.usage.completion_tokens}, "
+                        f"total_tokens={response.usage.total_tokens}, "
+                        f"content_length={len(content) if content else 0}"
+                    )
+
+                if content is None or content == "":
+                    error_msg = f"模型返回空内容 (finish_reason: {finish_reason}"
+                    if response.usage:
+                        error_msg += f", completion_tokens: {response.usage.completion_tokens}"
+                    error_msg += ")"
+                    raise ValueError(error_msg)
 
                 logger.debug(f"LLM 调用成功，使用 {response.usage.total_tokens if response.usage else '?'} tokens")
                 return content

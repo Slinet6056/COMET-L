@@ -199,12 +199,6 @@ class CoverageParser:
 
                         method_coverages.append(method_coverage)
 
-                        logger.debug(
-                            f"  {class_name}.{method_name}: "
-                            f"行 {start_line}-{end_line}, "
-                            f"覆盖 {len(covered_lines)}/{total_lines}"
-                        )
-
             logger.info(f"成功解析 {len(method_coverages)} 个方法的覆盖率信息（含精确行号）")
             return method_coverages
 
