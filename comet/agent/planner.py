@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any
 
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
+from ..utils.json_utils import extract_json_from_response
 from .state import AgentState
 from .tools import AgentTools
 
@@ -355,37 +356,45 @@ class PlannerAgent:
 
             # 获取覆盖率统计（直接从 JaCoCo XML 文件读取，最准确）
             try:
-                from pathlib import Path
-                from ..executor.coverage_parser import CoverageParser
-                parser = CoverageParser()
-
-                jacoco_path = Path(self.tools.project_path) / "target" / "site" / "jacoco" / "jacoco.xml"
-                if jacoco_path.exists():
-                    # 直接从 XML 文件读取全局覆盖率（最准确的方式）
-                    global_coverage = parser.aggregate_global_coverage_from_xml(str(jacoco_path))
-
-                    self.state.line_coverage = global_coverage['line_coverage']
-                    self.state.branch_coverage = global_coverage['branch_coverage']
-
-                    logger.debug(
-                        f"同步全局覆盖率（从 XML）: 行 {self.state.line_coverage:.1%}, "
-                        f"分支 {self.state.branch_coverage:.1%}"
-                    )
+                if not self.tools.project_path:
+                    logger.debug("project_path 未设置，跳过覆盖率同步")
                 else:
-                    self.state.line_coverage = 0.0
-                    self.state.branch_coverage = 0.0
+                    from pathlib import Path
+                    from ..executor.coverage_parser import CoverageParser
+                    parser = CoverageParser()
 
-                # 同步当前目标方法的覆盖率
-                if self.state.current_target and self.state.current_target.get("class_name") and self.state.current_target.get("method_name"):
-                    current_coverage = self.tools.db.get_method_coverage(
-                        self.state.current_target["class_name"],
-                        self.state.current_target["method_name"]
-                    )
-                    if current_coverage:
-                        self.state.current_method_coverage = current_coverage.line_coverage_rate
-                        logger.debug(f"已更新当前方法覆盖率: {self.state.current_method_coverage:.1%}")
+                    jacoco_path = Path(self.tools.project_path) / "target" / "site" / "jacoco" / "jacoco.xml"
+                    if jacoco_path.exists():
+                        # 直接从 XML 文件读取全局覆盖率（最准确的方式）
+                        global_coverage = parser.aggregate_global_coverage_from_xml(str(jacoco_path))
+
+                        if global_coverage and 'line_coverage' in global_coverage and 'branch_coverage' in global_coverage:
+                            self.state.line_coverage = global_coverage['line_coverage']
+                            self.state.branch_coverage = global_coverage['branch_coverage']
+
+                            logger.debug(
+                                f"同步全局覆盖率（从 XML）: 行 {self.state.line_coverage:.1%}, "
+                                f"分支 {self.state.branch_coverage:.1%}"
+                            )
+                        else:
+                            logger.warning(f"从 XML 解析的覆盖率数据格式不正确: {global_coverage}")
+                            # 如果解析失败，保持当前值不变（不重置为0）
+                    else:
+                        logger.debug(f"JaCoCo XML 报告不存在: {jacoco_path}，保持当前覆盖率值")
+                        # 如果文件不存在，保持当前值不变（不重置为0），因为可能是还没有运行过评估
+
+                    # 同步当前目标方法的覆盖率
+                    if self.state.current_target and self.state.current_target.get("class_name") and self.state.current_target.get("method_name"):
+                        current_coverage = self.tools.db.get_method_coverage(
+                            self.state.current_target["class_name"],
+                            self.state.current_target["method_name"]
+                        )
+                        if current_coverage:
+                            self.state.current_method_coverage = current_coverage.line_coverage_rate
+                            logger.debug(f"已更新当前方法覆盖率: {self.state.current_method_coverage:.1%}")
             except Exception as e:
-                logger.warning(f"同步覆盖率数据失败: {e}")
+                logger.warning(f"同步覆盖率数据失败: {e}", exc_info=True)
+                # 异常时保持当前值不变，不重置为0
 
             # 同步测试数量
             try:
@@ -445,7 +454,8 @@ class PlannerAgent:
             self.state.llm_calls += 1
 
             # 解析决策
-            decision = json.loads(response)
+            cleaned_response = extract_json_from_response(response)
+            decision = json.loads(cleaned_response)
             logger.info(f"决策: {decision.get('action')} - {decision.get('reasoning')}")
 
             return decision

@@ -115,25 +115,12 @@ def build_test_class(
 
     # 导入语句
     default_imports = [
-        # JUnit 5 核心注解
-        "import org.junit.jupiter.api.Test;",
-        "import org.junit.jupiter.api.BeforeEach;",
-        "import org.junit.jupiter.api.AfterEach;",
-        "import org.junit.jupiter.api.BeforeAll;",
-        "import org.junit.jupiter.api.AfterAll;",
-        "import org.junit.jupiter.api.DisplayName;",
-        "import org.junit.jupiter.api.Disabled;",
-        "import org.junit.jupiter.api.Tag;",
-        "import org.junit.jupiter.api.Nested;",
-        "import org.junit.jupiter.api.RepeatedTest;",
-        "import org.junit.jupiter.api.Timeout;",
-        "import org.junit.jupiter.api.extension.ExtendWith;",
+        # JUnit 5 核心注解和扩展
+        "import org.junit.jupiter.api.*;",
+        "import org.junit.jupiter.api.extension.*;",
         # JUnit 5 参数化测试
-        "import org.junit.jupiter.params.ParameterizedTest;",
-        "import org.junit.jupiter.params.provider.CsvSource;",
-        "import org.junit.jupiter.params.provider.ValueSource;",
-        "import org.junit.jupiter.params.provider.MethodSource;",
-        "import org.junit.jupiter.params.provider.Arguments;",
+        "import org.junit.jupiter.params.*;",
+        "import org.junit.jupiter.params.provider.*;",
         # JUnit 5 断言（静态导入）
         "import static org.junit.jupiter.api.Assertions.*;",
         "import static org.junit.jupiter.api.Assumptions.*;",
@@ -141,13 +128,11 @@ def build_test_class(
         "import static org.mockito.Mockito.*;",
         "import static org.mockito.ArgumentMatchers.*;",
         # Mockito 类和注解
-        "import org.mockito.ArgumentCaptor;",
-        "import org.mockito.Mock;",
-        "import org.mockito.InjectMocks;",
-        "import org.mockito.Spy;",
-        "import org.mockito.MockitoAnnotations;",
-        "import org.mockito.stubbing.Answer;",
-        "import org.mockito.junit.jupiter.MockitoExtension;",
+        "import org.mockito.*;",
+        "import org.mockito.stubbing.*;",
+        "import org.mockito.junit.jupiter.*;",
+        # Java 反射 API（用于测试私有字段和方法）
+        "import java.lang.reflect.*;",
     ]
 
     all_imports = default_imports + [imp for imp in imports if imp not in default_imports]

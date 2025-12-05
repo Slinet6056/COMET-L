@@ -9,6 +9,7 @@ from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
 from ..models import Contract
 from ..utils.hash_utils import generate_id
+from ..utils.json_utils import extract_json_from_response
 from ..executor.java_executor import JavaExecutor
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,8 @@ class SpecExtractor:
             )
 
             # 解析响应
-            data = json.loads(response)
+            cleaned_response = extract_json_from_response(response)
+            data = json.loads(cleaned_response)
 
             # 提取方法名
             method_name = method_signature.split('(')[0].strip().split()[-1]

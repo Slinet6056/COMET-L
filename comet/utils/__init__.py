@@ -9,6 +9,7 @@ from .code_utils import (
     build_test_class,
 )
 from .hash_utils import code_hash, signature_hash
+from .json_utils import extract_json_from_response
 from .project_utils import (
     find_java_files,
     find_java_file,
@@ -30,6 +31,7 @@ __all__ = [
     "build_test_class",
     "code_hash",
     "signature_hash",
+    "extract_json_from_response",
     "find_java_files",
     "find_java_file",
     "get_source_root",

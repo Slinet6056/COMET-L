@@ -81,11 +81,24 @@ Bug 描述：
 
 你的任务是分析给定的 Java 类，基于提供的缺陷模式（Patterns）和契约（Contracts），生成有意义的变异体。
 
+**Java 8 语法要求**：
+- **必须使用 Java 8 语法**，不能使用更高版本的特性
+- ✗ 禁止使用 `var` 关键字（Java 10+）
+- ✗ 禁止使用 switch 表达式（Java 14+）
+- ✗ 禁止使用文本块（triple quotes，Java 15+）
+- ✗ 禁止使用 record 类型（Java 14+）
+- ✗ 禁止使用 pattern matching（Java 16+）
+- ✗ 禁止使用 sealed classes（Java 17+）
+- ✔ 可以使用 Lambda 表达式和 Stream API（Java 8 特性）
+- ✔ 可以使用方法引用（Java 8 特性）
+- ✔ 可以使用 Optional（Java 8 特性）
+
 变异应该：
 1. 针对特定的语义问题（而非简单的语法变化）
 2. 小范围修改（几行代码）
 3. 能够编译通过（保持类名、方法签名不变）
 4. 有明确的测试目标
+5. **严格遵守 Java 8 语法规范**
 
 **重要**：必须返回 JSON 对象格式，包含 "mutations" 键，其值为变异数组。
 
@@ -155,8 +168,9 @@ Bug 描述：
 3. mutated 必须是完整的替换代码（保持缩进和格式一致）
 4. 不要改变类名、方法签名、访问修饰符
 5. 确保变异后的代码语法正确、能够编译
+6. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
 {% if target_method %}
-6. **只针对 `{{ target_method }}` 方法生成变异体**
+7. **只针对 `{{ target_method }}` 方法生成变异体**
 {% endif %}
 
 请生成 {{ num_mutations }} 个有意义的变异体。""")
@@ -165,6 +179,18 @@ Bug 描述：
     REFINE_MUTATION_SYSTEM = """你是一个高级代码变异专家，专门基于现有测试的弱点生成更具针对性的变异体。
 
 你的任务是分析现有的变异体、测试代码和击杀率，生成新的、更难被测试检测的变异体。
+
+**Java 8 语法要求**：
+- **必须使用 Java 8 语法**，不能使用更高版本的特性
+- ✗ 禁止使用 `var` 关键字（Java 10+）
+- ✗ 禁止使用 switch 表达式（Java 14+）
+- ✗ 禁止使用文本块（triple quotes，Java 15+）
+- ✗ 禁止使用 record 类型（Java 14+）
+- ✗ 禁止使用 pattern matching（Java 16+）
+- ✗ 禁止使用 sealed classes（Java 17+）
+- ✔ 可以使用 Lambda 表达式和 Stream API（Java 8 特性）
+- ✔ 可以使用方法引用（Java 8 特性）
+- ✔ 可以使用 Optional（Java 8 特性）
 
 分析策略：
 1. **研究测试代码**：查看测试方法的断言、边界检查、异常处理
@@ -176,6 +202,7 @@ Bug 描述：
 2. 小范围修改（几行代码）
 3. 能够编译通过
 4. 代表真实可能出现的缺陷
+5. **严格遵守 Java 8 语法规范**
 
 **重要**：必须返回 JSON 对象格式，包含 "mutations" 键，其值为变异数组。
 
@@ -267,14 +294,27 @@ Bug 描述：
 3. mutated 必须是完整的替换代码（保持缩进和格式一致）
 4. 不要改变类名、方法签名、访问修饰符
 5. 确保变异后的代码语法正确、能够编译
+6. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
 {% if target_method %}
-6. **只针对 `{{ target_method }}` 方法生成变异体**
+7. **只针对 `{{ target_method }}` 方法生成变异体**
 {% endif %}""")
 
     # 测试生成提示词
     GENERATE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门为 Java 代码生成高质量的测试用例。
 
 你的任务是为给定的方法生成测试方法。**你可以自主决定生成多少个测试方法**，根据方法的复杂度和需要覆盖的场景来判断。
+
+**Java 8 语法要求**：
+- **必须使用 Java 8 语法**，不能使用更高版本的特性
+- ✗ 禁止使用 `var` 关键字（Java 10+），必须显式声明类型，如 `String str = "test";` 而不是 `var str = "test";`
+- ✗ 禁止使用 switch 表达式（Java 14+），使用传统的 switch 语句
+- ✗ 禁止使用文本块（triple quotes，Java 15+），使用普通字符串拼接
+- ✗ 禁止使用 record 类型（Java 14+）
+- ✗ 禁止使用 pattern matching（Java 16+）
+- ✗ 禁止使用 sealed classes（Java 17+）
+- ✔ 可以使用 Lambda 表达式和 Stream API（Java 8 特性）
+- ✔ 可以使用方法引用（Java 8 特性）
+- ✔ 可以使用 Optional（Java 8 特性）
 
 测试应该：
 1. 使用 JUnit 5 语法（@Test 注解）
@@ -285,6 +325,7 @@ Bug 描述：
 6. 如果提供了现有测试，应避免重复，补充缺失的测试场景
 7. **当被测类有依赖项时，使用 Mockito 创建 mock 对象**
 8. **每个测试方法必须在方法内部创建被测对象的实例**（不要依赖共享的类字段或 @BeforeEach 初始化）
+9. **严格遵守 Java 8 语法规范**
 
 **生成数量指导**：
 - 简单方法（如 getter/setter）：1-2 个测试
@@ -342,7 +383,7 @@ void testUserServiceWithMock() {
   "tests": [
     {
       "method_name": "testAddPositiveNumbers",
-      "code": "@Test\\nvoid testAddPositiveNumbers() {\\n    Calculator calc = new Calculator();\\n    int result = calc.add(2, 3);\\n    assertEquals(5, result);\\n}",
+      "code": "@Test\nvoid testAddPositiveNumbers() {\n    Calculator calc = new Calculator();\n    int result = calc.add(2, 3);\n    assertEquals(5, result);\n}",
       "description": "验证两个正数相加返回正确结果"
     }
   ]
@@ -350,7 +391,7 @@ void testUserServiceWithMock() {
 
 每个测试对象必须包含：
 - method_name: 测试方法名（字符串，符合 JUnit 命名规范，如 testAddPositiveNumbers）
-- code: 测试方法完整代码（字符串，包含 @Test 注解和方法体，使用 \\n 表示换行）
+- code: 测试方法完整代码（字符串，包含 @Test 注解和方法体，使用 \n 表示换行。注意：在 JSON 中直接使用 \n，JSON 解析器会自动将其转换为换行符）
 - description: 测试描述（字符串，说明这个测试验证什么）"""
 
     GENERATE_TEST_USER = Template("""请为以下方法生成测试：
@@ -409,6 +450,7 @@ void testUserServiceWithMock() {
 6. 根据方法复杂度自主决定生成多少个测试（简单方法 1-2 个，复杂方法 5-10 个）
 7. **如果被测类有依赖项，使用 Mockito 创建 mock 对象**（直接使用 mock()、when()、verify() 等，不要加 Mockito. 前缀）
 8. **每个测试方法必须在方法内部创建被测对象的实例**，不要使用类字段或假设存在 @BeforeEach 初始化
+9. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
 
 **示例（正确的断言写法）**：
 ```java
@@ -452,6 +494,18 @@ void testServiceWithMockedDependency() {
 4. **重构测试**：提高测试质量和可维护性
 5. **使用 Mockito 增强隔离性**：对有依赖的场景使用 mock 对象
 
+**Java 8 语法要求**：
+- **必须使用 Java 8 语法**，不能使用更高版本的特性
+- ✗ 禁止使用 `var` 关键字（Java 10+），必须显式声明类型
+- ✗ 禁止使用 switch 表达式（Java 14+），使用传统的 switch 语句
+- ✗ 禁止使用文本块（triple quotes，Java 15+），使用普通字符串拼接
+- ✗ 禁止使用 record 类型（Java 14+）
+- ✗ 禁止使用 pattern matching（Java 16+）
+- ✗ 禁止使用 sealed classes（Java 17+）
+- ✔ 可以使用 Lambda 表达式和 Stream API（Java 8 特性）
+- ✔ 可以使用方法引用（Java 8 特性）
+- ✔ 可以使用 Optional（Java 8 特性）
+
 **策略选择**：
 - 如果现有测试覆盖了基本场景但不够细致：改进现有测试
 - 如果存在明显的测试缺口：补充新测试
@@ -486,7 +540,7 @@ void testServiceWithMockedDependency() {
   "refined_tests": [
     {
       "method_name": "testAddPositiveNumbers",
-      "code": "@Test\\nvoid testAddPositiveNumbers() {\\n    Calculator calc = new Calculator();\\n    int result = calc.add(2, 3);\\n    assertEquals(5, result);\\n}",
+      "code": "@Test\nvoid testAddPositiveNumbers() {\n    Calculator calc = new Calculator();\n    int result = calc.add(2, 3);\n    assertEquals(5, result);\n}",
       "description": "验证两个正数相加返回正确结果",
       "target_method": "add"
     }
@@ -561,12 +615,25 @@ void testServiceWithMockedDependency() {
 4. 改进现有测试的断言和验证逻辑
 5. 返回完整的测试方法列表（包括保留的、修改的和新增的）
 6. **每个测试方法必须在方法内部创建被测对象实例**，不要使用类字段或依赖 @BeforeEach 初始化
+7. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
 
 请完善这些测试。""")
 
     # 测试修复提示词
     FIX_TEST_SYSTEM = """你是一个 Java 测试代码修复专家。
 你的任务是根据错误信息修复测试代码（包括编译错误和测试运行失败）。
+
+**Java 8 语法要求**：
+- **必须使用 Java 8 语法**，不能使用更高版本的特性
+- ✗ 禁止使用 `var` 关键字（Java 10+），必须显式声明类型
+- ✗ 禁止使用 switch 表达式（Java 14+），使用传统的 switch 语句
+- ✗ 禁止使用文本块（triple quotes，Java 15+），使用普通字符串拼接
+- ✗ 禁止使用 record 类型（Java 14+）
+- ✗ 禁止使用 pattern matching（Java 16+）
+- ✗ 禁止使用 sealed classes（Java 17+）
+- ✔ 可以使用 Lambda 表达式和 Stream API（Java 8 特性）
+- ✔ 可以使用方法引用（Java 8 特性）
+- ✔ 可以使用 Optional（Java 8 特性）
 
 **严格限制**：
 1. **只能修改测试方法内部的实现代码**（方法体内的语句）
@@ -627,6 +694,7 @@ void testServiceWithMockedDependency() {
 5. **保持 import 语句、类声明、其他方法完全不变**
 6. 如果是静态导入问题，修改方法内调用方式，不要改 import
 7. 返回完整的测试类代码（包括未修改的部分）
+8. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
 
 请提供修复后的完整测试类代码。""")
 
@@ -635,6 +703,18 @@ void testServiceWithMockedDependency() {
 你的任务是修复一个失败的 JUnit5 测试方法。
 
 请分析错误信息，找出问题所在，并返回修复后的完整方法代码。
+
+**Java 8 语法要求**：
+- **必须使用 Java 8 语法**，不能使用更高版本的特性
+- ✗ 禁止使用 `var` 关键字（Java 10+），必须显式声明类型
+- ✗ 禁止使用 switch 表达式（Java 14+），使用传统的 switch 语句
+- ✗ 禁止使用文本块（triple quotes，Java 15+），使用普通字符串拼接
+- ✗ 禁止使用 record 类型（Java 14+）
+- ✗ 禁止使用 pattern matching（Java 16+）
+- ✗ 禁止使用 sealed classes（Java 17+）
+- ✔ 可以使用 Lambda 表达式和 Stream API（Java 8 特性）
+- ✔ 可以使用方法引用（Java 8 特性）
+- ✔ 可以使用 Optional（Java 8 特性）
 
 **常见错误类型**：
 1. **断言失败**（AssertionFailedError）：
@@ -650,14 +730,17 @@ void testServiceWithMockedDependency() {
 2. 确保修复后的代码语法正确
 3. 使用正确的断言方法（assertEquals、assertTrue、assertThrows 等）
 4. 不要添加 Assertions. 前缀（使用静态导入）
+5. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
 
 **重要**：必须返回 JSON 对象格式。
 
 返回格式示例：
 {
-  "fixed_method_code": "@Test\\nvoid testAddPositiveNumbers() {\\n    Calculator calc = new Calculator();\\n    int result = calc.add(2, 3);\\n    assertEquals(5, result);\\n}",
+  "fixed_method_code": "@Test\nvoid testAddPositiveNumbers() {\n    Calculator calc = new Calculator();\n    int result = calc.add(2, 3);\n    assertEquals(5, result);\n}",
   "changes": "修复了断言的期望值，将错误的 6 改为正确的 5"
-}"""
+}
+
+注意：code 和 fixed_method_code 字段中，在 JSON 中直接使用 \n 表示换行，JSON 解析器会自动将其转换为换行符。"""
 
     FIX_SINGLE_METHOD_USER = Template("""请修复以下失败的测试方法：
 

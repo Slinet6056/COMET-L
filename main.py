@@ -114,8 +114,9 @@ def initialize_system(config: Settings):
         max_tokens=config.llm.max_tokens,
         max_retries=config.execution.max_retries,
         supports_json_mode=config.llm.supports_json_mode,
+        timeout=config.llm.timeout,
     )
-    logger.info(f"LLM 客户端初始化: {config.llm.model}")
+    logger.info(f"LLM 客户端初始化: {config.llm.model} (timeout={config.llm.timeout}s)")
 
     # 初始化存储
     db = Database(db_path=f"{config.paths.cache}/comet.db")
