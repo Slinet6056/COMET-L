@@ -197,9 +197,9 @@ class TargetSelector:
 
         # 统计每个类的变异体数量
         mutant_counts = {}
+        all_mutants = self.db.get_all_mutants()
         for class_name in all_classes:
-            mutants = self.db.get_all_mutants()
-            count = len([m for m in mutants if m.class_name == class_name])
+            count = len([m for m in all_mutants if m.class_name == class_name])
             mutant_counts[class_name] = count
 
         # 按变异体数量升序遍历，找到不在黑名单的目标
