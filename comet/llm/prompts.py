@@ -586,7 +586,10 @@ void testServiceWithMockedDependency() {
 {% endif %}
 {% for mutant in survived_mutants %}
 - {{ mutant.semantic_intent }}
-  变异代码: {{ mutant.patch.mutated_code }}
+  变异代码:
+```java
+{{ mutant.patch.mutated_code }}
+```
 {% endfor %}
 {% endif %}
 
