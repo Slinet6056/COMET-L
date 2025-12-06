@@ -479,7 +479,7 @@ class PlannerAgent:
 
         # 确保 action 为有效的字符串，避免类型错误
         if not isinstance(action, str) or not action:
-            safe_action = str(action) if action is not None else "unknown"
+            safe_action = "unknown" if action is None or action == "" else str(action)
             logger.error(f"决策缺少有效的 action: {action}")
             self.state.add_action(
                 action=safe_action,
