@@ -29,19 +29,19 @@ class AgentTools:
         self.metadata: Dict[str, ToolMetadata] = {}
 
         # 组件依赖（将在 main.py 中注入）
-        self.project_path: Optional[str] = None  # 工作路径（可能是沙箱）
-        self.original_project_path: Optional[str] = None  # 原始项目路径（用于创建变异沙箱）
-        self.db = None
-        self.java_executor = None
-        self.mutant_generator = None
-        self.test_generator = None
-        self.static_guard = None
-        self.mutation_evaluator = None
-        self.metrics_collector = None
-        self.knowledge_base = None
-        self.pattern_extractor = None
-        self.sandbox_manager = None
-        self.state = None
+        self.project_path: str = ""  # 工作路径（可能是沙箱）
+        self.original_project_path: str = ""  # 原始项目路径（用于创建变异沙箱）
+        self.db: Any = None
+        self.java_executor: Any = None
+        self.mutant_generator: Any = None
+        self.test_generator: Any = None
+        self.static_guard: Any = None
+        self.mutation_evaluator: Any = None
+        self.metrics_collector: Any = None
+        self.knowledge_base: Any = None
+        self.pattern_extractor: Any = None
+        self.sandbox_manager: Any = None
+        self.state: Any = None
 
         self._register_default_tools()
 
@@ -574,6 +574,8 @@ class AgentTools:
             use_actual_file = actual_test_code and actual_test_code != test_case.full_code
 
             if use_actual_file:
+                # 此处分支确保 actual_test_code 不为 None
+                assert actual_test_code is not None
                 logger.debug(f"检测到实际测试文件与 test_case.full_code 不一致，使用实际文件内容进行修复")
                 logger.debug(f"实际文件行数: {len(actual_test_code.splitlines())}, full_code 行数: {len(test_case.full_code.splitlines()) if test_case.full_code else 0}")
                 # 创建一个临时的 TestCase 副本用于修复，避免污染原始对象
@@ -1695,7 +1697,7 @@ class AgentTools:
             "mutation_score": mutation_score,
         }
 
-    def update_knowledge(self, type: str = None, data: Dict[str, Any] = None) -> Dict[str, Any]:
+    def update_knowledge(self, type: Optional[str] = None, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """更新知识库"""
         if not self.knowledge_base:
             logger.error("update_knowledge: 知识库未初始化")

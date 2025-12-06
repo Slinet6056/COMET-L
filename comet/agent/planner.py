@@ -477,6 +477,18 @@ class PlannerAgent:
         action = decision.get("action")
         params = decision.get("params", {})
 
+        # 确保 action 为有效的字符串，避免类型错误
+        if not isinstance(action, str) or not action:
+            safe_action = str(action) if action is not None else "unknown"
+            logger.error(f"决策缺少有效的 action: {action}")
+            self.state.add_action(
+                action=safe_action,
+                params=params,
+                success=False,
+                result="invalid action"
+            )
+            return None
+
         try:
             result = self.tools.call(action, **params)
             logger.info(f"工具执行成功: {action}")
