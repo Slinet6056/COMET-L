@@ -1,7 +1,7 @@
 """目标选择器 - 选择待测试的类和方法"""
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 
 from ..executor.java_executor import JavaExecutor
@@ -180,13 +180,16 @@ class TargetSelector:
             "strategy": "coverage",
         }
 
-    def select_by_mutations(self) -> Dict[str, Any]:
+    def select_by_mutations(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
         """
         选择变异体最少的类
 
         Returns:
             目标信息字典
         """
+        if blacklist is None:
+            blacklist = set()
+
         all_classes = self._get_all_classes()
 
         if not all_classes:
@@ -199,38 +202,34 @@ class TargetSelector:
             count = len([m for m in mutants if m.class_name == class_name])
             mutant_counts[class_name] = count
 
-        # 选择变异体最少的类
-        if not mutant_counts:
-            selected_class = all_classes[0]
-        else:
-            selected_class = min(mutant_counts, key=lambda x: mutant_counts[x])
+        # 按变异体数量升序遍历，找到不在黑名单的目标
+        sorted_classes = sorted(all_classes, key=lambda x: mutant_counts.get(x, float("inf")))
 
-        methods = self._get_public_methods(selected_class)
-        selected_method_info = None
-        method_name = None
-        method_signature = None
+        for candidate_class in sorted_classes:
+            method_info, method_name, method_signature = self._get_first_available_method(candidate_class, blacklist)
+            if method_name is not None:
+                logger.info(f"选择目标（按变异体数量）: {candidate_class}.{method_name}")
+                return {
+                    "class_name": candidate_class,
+                    "method_name": method_name,
+                    "method_signature": method_signature,
+                    "method_info": method_info,
+                    "strategy": "mutations",
+                }
 
-        if methods and len(methods) > 0:
-            selected_method_info = methods[0]
-            method_name = selected_method_info.get("name") if isinstance(selected_method_info, dict) else selected_method_info
-            method_signature = selected_method_info.get("signature") if isinstance(selected_method_info, dict) else None
+        logger.warning("按变异体数量未找到可用目标（可能全部在黑名单或无 public 方法）")
+        return {"class_name": None, "method_name": None}
 
-        logger.info(f"选择目标（按变异体数量）: {selected_class}.{method_name}")
-        return {
-            "class_name": selected_class,
-            "method_name": method_name,
-            "method_signature": method_signature,
-            "method_info": selected_method_info if isinstance(selected_method_info, dict) else None,
-            "strategy": "mutations",
-        }
-
-    def select_by_priority(self) -> Dict[str, Any]:
+    def select_by_priority(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
         """
         综合评分选择目标
 
         Returns:
             目标信息字典
         """
+        if blacklist is None:
+            blacklist = set()
+
         all_classes = self._get_all_classes()
 
         if not all_classes:
@@ -250,39 +249,35 @@ class TargetSelector:
             score = mutant_count * 0.3 + test_count * 0.7
             class_scores[class_name] = score
 
-        # 选择分数最低的类
-        if not class_scores:
-            selected_class = all_classes[0]
-        else:
-            selected_class = min(class_scores, key=lambda x: class_scores[x])
+        # 按分数升序遍历，找到不在黑名单的目标
+        sorted_classes = sorted(all_classes, key=lambda x: class_scores.get(x, float("inf")))
 
-        methods = self._get_public_methods(selected_class)
-        selected_method_info = None
-        method_name = None
-        method_signature = None
+        for candidate_class in sorted_classes:
+            method_info, method_name, method_signature = self._get_first_available_method(candidate_class, blacklist)
+            if method_name is not None:
+                logger.info(f"选择目标（综合评分）: {candidate_class}.{method_name}")
+                return {
+                    "class_name": candidate_class,
+                    "method_name": method_name,
+                    "method_signature": method_signature,
+                    "method_info": method_info,
+                    "strategy": "priority",
+                    "score": class_scores.get(candidate_class),
+                }
 
-        if methods and len(methods) > 0:
-            selected_method_info = methods[0]
-            method_name = selected_method_info.get("name") if isinstance(selected_method_info, dict) else selected_method_info
-            method_signature = selected_method_info.get("signature") if isinstance(selected_method_info, dict) else None
+        logger.warning("综合评分未找到可用目标（可能全部在黑名单或无 public 方法）")
+        return {"class_name": None, "method_name": None}
 
-        logger.info(f"选择目标（综合评分）: {selected_class}.{method_name}")
-        return {
-            "class_name": selected_class,
-            "method_name": method_name,
-            "method_signature": method_signature,
-            "method_info": selected_method_info if isinstance(selected_method_info, dict) else None,
-            "strategy": "priority",
-            "score": class_scores[selected_class],
-        }
-
-    def select_random(self) -> Dict[str, Any]:
+    def select_random(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
         """
         随机选择目标
 
         Returns:
             目标信息字典
         """
+        if blacklist is None:
+            blacklist = set()
+
         import random
 
         all_classes = self._get_all_classes()
@@ -290,24 +285,25 @@ class TargetSelector:
         if not all_classes:
             return {"class_name": None, "method_name": None}
 
-        selected_class = random.choice(all_classes)
+        # 过滤出有可用方法且不在黑名单的类
+        eligible_targets = []
+        for class_name in all_classes:
+            method_info, method_name, method_signature = self._get_first_available_method(class_name, blacklist, allow_first_only=False)
+            if method_name is not None:
+                eligible_targets.append((class_name, method_info, method_name, method_signature))
 
-        methods = self._get_public_methods(selected_class)
-        selected_method_info = None
-        method_name = None
-        method_signature = None
+        if not eligible_targets:
+            logger.warning("随机选择未找到可用目标（可能全部在黑名单或无 public 方法）")
+            return {"class_name": None, "method_name": None}
 
-        if methods and len(methods) > 0:
-            selected_method_info = random.choice(methods)
-            method_name = selected_method_info.get("name") if isinstance(selected_method_info, dict) else selected_method_info
-            method_signature = selected_method_info.get("signature") if isinstance(selected_method_info, dict) else None
+        selected_class, selected_method_info, method_name, method_signature = random.choice(eligible_targets)
 
         logger.info(f"选择目标（随机）: {selected_class}.{method_name}")
         return {
             "class_name": selected_class,
             "method_name": method_name,
             "method_signature": method_signature,
-            "method_info": selected_method_info if isinstance(selected_method_info, dict) else None,
+            "method_info": selected_method_info,
             "strategy": "random",
         }
 
@@ -352,6 +348,41 @@ class TargetSelector:
 
         # 如果失败，返回空列表
         return []
+
+    def _get_first_available_method(
+        self, class_name: str, blacklist: set, allow_first_only: bool = True
+    ) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
+        """
+        获取指定类中未命中黑名单的第一个 public 方法
+
+        Args:
+            class_name: 类名
+            blacklist: 黑名单集合，元素格式 ClassName.methodName
+            allow_first_only: 为 False 时会返回可用列表中的第一个，同时用于随机策略筛选
+        """
+        methods = self._get_public_methods(class_name)
+        if not methods:
+            return None, None, None
+
+        candidates = []
+        for method in methods:
+            method_name = method.get("name") if isinstance(method, dict) else method
+            target_key = f"{class_name}.{method_name}" if method_name else class_name
+            if target_key in blacklist:
+                continue
+
+            method_signature = method.get("signature") if isinstance(method, dict) else None
+            method_info = method if isinstance(method, dict) else None
+            candidates.append((method_info, method_name, method_signature))
+
+            if allow_first_only:
+                break
+
+        if not candidates:
+            return None, None, None
+
+        # 返回第一个可用方法
+        return candidates[0]
 
     def clear_cache(self) -> None:
         """清除缓存"""

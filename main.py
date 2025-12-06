@@ -5,6 +5,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 from comet.config import Settings
 from comet.llm import LLMClient
@@ -156,7 +157,7 @@ def initialize_system(config: Settings):
     tools = AgentTools()
 
     # 注入组件依赖到 AgentTools
-    tools.project_path = None  # 将在 run_evolution 中设置
+    tools.project_path = ""  # 将在 run_evolution 中设置
     tools.db = db
     tools.java_executor = java_executor
     tools.mutant_generator = mutant_generator
@@ -210,7 +211,7 @@ def initialize_system(config: Settings):
     }
 
 
-def run_evolution(project_path: str, components: dict, resume_state: str = None):
+def run_evolution(project_path: str, components: dict, resume_state: Optional[str] = None):
     """
     运行协同进化
 
