@@ -339,6 +339,160 @@ class AgentTools:
 
         logger.info(f"已从数据库恢复测试文件: {original_test_case.class_name} (共 {len(all_methods)} 个方法)")
 
+    def _get_test_file_path(self, test_case) -> str:
+        """
+        获取测试文件的完整路径
+
+        Args:
+            test_case: TestCase 对象
+
+        Returns:
+            测试文件的完整路径
+        """
+        if test_case.package_name:
+            package_path = test_case.package_name.replace(".", os.sep)
+            return os.path.join(
+                self.project_path,
+                "src", "test", "java",
+                package_path,
+                f"{test_case.class_name}.java"
+            )
+        else:
+            return os.path.join(
+                self.project_path,
+                "src", "test", "java",
+                f"{test_case.class_name}.java"
+            )
+
+    def _read_actual_test_file(self, test_case) -> Optional[str]:
+        """
+        读取磁盘上实际的测试文件内容
+
+        在使用 merge 模式写入测试时，磁盘上的文件可能包含合并后的所有测试方法，
+        而 test_case.full_code 只包含最新生成的测试方法。
+        修复编译错误时需要使用实际的文件内容，否则 LLM 无法定位到错误的代码行。
+
+        Args:
+            test_case: TestCase 对象
+
+        Returns:
+            测试文件内容，如果文件不存在则返回 None
+        """
+        test_file_path = self._get_test_file_path(test_case)
+
+        if os.path.exists(test_file_path):
+            try:
+                with open(test_file_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+            except Exception as e:
+                logger.warning(f"读取测试文件失败: {test_file_path}, 错误: {e}")
+                return None
+        else:
+            logger.debug(f"测试文件不存在: {test_file_path}")
+            return None
+
+    def _sync_fixed_code_to_test_case(self, original_test_case, fixed_full_code: str):
+        """
+        将修复后的完整代码同步到 TestCase
+
+        当使用实际文件内容（可能包含多个 TestCase 的方法）进行修复时，
+        需要从修复后的代码中提取属于当前 TestCase 的方法，
+        以保持 test_case.methods 和 test_case.full_code 的一致性。
+
+        Args:
+            original_test_case: 原始的 TestCase 对象
+            fixed_full_code: 修复后的完整测试文件代码
+
+        Returns:
+            更新后的 TestCase 对象
+        """
+        from ..utils.project_utils import _extract_test_methods
+        from ..utils.code_utils import build_test_class
+        import re
+
+        def _extract_methods_for_class(code: str, class_name: str) -> dict:
+            """
+            仅提取指定测试类内的测试方法，避免不同类的同名方法互相覆盖
+            """
+            pattern = re.compile(rf"\bclass\s+{re.escape(class_name)}\b")
+            lines = code.splitlines()
+
+            class_start = None
+            brace_count = 0
+            class_end = None
+
+            for idx, line in enumerate(lines):
+                if class_start is None and pattern.search(line):
+                    class_start = idx
+                    brace_count = line.count("{") - line.count("}")
+                    # 继续查找对应的闭合大括号
+                    continue
+
+                if class_start is not None:
+                    brace_count += line.count("{") - line.count("}")
+                    if brace_count <= 0:
+                        class_end = idx
+                        break
+
+            if class_start is None:
+                logger.warning(f"未在修复后的代码中找到测试类: {class_name}")
+                return {}
+
+            if class_end is None:
+                class_end = len(lines) - 1
+
+            class_code = "\n".join(lines[class_start : class_end + 1])
+            return _extract_test_methods(class_code)
+
+        # 从修复后的代码中提取所有测试方法
+        fixed_methods_dict = _extract_methods_for_class(
+            fixed_full_code, original_test_case.class_name
+        )
+
+        if not fixed_methods_dict:
+            raise ValueError(
+                f"修复后的代码中未找到类 {original_test_case.class_name} 的测试方法"
+            )
+
+        # 获取当前 TestCase 中的方法名列表
+        original_method_names = {m.method_name for m in original_test_case.methods}
+
+        # 更新 original_test_case 中对应方法的代码
+        updated_methods = []
+        missing_methods = []
+        for method in original_test_case.methods:
+            if method.method_name in fixed_methods_dict:
+                # 使用修复后的代码更新方法
+                method.code = fixed_methods_dict[method.method_name]
+                logger.debug(f"更新测试方法代码: {method.method_name}")
+                updated_methods.append(method)
+            else:
+                missing_methods.append(method.method_name)
+
+        if missing_methods:
+            missing_list = ", ".join(missing_methods)
+            logger.warning(
+                f"修复后的测试文件缺少以下方法，无法同步到 TestCase: {missing_list}"
+            )
+            raise ValueError(
+                f"修复后的测试文件缺少以下方法: {missing_list}"
+            )
+
+        original_test_case.methods = updated_methods
+
+        # 重新构建 full_code（只包含当前 TestCase 的方法）
+        method_codes = [m.code for m in updated_methods]
+        original_test_case.full_code = build_test_class(
+            test_class_name=original_test_case.class_name,
+            target_class=original_test_case.target_class,
+            package_name=original_test_case.package_name,
+            imports=original_test_case.imports,
+            test_methods=method_codes,
+        )
+
+        logger.debug(f"同步修复后的代码到 TestCase: {len(updated_methods)} 个方法")
+        return original_test_case
+
     def _delete_test_file(self, test_case):
         """
         删除磁盘上的测试文件
@@ -346,21 +500,7 @@ class AgentTools:
         Args:
             test_case: TestCase 对象
         """
-        # 构建测试文件路径
-        if test_case.package_name:
-            package_path = test_case.package_name.replace(".", os.sep)
-            test_file_path = os.path.join(
-                self.project_path,
-                "src", "test", "java",
-                package_path,
-                f"{test_case.class_name}.java"
-            )
-        else:
-            test_file_path = os.path.join(
-                self.project_path,
-                "src", "test", "java",
-                f"{test_case.class_name}.java"
-            )
+        test_file_path = self._get_test_file_path(test_case)
 
         if os.path.exists(test_file_path):
             try:
@@ -428,8 +568,24 @@ class AgentTools:
             logger.warning(f"编译失败（第 {compile_retry_count} 次），尝试修复...")
             logger.debug(f"编译错误: {compile_error[:500]}")  # 只记录前500字符
 
+            # 读取 sandbox 中实际的测试文件内容（可能包含合并的其他测试方法）
+            # 这是修复编译错误的关键：需要用实际的文件内容，而不是 test_case.full_code
+            actual_test_code = self._read_actual_test_file(test_case)
+            use_actual_file = actual_test_code and actual_test_code != test_case.full_code
+
+            if use_actual_file:
+                logger.debug(f"检测到实际测试文件与 test_case.full_code 不一致，使用实际文件内容进行修复")
+                logger.debug(f"实际文件行数: {len(actual_test_code.splitlines())}, full_code 行数: {len(test_case.full_code.splitlines()) if test_case.full_code else 0}")
+                # 创建一个临时的 TestCase 副本用于修复，避免污染原始对象
+                from copy import deepcopy
+                temp_test_case = deepcopy(test_case)
+                temp_test_case.full_code = actual_test_code
+                fix_target = temp_test_case
+            else:
+                fix_target = test_case
+
             fixed_test_case = self.test_generator.regenerate_with_feedback(
-                test_case=test_case,
+                test_case=fix_target,
                 compile_error=compile_error,
                 class_code=class_code,
                 max_retries=1,  # 每次只重新生成一次
@@ -441,14 +597,39 @@ class AgentTools:
                 test_case.compile_error = f"编译失败（已重试{compile_retry_count}次）且无法修复"
                 return test_case
 
-            # 写入修复后的测试文件（使用合并模式，保留现有测试方法）
-            test_file = write_test_file(
-                project_path=self.project_path,
-                package_name=fixed_test_case.package_name,
-                test_code=fixed_test_case.full_code,
-                test_class_name=fixed_test_case.class_name,
-                merge=True,
-            )
+            # 如果使用了临时副本（包含完整的合并后测试文件），需要特殊处理
+            if use_actual_file:
+                # 1. 先写入完整的修复后代码（不使用 merge，因为 LLM 修复的是完整文件）
+                #    这确保所有方法（包括其他 TestCase 的）都被正确修复
+                test_file = write_test_file(
+                    project_path=self.project_path,
+                    package_name=fixed_test_case.package_name,
+                    test_code=fixed_test_case.full_code,
+                    test_class_name=fixed_test_case.class_name,
+                    merge=False,  # 不使用 merge，直接覆盖
+                )
+
+                # 2. 然后从修复后的代码中提取当前 TestCase 的方法，同步回 test_case
+                #    这确保数据库中的 test_case.methods 和 test_case.full_code 保持一致
+                try:
+                    fixed_test_case = self._sync_fixed_code_to_test_case(
+                        original_test_case=test_case,
+                        fixed_full_code=fixed_test_case.full_code,
+                    )
+                except ValueError as sync_error:
+                    logger.error(f"同步修复后的测试方法失败: {sync_error}")
+                    test_case.compile_success = False
+                    test_case.compile_error = str(sync_error)
+                    return test_case
+            else:
+                # 普通情况：写入修复后的测试文件（使用合并模式，保留其他测试方法）
+                test_file = write_test_file(
+                    project_path=self.project_path,
+                    package_name=fixed_test_case.package_name,
+                    test_code=fixed_test_case.full_code,
+                    test_class_name=fixed_test_case.class_name,
+                    merge=True,
+                )
 
             if not test_file:
                 logger.error("写入修复后的测试文件失败")
