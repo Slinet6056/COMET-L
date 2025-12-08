@@ -54,10 +54,10 @@ class ProjectScanner:
         logger.info(f"扫描项目: {project_path}")
         java_files = find_java_files(str(project), pattern="**/*.java")
 
-        # 过滤掉测试文件
+        # 只保留 src/main/java 目录下的源文件
         source_files = [
             f for f in java_files
-            if "/test/" not in str(f) and "\\test\\" not in str(f)
+            if "/src/main/java/" in str(f) or "\\src\\main\\java\\" in str(f)
         ]
 
         logger.info(f"找到 {len(source_files)} 个源文件")
