@@ -3,4 +3,5 @@ pyyaml
 requests
 jinja2
 pydantic
+javalang
 # httpx[socks]

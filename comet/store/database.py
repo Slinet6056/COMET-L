@@ -195,21 +195,24 @@ class Database:
 
     def get_mutant(self, mutant_id: str) -> Optional[Mutant]:
         """获取变异体"""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM mutants WHERE id = ?", (mutant_id,))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return self._row_to_mutant(row)
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM mutants WHERE id = ?", (mutant_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_mutant(row)
 
     def get_all_mutants(self, status: Optional[str] = None) -> List[Mutant]:
         """获取所有变异体"""
-        cursor = self.conn.cursor()
-        if status:
-            cursor.execute("SELECT * FROM mutants WHERE status = ?", (status,))
-        else:
-            cursor.execute("SELECT * FROM mutants")
-        return [self._row_to_mutant(row) for row in cursor.fetchall()]
+        with self._lock:
+            cursor = self.conn.cursor()
+            if status:
+                cursor.execute("SELECT * FROM mutants WHERE status = ?", (status,))
+            else:
+                cursor.execute("SELECT * FROM mutants")
+            rows = cursor.fetchall()
+            return [self._row_to_mutant(row) for row in rows]
 
     def get_pending_mutants(self) -> List[Mutant]:
         """获取待评估的变异体"""
@@ -224,19 +227,23 @@ class Database:
         获取所有已评估的变异体（包括 valid 和 outdated 状态）
         用于计算全局变异分数
         """
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM mutants
-            WHERE status IN ('valid', 'outdated')
-            AND evaluated_at IS NOT NULL
-        """)
-        return [self._row_to_mutant(row) for row in cursor.fetchall()]
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT * FROM mutants
+                WHERE status IN ('valid', 'outdated')
+                AND evaluated_at IS NOT NULL
+            """)
+            rows = cursor.fetchall()
+            return [self._row_to_mutant(row) for row in rows]
 
     def get_mutants_by_class(self, class_name: str) -> List[Mutant]:
         """获取指定类的所有变异体"""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM mutants WHERE class_name = ?", (class_name,))
-        return [self._row_to_mutant(row) for row in cursor.fetchall()]
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM mutants WHERE class_name = ?", (class_name,))
+            rows = cursor.fetchall()
+            return [self._row_to_mutant(row) for row in rows]
 
     def get_mutants_by_method(
         self,
@@ -255,18 +262,20 @@ class Database:
         Returns:
             变异体列表
         """
-        cursor = self.conn.cursor()
-        if status:
-            cursor.execute(
-                "SELECT * FROM mutants WHERE class_name = ? AND method_name = ? AND status = ?",
-                (class_name, method_name, status)
-            )
-        else:
-            cursor.execute(
-                "SELECT * FROM mutants WHERE class_name = ? AND method_name = ?",
-                (class_name, method_name)
-            )
-        return [self._row_to_mutant(row) for row in cursor.fetchall()]
+        with self._lock:
+            cursor = self.conn.cursor()
+            if status:
+                cursor.execute(
+                    "SELECT * FROM mutants WHERE class_name = ? AND method_name = ? AND status = ?",
+                    (class_name, method_name, status)
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM mutants WHERE class_name = ? AND method_name = ?",
+                    (class_name, method_name)
+                )
+            rows = cursor.fetchall()
+            return [self._row_to_mutant(row) for row in rows]
 
     def mark_mutants_outdated(self, class_name: str, method_name: str) -> int:
         """
@@ -279,16 +288,17 @@ class Database:
         Returns:
             被标记的变异体数量
         """
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            UPDATE mutants
-            SET status = 'outdated'
-            WHERE class_name = ? AND method_name = ? AND status = 'valid'
-        """, (class_name, method_name))
-        self.conn.commit()
-        updated_count = cursor.rowcount
-        logger.info(f"已将 {class_name}.{method_name} 的 {updated_count} 个变异体标记为 outdated")
-        return updated_count
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                UPDATE mutants
+                SET status = 'outdated'
+                WHERE class_name = ? AND method_name = ? AND status = 'valid'
+            """, (class_name, method_name))
+            self.conn.commit()
+            updated_count = cursor.rowcount
+            logger.info(f"已将 {class_name}.{method_name} 的 {updated_count} 个变异体标记为 outdated")
+            return updated_count
 
     def save_test_case(self, test_case: TestCase) -> None:
         """
@@ -386,18 +396,21 @@ class Database:
 
     def get_test_case(self, test_id: str) -> Optional[TestCase]:
         """获取测试用例"""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM test_cases WHERE id = ?", (test_id,))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return self._row_to_test_case(row)
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM test_cases WHERE id = ?", (test_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_test_case(row)
 
     def get_all_test_cases(self) -> List[TestCase]:
         """获取所有测试用例"""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM test_cases WHERE compile_success = 1")
-        return [self._row_to_test_case(row) for row in cursor.fetchall()]
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM test_cases WHERE compile_success = 1")
+            rows = cursor.fetchall()  # 先取出所有行
+            return [self._row_to_test_case(row) for row in rows]
 
     def get_all_tests(self) -> List[TestCase]:
         """获取所有测试用例（别名）"""
@@ -405,16 +418,18 @@ class Database:
 
     def get_tests_by_target_class(self, class_name: str) -> List[TestCase]:
         """获取指定目标类的所有测试"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM test_cases
-            WHERE target_class = ? AND compile_success = 1
-            ORDER BY updated_at DESC
-        """, (class_name,))
-        results = [self._row_to_test_case(row) for row in cursor.fetchall()]
-        if results:
-            logger.debug(f"查询到 {len(results)} 个测试用例: {results[0].id}")
-        return results
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT * FROM test_cases
+                WHERE target_class = ? AND compile_success = 1
+                ORDER BY updated_at DESC
+            """, (class_name,))
+            rows = cursor.fetchall()  # 先取出所有行
+            results = [self._row_to_test_case(row) for row in rows]
+            if results:
+                logger.debug(f"查询到 {len(results)} 个测试用例: {results[0].id}")
+            return results
 
     def get_tests_by_target_method(self, class_name: str, method_name: str) -> List[TestCase]:
         """
@@ -429,60 +444,108 @@ class Database:
         Returns:
             测试用例列表，按更新时间倒序排列
         """
-        cursor = self.conn.cursor()
-        # 先获取所有编译成功的目标类的测试用例
-        cursor.execute("""
-            SELECT * FROM test_cases
-            WHERE target_class = ? AND compile_success = 1
-            ORDER BY updated_at DESC
-        """, (class_name,))
+        with self._lock:
+            cursor = self.conn.cursor()
+            # 先获取所有编译成功的目标类的测试用例
+            cursor.execute("""
+                SELECT * FROM test_cases
+                WHERE target_class = ? AND compile_success = 1
+                ORDER BY updated_at DESC
+            """, (class_name,))
 
-        results = []
-        for row in cursor.fetchall():
-            test_case = self._row_to_test_case(row)
-            # 检查这个测试用例是否包含针对指定方法的测试方法
-            has_target_method = any(
-                tm.target_method == method_name
-                for tm in test_case.methods
-            )
-            if has_target_method:
-                results.append(test_case)
+            rows = cursor.fetchall()  # 先取出所有行
+            results = []
+            for row in rows:
+                test_case = self._row_to_test_case(row)
+                # 检查这个测试用例是否包含针对指定方法的测试方法
+                has_target_method = any(
+                    tm.target_method == method_name
+                    for tm in test_case.methods
+                )
+                if has_target_method:
+                    results.append(test_case)
 
-        if results:
-            logger.debug(f"查询到 {len(results)} 个针对 {class_name}.{method_name} 的测试用例")
-        return results
+            if results:
+                logger.debug(f"查询到 {len(results)} 个针对 {class_name}.{method_name} 的测试用例")
+            return results
 
     def delete_test_case(self, test_id: str) -> None:
         """删除测试用例及其所有测试方法"""
-        cursor = self.conn.cursor()
-        try:
-            # 删除测试方法
-            cursor.execute("DELETE FROM test_methods WHERE test_case_id = ?", (test_id,))
-            # 删除测试用例
-            cursor.execute("DELETE FROM test_cases WHERE id = ?", (test_id,))
-            self.conn.commit()
-            logger.info(f"已删除测试用例: {test_id}")
-        except Exception as e:
-            logger.error(f"删除测试用例失败: {e}")
-            self.conn.rollback()
-            raise
+        with self._lock:
+            cursor = self.conn.cursor()
+            try:
+                # 删除测试方法
+                cursor.execute("DELETE FROM test_methods WHERE test_case_id = ?", (test_id,))
+                # 删除测试用例
+                cursor.execute("DELETE FROM test_cases WHERE id = ?", (test_id,))
+                self.conn.commit()
+                logger.info(f"已删除测试用例: {test_id}")
+            except Exception as e:
+                logger.error(f"删除测试用例失败: {e}")
+                self.conn.rollback()
+                raise
+
+    def delete_test_method(self, test_case_id: str, method_name: str) -> bool:
+        """
+        删除指定测试用例中的指定测试方法（所有版本）
+
+        Args:
+            test_case_id: 测试用例 ID
+            method_name: 方法名
+
+        Returns:
+            是否成功删除（True 表示有记录被删除）
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            try:
+                # 删除所有版本的该方法
+                cursor.execute("""
+                    DELETE FROM test_methods
+                    WHERE test_case_id = ? AND method_name = ?
+                """, (test_case_id, method_name))
+                deleted_count = cursor.rowcount
+                self.conn.commit()
+
+                if deleted_count > 0:
+                    logger.debug(f"已删除测试方法: {test_case_id}.{method_name} ({deleted_count} 个版本)")
+                    return True
+                return False
+            except Exception as e:
+                logger.error(f"删除测试方法失败: {e}")
+                self.conn.rollback()
+                raise
+
+    def delete_mutant(self, mutant_id: str) -> None:
+        """删除变异体"""
+        with self._lock:
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute("DELETE FROM mutants WHERE id = ?", (mutant_id,))
+                self.conn.commit()
+                logger.info(f"已删除变异体: {mutant_id}")
+            except Exception as e:
+                logger.error(f"删除变异体失败: {e}")
+                self.conn.rollback()
+                raise
 
     def save_evaluation_result(self, result: EvaluationResult) -> None:
         """保存评估结果"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO evaluation_results (test_id, mutant_id, passed, error_message, execution_time, coverage, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            result.test_id,
-            result.mutant_id,
-            1 if result.passed else 0,
-            result.error_message,
-            result.execution_time,
-            result.coverage.model_dump_json() if result.coverage else None,
-            result.timestamp.isoformat(),
-        ))
-        self.conn.commit()
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO evaluation_results (test_id, mutant_id, passed, error_message, execution_time, coverage, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                result.test_id,
+                result.mutant_id,
+                1 if result.passed else 0,
+                result.error_message,
+                result.execution_time,
+                result.coverage.model_dump_json() if result.coverage else None,
+                result.timestamp.isoformat(),
+            ))
+            self.conn.commit()
 
     def _row_to_mutant(self, row: sqlite3.Row) -> Mutant:
         """将数据库行转换为 Mutant 对象"""
@@ -503,10 +566,14 @@ class Database:
         )
 
     def _row_to_test_case(self, row: sqlite3.Row) -> TestCase:
-        """将数据库行转换为 TestCase 对象，从 test_methods 表加载最新版本的方法"""
+        """将数据库行转换为 TestCase 对象，从 test_methods 表加载最新版本的方法
+
+        注意：此方法假设调用者已经获取了锁，因为它会创建新的 cursor
+        """
         test_case_id = row["id"]
 
         # 从 test_methods 表中加载该测试用例的所有最新版本的方法
+        # 注意：这里创建新的 cursor，所以调用者必须已经获取了锁
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT tm.* FROM test_methods tm
@@ -556,54 +623,56 @@ class Database:
 
     def get_test_method_versions(self, test_case_id: str, method_name: str) -> List[TestMethod]:
         """获取测试方法的所有历史版本"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM test_methods
-            WHERE test_case_id = ? AND method_name = ?
-            ORDER BY version DESC
-        """, (test_case_id, method_name))
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT * FROM test_methods
+                WHERE test_case_id = ? AND method_name = ?
+                ORDER BY version DESC
+            """, (test_case_id, method_name))
 
-        methods = []
-        for row in cursor.fetchall():
-            method = TestMethod(
-                method_name=row["method_name"],
-                code=row["code"],
-                target_method=row["target_method"],
-                description=row["description"],
-                version=row["version"],
-                created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else datetime.now(),
-                updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else datetime.now(),
-            )
-            methods.append(method)
+            methods = []
+            for row in cursor.fetchall():
+                method = TestMethod(
+                    method_name=row["method_name"],
+                    code=row["code"],
+                    target_method=row["target_method"],
+                    description=row["description"],
+                    version=row["version"],
+                    created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else datetime.now(),
+                    updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else datetime.now(),
+                )
+                methods.append(method)
 
-        return methods
+            return methods
 
     def get_all_test_methods(self, test_case_id: str) -> Dict[str, List[TestMethod]]:
         """获取测试用例的所有方法及其历史版本"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM test_methods
-            WHERE test_case_id = ?
-            ORDER BY method_name, version DESC
-        """, (test_case_id,))
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT * FROM test_methods
+                WHERE test_case_id = ?
+                ORDER BY method_name, version DESC
+            """, (test_case_id,))
 
-        methods_by_name: Dict[str, List[TestMethod]] = {}
-        for row in cursor.fetchall():
-            method_name = row["method_name"]
-            method = TestMethod(
-                method_name=method_name,
-                code=row["code"],
-                target_method=row["target_method"],
-                description=row["description"],
-                version=row["version"],
-                created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else datetime.now(),
-                updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else datetime.now(),
-            )
-            if method_name not in methods_by_name:
-                methods_by_name[method_name] = []
-            methods_by_name[method_name].append(method)
+            methods_by_name: Dict[str, List[TestMethod]] = {}
+            for row in cursor.fetchall():
+                method_name = row["method_name"]
+                method = TestMethod(
+                    method_name=method_name,
+                    code=row["code"],
+                    target_method=row["target_method"],
+                    description=row["description"],
+                    version=row["version"],
+                    created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else datetime.now(),
+                    updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else datetime.now(),
+                )
+                if method_name not in methods_by_name:
+                    methods_by_name[method_name] = []
+                methods_by_name[method_name].append(method)
 
-        return methods_by_name
+            return methods_by_name
 
     def save_method_coverage(self, coverage, iteration: int) -> None:
         """
@@ -617,26 +686,27 @@ class Database:
         # 提取简单类名（去掉包名）
         simple_class_name = coverage.class_name.split('.')[-1] if '.' in coverage.class_name else coverage.class_name
 
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO method_coverage
-            (iteration, class_name, method_name, covered_lines, missed_lines,
-             total_lines, covered_branches, total_branches, line_coverage, branch_coverage, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            iteration,
-            simple_class_name,  # 使用简单类名
-            coverage.method_name,
-            json.dumps(coverage.covered_lines),
-            json.dumps(coverage.missed_lines),
-            coverage.total_lines,
-            coverage.covered_branches,
-            coverage.total_branches,
-            coverage.line_coverage_rate,
-            coverage.branch_coverage_rate,
-            datetime.now().isoformat(),
-        ))
-        self.conn.commit()
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO method_coverage
+                (iteration, class_name, method_name, covered_lines, missed_lines,
+                 total_lines, covered_branches, total_branches, line_coverage, branch_coverage, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                iteration,
+                simple_class_name,  # 使用简单类名
+                coverage.method_name,
+                json.dumps(coverage.covered_lines),
+                json.dumps(coverage.missed_lines),
+                coverage.total_lines,
+                coverage.covered_branches,
+                coverage.total_branches,
+                coverage.line_coverage_rate,
+                coverage.branch_coverage_rate,
+                datetime.now().isoformat(),
+            ))
+            self.conn.commit()
 
     def get_method_coverage(self, class_name: str, method_name: str):
         """
@@ -649,17 +719,18 @@ class Database:
         Returns:
             MethodCoverage 对象或 None
         """
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM method_coverage
-            WHERE class_name = ? AND method_name = ?
-            ORDER BY iteration DESC, id DESC
-            LIMIT 1
-        """, (class_name, method_name))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return self._row_to_method_coverage(row)
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT * FROM method_coverage
+                WHERE class_name = ? AND method_name = ?
+                ORDER BY iteration DESC, id DESC
+                LIMIT 1
+            """, (class_name, method_name))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_method_coverage(row)
 
     def get_latest_coverage_for_class(self, class_name: str) -> List:
         """
@@ -671,21 +742,23 @@ class Database:
         Returns:
             MethodCoverage 对象列表
         """
-        cursor = self.conn.cursor()
-        # 获取最新迭代号
-        cursor.execute("""
-            SELECT MAX(iteration) FROM method_coverage WHERE class_name = ?
-        """, (class_name,))
-        result = cursor.fetchone()
-        max_iteration = result[0] if result and result[0] is not None else 0
+        with self._lock:
+            cursor = self.conn.cursor()
+            # 获取最新迭代号
+            cursor.execute("""
+                SELECT MAX(iteration) FROM method_coverage WHERE class_name = ?
+            """, (class_name,))
+            result = cursor.fetchone()
+            max_iteration = result[0] if result and result[0] is not None else 0
 
-        # 获取该迭代的所有方法覆盖率
-        cursor.execute("""
-            SELECT * FROM method_coverage
-            WHERE class_name = ? AND iteration = ?
-            ORDER BY method_name
-        """, (class_name, max_iteration))
-        return [self._row_to_method_coverage(row) for row in cursor.fetchall()]
+            # 获取该迭代的所有方法覆盖率
+            cursor.execute("""
+                SELECT * FROM method_coverage
+                WHERE class_name = ? AND iteration = ?
+                ORDER BY method_name
+            """, (class_name, max_iteration))
+            rows = cursor.fetchall()
+            return [self._row_to_method_coverage(row) for row in rows]
 
     def get_low_coverage_methods(self, threshold: float = 0.8) -> List:
         """
@@ -697,19 +770,21 @@ class Database:
         Returns:
             MethodCoverage 对象列表，按覆盖率从低到高排序
         """
-        cursor = self.conn.cursor()
-        # 获取最新迭代号
-        cursor.execute("SELECT MAX(iteration) FROM method_coverage")
-        result = cursor.fetchone()
-        max_iteration = result[0] if result and result[0] is not None else 0
+        with self._lock:
+            cursor = self.conn.cursor()
+            # 获取最新迭代号
+            cursor.execute("SELECT MAX(iteration) FROM method_coverage")
+            result = cursor.fetchone()
+            max_iteration = result[0] if result and result[0] is not None else 0
 
-        # 获取低于阈值的方法
-        cursor.execute("""
-            SELECT * FROM method_coverage
-            WHERE iteration = ? AND line_coverage < ?
-            ORDER BY line_coverage ASC
-        """, (max_iteration, threshold))
-        return [self._row_to_method_coverage(row) for row in cursor.fetchall()]
+            # 获取低于阈值的方法
+            cursor.execute("""
+                SELECT * FROM method_coverage
+                WHERE iteration = ? AND line_coverage < ?
+                ORDER BY line_coverage ASC
+            """, (max_iteration, threshold))
+            rows = cursor.fetchall()
+            return [self._row_to_method_coverage(row) for row in rows]
 
     def get_all_method_coverage(self, iteration: Optional[int] = None) -> List:
         """
@@ -721,20 +796,22 @@ class Database:
         Returns:
             MethodCoverage 对象列表
         """
-        cursor = self.conn.cursor()
+        with self._lock:
+            cursor = self.conn.cursor()
 
-        if iteration is None:
-            # 获取最新迭代号
-            cursor.execute("SELECT MAX(iteration) FROM method_coverage")
-            result = cursor.fetchone()
-            iteration = result[0] if result and result[0] is not None else 0
+            if iteration is None:
+                # 获取最新迭代号
+                cursor.execute("SELECT MAX(iteration) FROM method_coverage")
+                result = cursor.fetchone()
+                iteration = result[0] if result and result[0] is not None else 0
 
-        cursor.execute("""
-            SELECT * FROM method_coverage
-            WHERE iteration = ?
-            ORDER BY class_name, method_name
-        """, (iteration,))
-        return [self._row_to_method_coverage(row) for row in cursor.fetchall()]
+            cursor.execute("""
+                SELECT * FROM method_coverage
+                WHERE iteration = ?
+                ORDER BY class_name, method_name
+            """, (iteration,))
+            rows = cursor.fetchall()
+            return [self._row_to_method_coverage(row) for row in rows]
 
     def _row_to_method_coverage(self, row: sqlite3.Row):
         """将数据库行转换为 MethodCoverage 对象"""
@@ -766,21 +843,22 @@ class Database:
             is_public: 是否为 public 类
             is_interface: 是否为接口
         """
-        cursor = self.conn.cursor()
-        now = datetime.now().isoformat()
+        with self._lock:
+            cursor = self.conn.cursor()
+            now = datetime.now().isoformat()
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO class_file_mapping
-            (class_name, simple_name, file_path, package_name, is_public, is_interface, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?,
-                    COALESCE((SELECT created_at FROM class_file_mapping WHERE class_name = ?), ?),
-                    ?)
-        """, (class_name, simple_name, file_path, package_name,
-              1 if is_public else 0, 1 if is_interface else 0,
-              class_name, now, now))
+            cursor.execute("""
+                INSERT OR REPLACE INTO class_file_mapping
+                (class_name, simple_name, file_path, package_name, is_public, is_interface, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?,
+                        COALESCE((SELECT created_at FROM class_file_mapping WHERE class_name = ?), ?),
+                        ?)
+            """, (class_name, simple_name, file_path, package_name,
+                  1 if is_public else 0, 1 if is_interface else 0,
+                  class_name, now, now))
 
-        self.conn.commit()
-        logger.debug(f"保存类映射: {class_name} -> {file_path}")
+            self.conn.commit()
+            logger.debug(f"保存类映射: {class_name} -> {file_path}")
 
     def get_class_file_path(self, class_name: str) -> Optional[str]:
         """
@@ -792,27 +870,28 @@ class Database:
         Returns:
             文件路径，如果找不到则返回 None
         """
-        cursor = self.conn.cursor()
+        with self._lock:
+            cursor = self.conn.cursor()
 
-        # 先尝试完整类名
-        cursor.execute("""
-            SELECT file_path FROM class_file_mapping WHERE class_name = ?
-        """, (class_name,))
-        result = cursor.fetchone()
+            # 先尝试完整类名
+            cursor.execute("""
+                SELECT file_path FROM class_file_mapping WHERE class_name = ?
+            """, (class_name,))
+            result = cursor.fetchone()
 
-        if result:
-            return result['file_path']
+            if result:
+                return result['file_path']
 
-        # 再尝试简单类名
-        cursor.execute("""
-            SELECT file_path FROM class_file_mapping WHERE simple_name = ?
-        """, (class_name,))
-        result = cursor.fetchone()
+            # 再尝试简单类名
+            cursor.execute("""
+                SELECT file_path FROM class_file_mapping WHERE simple_name = ?
+            """, (class_name,))
+            result = cursor.fetchone()
 
-        if result:
-            return result['file_path']
+            if result:
+                return result['file_path']
 
-        return None
+            return None
 
     def get_classes_in_file(self, file_path: str) -> List[Dict[str, Any]]:
         """
@@ -824,13 +903,14 @@ class Database:
         Returns:
             类信息列表
         """
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM class_file_mapping WHERE file_path = ?
-        """, (file_path,))
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT * FROM class_file_mapping WHERE file_path = ?
+            """, (file_path,))
 
-        results = cursor.fetchall()
-        return [dict(row) for row in results]
+            results = cursor.fetchall()
+            return [dict(row) for row in results]
 
     def get_all_class_mappings(self) -> List[Dict[str, Any]]:
         """
@@ -839,18 +919,20 @@ class Database:
         Returns:
             所有类映射信息列表
         """
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM class_file_mapping ORDER BY class_name")
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM class_file_mapping ORDER BY class_name")
 
-        results = cursor.fetchall()
-        return [dict(row) for row in results]
+            results = cursor.fetchall()
+            return [dict(row) for row in results]
 
     def clear_class_mappings(self) -> None:
         """清空类映射表"""
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM class_file_mapping")
-        self.conn.commit()
-        logger.info("已清空类映射表")
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM class_file_mapping")
+            self.conn.commit()
+            logger.info("已清空类映射表")
 
     def close(self) -> None:
         """关闭数据库连接"""

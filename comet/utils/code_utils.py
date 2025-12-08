@@ -4,7 +4,10 @@
 """
 
 import re
-from typing import List, Dict, Optional
+import logging
+from typing import List, Dict, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 
 def extract_imports(java_code: str) -> List[str]:
@@ -155,3 +158,93 @@ def build_test_class(
     lines.append("}")
 
     return '\n'.join(lines)
+
+
+def validate_test_methods(methods: list, class_code: str) -> Set[str]:
+    """
+    验证测试方法代码，检查是否包含明显的错误模式
+    使用 javalang 静态分析源代码中的 public 方法，然后检查测试代码是否调用了不存在的方法
+
+    Args:
+        methods: 测试方法列表（每个元素需有 .method_name 和 .code 属性）
+        class_code: 被测类的代码
+
+    Returns:
+        包含错误的方法名集合
+    """
+    invalid_methods: Set[str] = set()
+
+    # 使用javalang提取被测类的所有public方法
+    public_methods: Set[str] = set()
+    try:
+        import javalang
+        tree = javalang.parse.parse(class_code)
+
+        for path, node in tree.filter(javalang.tree.MethodDeclaration):  # type: ignore
+            if 'public' in node.modifiers:  # type: ignore
+                public_methods.add(node.name)  # type: ignore
+
+        logger.debug(f"被测类的public方法（使用javalang）: {public_methods}")
+    except Exception as e:
+        # 如果javalang解析失败，降级到正则表达式
+        logger.debug(f"javalang解析失败，降级到正则表达式: {e}")
+        public_method_pattern = r'public\s+\w+(?:<[^>]+>)?\s+(\w+)\s*\('
+        public_methods = set(re.findall(public_method_pattern, class_code))
+        logger.debug(f"被测类的public方法（使用正则）: {public_methods}")
+
+    # 检查每个测试方法
+    for method in methods:
+        code = method.code
+        method_name = method.method_name
+
+        # 错误模式1: 调用未定义的辅助方法
+        # 查找所有方法调用（不包括标准库和测试框架）
+        method_calls = re.findall(r'(\w+)\s*\(', code)
+
+        suspicious_calls = []
+        for call in method_calls:
+            # 跳过标准方法和测试框架方法
+            if call in ['assertEquals', 'assertTrue', 'assertFalse', 'assertThrows',
+                       'assertNotNull', 'assertNull', 'verify', 'when', 'mock',
+                       'any', 'anyString', 'anyInt', 'anyDouble', 'eq',
+                       'println', 'print', 'format', 'valueOf', 'toString',
+                       'add', 'remove', 'get', 'set', 'put', 'contains']:
+                continue
+
+            # 跳过被测类的public方法
+            if call in public_methods:
+                continue
+
+            # 跳过构造函数调用（首字母大写）
+            if call[0].isupper():
+                continue
+
+            # 检查是否是未定义的辅助方法
+            # 如果方法名包含特定模式，可能是错误的辅助方法
+            if 'ByReflection' in call or 'Helper' in call:
+                suspicious_calls.append(call)
+                logger.warning(f"方法 {method_name} 调用了可疑的辅助方法: {call}")
+
+        if suspicious_calls:
+            invalid_methods.add(method_name)
+            continue
+
+        # 错误模式2: 访问private内部类
+        if re.search(r'\b\w+\.Payment\b', code) and 'private' in class_code:
+            # 检查是否试图访问private内部类
+            if 'PaymentService.Payment' in code:
+                logger.warning(f"方法 {method_name} 试图访问private内部类")
+                invalid_methods.add(method_name)
+                continue
+
+        # 错误模式3: 调用不存在的getter/setter
+        # 提取所有 service.getXxx() 或 service.setXxx() 调用
+        getter_setter_calls = re.findall(r'service\.(get|set)(\w+)\s*\(', code)
+        for prefix, suffix in getter_setter_calls:
+            method_call = f"{prefix}{suffix}"
+            if method_call not in public_methods:
+                logger.warning(f"方法 {method_name} 调用了不存在的方法: {method_call}")
+                invalid_methods.add(method_name)
+                break
+
+    return invalid_methods

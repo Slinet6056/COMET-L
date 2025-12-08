@@ -17,14 +17,44 @@ from comet.executor import JavaExecutor, MutationEvaluator, MetricsCollector
 from comet.agent import PlannerAgent, AgentTools, AgentState
 from comet.utils import SandboxManager, ProjectScanner
 
-# 配置日志
+
+class ColoredFormatter(logging.Formatter):
+    """为终端输出添加 ANSI 颜色的格式化器"""
+
+    RESET = "\033[0m"
+    COLORS = {
+        logging.DEBUG: "\033[36m",     # 青色
+        logging.INFO: "\033[32m",      # 绿色
+        logging.WARNING: "\033[33m",   # 黄色
+        logging.ERROR: "\033[31m",     # 红色
+        logging.CRITICAL: "\033[35m",  # 洋红
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        original_levelname = record.levelname
+        color = self.COLORS.get(record.levelno, "")
+        if color:
+            record.levelname = f"{color}{record.levelname}{self.RESET}"
+        try:
+            return super().format(record)
+        finally:
+            # 恢复，避免影响其他 handler（例如文件）
+            record.levelname = original_levelname
+
+
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+# 配置日志：文件使用纯文本，终端使用彩色输出
+file_handler = logging.FileHandler('comet.log', encoding='utf-8')
+file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(ColoredFormatter(LOG_FORMAT))
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('comet.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    format=LOG_FORMAT,
+    handlers=[file_handler, console_handler],
 )
 
 logging.getLogger('httpcore').setLevel(logging.WARNING)
@@ -250,13 +280,46 @@ def run_evolution(project_path: str, components: dict, resume_state: Optional[st
         logger.info(f"已设置沙箱路径到 AgentTools: {workspace_sandbox}")
         logger.info(f"原始项目路径: {project_path}")
 
-    # 恢复状态（如果有）
-    if resume_state and Path(resume_state).exists():
-        logger.info(f"从状态恢复: {resume_state}")
-        planner.load_state(resume_state)
-
-    # 运行主循环
+    # 运行主循环（包括预处理）
     try:
+        # ===== 新增：并行预处理阶段 =====
+        if not resume_state:  # 只在非恢复模式下执行预处理
+            # 检查是否启用预处理
+            try:
+                preprocessing_enabled = config.preprocessing.enabled
+            except AttributeError:
+                preprocessing_enabled = True  # 默认启用
+
+            if preprocessing_enabled:
+                logger.info("="*60)
+                logger.info("开始并行预处理阶段")
+                logger.info("="*60)
+
+                try:
+                    from comet.parallel_preprocessing import ParallelPreprocessor
+                    preprocessor = ParallelPreprocessor(config, components)
+                    preprocess_stats = preprocessor.run(project_path, workspace_sandbox)
+
+                    logger.info("="*60)
+                    logger.info("并行预处理完成")
+                    logger.info(f"处理方法数: {preprocess_stats['total_methods']}")
+                    logger.info(f"成功: {preprocess_stats['success']}, 失败: {preprocess_stats['failed']}")
+                    logger.info(f"总测试数: {preprocess_stats['total_tests']}")
+                    logger.info(f"总变异体数: {preprocess_stats['total_mutants']}")
+                    logger.info("="*60)
+                except KeyboardInterrupt:
+                    # 中断信号会传播到外层处理
+                    raise
+                except Exception as e:
+                    logger.error(f"并行预处理失败: {e}", exc_info=True)
+                    logger.warning("将跳过预处理，继续正常流程")
+            else:
+                logger.info("并行预处理已禁用，跳过预处理阶段")
+
+        # 恢复状态（如果有）
+        if resume_state and Path(resume_state).exists():
+            logger.info(f"从状态恢复: {resume_state}")
+            planner.load_state(resume_state)
         final_state = planner.run(
             stop_on_no_improvement_rounds=config.evolution.stop_on_no_improvement_rounds,
             min_improvement_threshold=config.evolution.min_improvement_threshold
