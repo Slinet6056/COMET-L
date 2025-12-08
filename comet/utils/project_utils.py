@@ -34,17 +34,30 @@ def find_java_files(project_path: str, pattern: str = "**/*.java") -> List[Path]
     return files
 
 
-def find_java_file(project_path: str, class_name: str) -> Optional[Path]:
+def find_java_file(project_path: str, class_name: str, db=None) -> Optional[Path]:
     """
     根据类名查找 Java 文件
 
     Args:
         project_path: 项目路径
         class_name: 类名（不含包名），可能包含内部类标记 ($)
+        db: 数据库对象（可选），如果提供则优先从数据库查找
 
     Returns:
         文件路径，如果找不到则返回 None
     """
+    # 优先从数据库查找类文件映射（支持同一文件中的多个类）
+    if db is not None:
+        try:
+            file_path_str = db.get_class_file_path(class_name)
+            if file_path_str:
+                file_path = Path(file_path_str)
+                if file_path.exists():
+                    logger.debug(f"从数据库找到类文件: {class_name} -> {file_path}")
+                    return file_path
+        except Exception as e:
+            logger.debug(f"从数据库查找类文件失败: {e}")
+
     # 处理内部类：如果类名包含 $，则提取外部类名
     # 例如：ShippingService$ShippingInfo -> ShippingService
     if '$' in class_name:
@@ -120,16 +133,30 @@ def get_test_root(project_path: str) -> Optional[Path]:
     return test_root
 
 
-def get_all_java_classes(project_path: str) -> List[str]:
+def get_all_java_classes(project_path: str, db=None) -> List[str]:
     """
     获取项目中所有 Java 类的类名
 
     Args:
         project_path: 项目路径
+        db: 数据库对象（可选），如果提供则从数据库中获取所有类名
 
     Returns:
-        类名列表
+        类名列表（简单类名，不含包名）
     """
+    # 如果提供了数据库，优先从数据库获取所有类名（包括同一文件中的多个类）
+    if db is not None:
+        try:
+            mappings = db.get_all_class_mappings()
+            if mappings:
+                # 返回简单类名列表（去重）
+                class_names = list(set(m['simple_name'] for m in mappings))
+                logger.debug(f"从数据库获取到 {len(class_names)} 个类名")
+                return class_names
+        except Exception as e:
+            logger.warning(f"从数据库获取类名失败: {e}，回退到文件扫描")
+
+    # 回退到基于文件名的方式（兼容旧逻辑）
     java_files = find_java_files(project_path)
     class_names = []
 

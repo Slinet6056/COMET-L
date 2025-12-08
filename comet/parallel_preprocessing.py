@@ -145,13 +145,13 @@ class ParallelPreprocessor:
 
         all_methods = []
 
-        # 获取所有Java类
-        all_classes = get_all_java_classes(self.workspace_sandbox)
+        # 获取所有Java类（传入数据库以获取所有类，包括同一文件中的多个类）
+        all_classes = get_all_java_classes(self.workspace_sandbox, db=self.db)
         logger.info(f"找到 {len(all_classes)} 个Java类")
 
         for class_name in all_classes:
-            # 获取该类的所有公共方法
-            file_path = find_java_file(self.workspace_sandbox, class_name)
+            # 获取该类的所有公共方法（传入数据库以支持多类文件）
+            file_path = find_java_file(self.workspace_sandbox, class_name, db=self.db)
             if not file_path:
                 logger.warning(f"未找到类文件: {class_name}")
                 continue
@@ -161,11 +161,14 @@ class ParallelPreprocessor:
                 if methods:
                     for method in methods:
                         if isinstance(method, dict):
-                            method_name = method.get("name")
-                            if method_name:
-                                all_methods.append((class_name, method_name, method))
+                            # 只保留属于当前类的方法
+                            method_class = method.get("className")
+                            if method_class == class_name:
+                                method_name = method.get("name")
+                                if method_name:
+                                    all_methods.append((class_name, method_name, method))
                         else:
-                            # 如果是字符串，直接使用
+                            # 如果是字符串（旧格式），直接使用
                             all_methods.append((class_name, method, {}))
             except Exception as e:
                 logger.warning(f"获取类 {class_name} 的公共方法失败: {e}")
@@ -358,8 +361,8 @@ class ParallelPreprocessor:
             )
             sandbox_id = Path(sandbox_path).name
 
-            # 获取文件路径和文件锁
-            file_path = find_java_file(self.workspace_sandbox, class_name)
+            # 获取文件路径和文件锁（传入数据库以支持多类文件）
+            file_path = find_java_file(self.workspace_sandbox, class_name, db=self.db)
             if not file_path:
                 logger.error(f"未找到类文件: {class_name}")
                 return result
@@ -386,8 +389,8 @@ class ParallelPreprocessor:
                     logger.warning(f"测试生成失败: {class_name}.{method_name}")
                     return result
 
-                # 写入测试文件到沙箱
-                sandbox_file_path = find_java_file(sandbox_path, class_name)
+                # 写入测试文件到沙箱（传入数据库以支持多类文件）
+                sandbox_file_path = find_java_file(sandbox_path, class_name, db=self.db)
                 test_file = write_test_file(
                     project_path=sandbox_path,
                     package_name=test_case.package_name,

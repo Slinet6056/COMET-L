@@ -33,35 +33,38 @@ class TargetSelector:
         self.db = database
         self._class_cache: Optional[List[str]] = None
 
-    def select(self, criteria: str = "coverage", blacklist: Optional[set] = None) -> Dict[str, Any]:
+    def select(self, criteria: str = "coverage", blacklist: Optional[set] = None, processed_targets: Optional[set] = None) -> Dict[str, Any]:
         """
         根据策略选择目标
 
         Args:
             criteria: 选择策略（coverage/killrate/mutations/priority/random）
             blacklist: 黑名单（格式为"ClassName.methodName"）
+            processed_targets: 已处理目标列表（格式为"ClassName.methodName"）
 
         Returns:
             目标信息字典
         """
         if blacklist is None:
             blacklist = set()
+        if processed_targets is None:
+            processed_targets = set()
 
         if criteria == "coverage":
-            return self.select_by_coverage(blacklist)
+            return self.select_by_coverage(blacklist, processed_targets)
         elif criteria == "killrate":
-            return self.select_by_killrate(blacklist)
+            return self.select_by_killrate(blacklist, processed_targets)
         elif criteria == "mutations":
-            return self.select_by_mutations(blacklist)
+            return self.select_by_mutations(blacklist, processed_targets)
         elif criteria == "priority":
-            return self.select_by_priority(blacklist)
+            return self.select_by_priority(blacklist, processed_targets)
         elif criteria == "random":
-            return self.select_random(blacklist)
+            return self.select_random(blacklist, processed_targets)
         else:
             logger.warning(f"未知策略: {criteria}，使用默认策略")
-            return self.select_by_priority(blacklist)
+            return self.select_by_priority(blacklist, processed_targets)
 
-    def select_by_coverage(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
+    def select_by_coverage(self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None) -> Dict[str, Any]:
         """
         选择覆盖率最低的方法
 
@@ -69,66 +72,106 @@ class TargetSelector:
 
         Args:
             blacklist: 黑名单（格式为"ClassName.methodName"）
+            processed_targets: 已处理目标列表（格式为"ClassName.methodName"）
 
         Returns:
             目标信息字典
         """
         if blacklist is None:
             blacklist = set()
+        if processed_targets is None:
+            processed_targets = set()
 
         # 尝试从数据库获取低覆盖率方法
         low_cov_methods = self.db.get_low_coverage_methods(threshold=0.8)
 
         if low_cov_methods:
-            # 过滤黑名单，选择覆盖率最低的方法
+            # 优先选择未处理的目标
+            unprocessed_selected = None
+            processed_selected = None
+
             for selected in low_cov_methods:
                 target_key = f"{selected.class_name}.{selected.method_name}" if selected.method_name else selected.class_name
-                if target_key not in blacklist:
-                    # 不在黑名单中，选择这个目标
+                if target_key in blacklist:
+                    continue
+
+                if target_key not in processed_targets:
+                    # 找到未处理的目标，立即使用
+                    unprocessed_selected = selected
+                    break
+                elif processed_selected is None:
+                    # 记录第一个已处理但可用的目标
+                    processed_selected = selected
+
+            # 优先使用未处理的目标
+            selected = unprocessed_selected or processed_selected
+
+            if selected:
+                target_key = f"{selected.class_name}.{selected.method_name}" if selected.method_name else selected.class_name
+                is_processed = target_key in processed_targets
+
+                # 记录选择日志
+                if is_processed:
+                    logger.warning(
+                        f"选择目标（低覆盖率，已处理）: {selected.class_name}.{selected.method_name} "
+                        f"(覆盖率: {selected.line_coverage_rate:.1%})"
+                    )
+                else:
                     logger.info(
                         f"选择目标（低覆盖率）: {selected.class_name}.{selected.method_name} "
                         f"(覆盖率: {selected.line_coverage_rate:.1%})"
                     )
 
-                    # 获取方法签名
-                    methods = self._get_public_methods(selected.class_name)
-                    selected_method_info = None
-                    method_signature = None
+                # 获取方法签名
+                methods = self._get_public_methods(selected.class_name)
+                selected_method_info = None
+                method_signature = None
 
-                    if methods:
-                        for method in methods:
-                            if isinstance(method, dict) and method.get("name") == selected.method_name:
-                                selected_method_info = method
-                                method_signature = method.get("signature")
-                                break
+                if methods:
+                    for method in methods:
+                        if isinstance(method, dict) and method.get("name") == selected.method_name:
+                            selected_method_info = method
+                            method_signature = method.get("signature")
+                            break
 
-                    return {
-                        "class_name": selected.class_name,
-                        "method_name": selected.method_name,
-                        "method_signature": method_signature,
-                        "method_info": selected_method_info,
-                        "strategy": "coverage",
-                        "coverage_rate": selected.line_coverage_rate,
-                        "missed_lines": selected.missed_lines,
-                    }
+                return {
+                    "class_name": selected.class_name,
+                    "method_name": selected.method_name,
+                    "method_signature": method_signature,
+                    "method_info": selected_method_info,
+                    "strategy": "coverage",
+                    "coverage_rate": selected.line_coverage_rate,
+                    "missed_lines": selected.missed_lines,
+                }
 
-            logger.info("所有低覆盖率方法都在黑名单中")
+            logger.info("所有低覆盖率方法都在黑名单中或已处理")
 
         # 如果没有低覆盖率方法，尝试获取所有覆盖率数据
         all_coverage = self.db.get_all_method_coverage()
 
         if all_coverage:
-            # 过滤黑名单，选择覆盖率最低的方法
+            # 过滤黑名单
             filtered = [c for c in all_coverage if f"{c.class_name}.{c.method_name}" not in blacklist]
             if not filtered:
                 logger.warning("所有方法都在黑名单中，无法选择目标")
                 return {"class_name": None, "method_name": None}
 
-            selected = min(filtered, key=lambda x: x.line_coverage_rate)
-            logger.info(
-                f"选择目标（最低覆盖率）: {selected.class_name}.{selected.method_name} "
-                f"(覆盖率: {selected.line_coverage_rate:.1%})"
-            )
+            # 优先选择未处理的目标
+            unprocessed = [c for c in filtered if f"{c.class_name}.{c.method_name}" not in processed_targets]
+
+            if unprocessed:
+                selected = min(unprocessed, key=lambda x: x.line_coverage_rate)
+                logger.info(
+                    f"选择目标（最低覆盖率）: {selected.class_name}.{selected.method_name} "
+                    f"(覆盖率: {selected.line_coverage_rate:.1%})"
+                )
+            else:
+                # 所有目标都已处理，选择已处理中覆盖率最低的
+                selected = min(filtered, key=lambda x: x.line_coverage_rate)
+                logger.warning(
+                    f"选择目标（最低覆盖率，已处理）: {selected.class_name}.{selected.method_name} "
+                    f"(覆盖率: {selected.line_coverage_rate:.1%})"
+                )
 
             # 获取方法签名
             methods = self._get_public_methods(selected.class_name)
@@ -182,15 +225,21 @@ class TargetSelector:
             "strategy": "coverage",
         }
 
-    def select_by_mutations(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
+    def select_by_mutations(self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None) -> Dict[str, Any]:
         """
         选择变异体最少的类
+
+        Args:
+            blacklist: 黑名单（格式为"ClassName.methodName"）
+            processed_targets: 已处理目标列表（格式为"ClassName.methodName"）
 
         Returns:
             目标信息字典
         """
         if blacklist is None:
             blacklist = set()
+        if processed_targets is None:
+            processed_targets = set()
 
         all_classes = self._get_all_classes()
 
@@ -207,10 +256,20 @@ class TargetSelector:
         # 按变异体数量升序遍历，找到不在黑名单的目标
         sorted_classes = sorted(all_classes, key=lambda x: mutant_counts.get(x, float("inf")))
 
+        # 先尝试找未处理的目标
         for candidate_class in sorted_classes:
-            method_info, method_name, method_signature = self._get_first_available_method(candidate_class, blacklist)
+            method_info, method_name, method_signature = self._get_first_available_method(
+                candidate_class, blacklist, processed_targets, prefer_unprocessed=True
+            )
             if method_name is not None:
-                logger.info(f"选择目标（按变异体数量）: {candidate_class}.{method_name}")
+                target_key = f"{candidate_class}.{method_name}"
+                is_processed = target_key in processed_targets
+
+                if is_processed:
+                    logger.warning(f"选择目标（按变异体数量，已处理）: {candidate_class}.{method_name}")
+                else:
+                    logger.info(f"选择目标（按变异体数量）: {candidate_class}.{method_name}")
+
                 return {
                     "class_name": candidate_class,
                     "method_name": method_name,
@@ -222,15 +281,21 @@ class TargetSelector:
         logger.warning("按变异体数量未找到可用目标（可能全部在黑名单或无 public 方法）")
         return {"class_name": None, "method_name": None}
 
-    def select_by_priority(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
+    def select_by_priority(self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None) -> Dict[str, Any]:
         """
         综合评分选择目标
+
+        Args:
+            blacklist: 黑名单（格式为"ClassName.methodName"）
+            processed_targets: 已处理目标列表（格式为"ClassName.methodName"）
 
         Returns:
             目标信息字典
         """
         if blacklist is None:
             blacklist = set()
+        if processed_targets is None:
+            processed_targets = set()
 
         all_classes = self._get_all_classes()
 
@@ -255,9 +320,18 @@ class TargetSelector:
         sorted_classes = sorted(all_classes, key=lambda x: class_scores.get(x, float("inf")))
 
         for candidate_class in sorted_classes:
-            method_info, method_name, method_signature = self._get_first_available_method(candidate_class, blacklist)
+            method_info, method_name, method_signature = self._get_first_available_method(
+                candidate_class, blacklist, processed_targets, prefer_unprocessed=True
+            )
             if method_name is not None:
-                logger.info(f"选择目标（综合评分）: {candidate_class}.{method_name}")
+                target_key = f"{candidate_class}.{method_name}"
+                is_processed = target_key in processed_targets
+
+                if is_processed:
+                    logger.warning(f"选择目标（综合评分，已处理）: {candidate_class}.{method_name}")
+                else:
+                    logger.info(f"选择目标（综合评分）: {candidate_class}.{method_name}")
+
                 return {
                     "class_name": candidate_class,
                     "method_name": method_name,
@@ -270,15 +344,21 @@ class TargetSelector:
         logger.warning("综合评分未找到可用目标（可能全部在黑名单或无 public 方法）")
         return {"class_name": None, "method_name": None}
 
-    def select_random(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
+    def select_random(self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None) -> Dict[str, Any]:
         """
         随机选择目标
+
+        Args:
+            blacklist: 黑名单（格式为"ClassName.methodName"）
+            processed_targets: 已处理目标列表（格式为"ClassName.methodName"）
 
         Returns:
             目标信息字典
         """
         if blacklist is None:
             blacklist = set()
+        if processed_targets is None:
+            processed_targets = set()
 
         import random
 
@@ -288,19 +368,33 @@ class TargetSelector:
             return {"class_name": None, "method_name": None}
 
         # 过滤出有可用方法且不在黑名单的类
-        eligible_targets = []
-        for class_name in all_classes:
-            method_info, method_name, method_signature = self._get_first_available_method(class_name, blacklist, allow_first_only=False)
-            if method_name is not None:
-                eligible_targets.append((class_name, method_info, method_name, method_signature))
+        unprocessed_targets = []
+        processed_targets_list = []
 
-        if not eligible_targets:
+        for class_name in all_classes:
+            method_info, method_name, method_signature = self._get_first_available_method(
+                class_name, blacklist, processed_targets, prefer_unprocessed=False, allow_first_only=False
+            )
+            if method_name is not None:
+                target_key = f"{class_name}.{method_name}"
+                target_tuple = (class_name, method_info, method_name, method_signature)
+
+                if target_key in processed_targets:
+                    processed_targets_list.append(target_tuple)
+                else:
+                    unprocessed_targets.append(target_tuple)
+
+        # 优先从未处理的目标中随机选择
+        if unprocessed_targets:
+            selected_class, selected_method_info, method_name, method_signature = random.choice(unprocessed_targets)
+            logger.info(f"选择目标（随机）: {selected_class}.{method_name}")
+        elif processed_targets_list:
+            selected_class, selected_method_info, method_name, method_signature = random.choice(processed_targets_list)
+            logger.warning(f"选择目标（随机，已处理）: {selected_class}.{method_name}")
+        else:
             logger.warning("随机选择未找到可用目标（可能全部在黑名单或无 public 方法）")
             return {"class_name": None, "method_name": None}
 
-        selected_class, selected_method_info, method_name, method_signature = random.choice(eligible_targets)
-
-        logger.info(f"选择目标（随机）: {selected_class}.{method_name}")
         return {
             "class_name": selected_class,
             "method_name": method_name,
@@ -309,7 +403,7 @@ class TargetSelector:
             "strategy": "random",
         }
 
-    def select_by_killrate(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
+    def select_by_killrate(self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None) -> Dict[str, Any]:
         """
         按杀死率选择目标（优先选择杀死率低的方法）
 
@@ -317,12 +411,15 @@ class TargetSelector:
 
         Args:
             blacklist: 黑名单（格式为"ClassName.methodName"）
+            processed_targets: 已处理目标列表（格式为"ClassName.methodName"）
 
         Returns:
             目标信息字典
         """
         if blacklist is None:
             blacklist = set()
+        if processed_targets is None:
+            processed_targets = set()
 
         # 获取所有方法的变异体统计信息
         stats = self.db.get_method_mutant_stats()
@@ -330,7 +427,7 @@ class TargetSelector:
         if not stats:
             logger.info("没有变异体统计数据，使用默认选择策略")
             # 如果没有变异体数据，回退到 coverage 策略
-            return self.select_by_coverage(blacklist)
+            return self.select_by_coverage(blacklist, processed_targets)
 
         # 过滤黑名单，只保留有变异体的方法
         candidates = []
@@ -349,17 +446,33 @@ class TargetSelector:
         # 按杀死率升序排序（杀死率低的优先）
         candidates.sort(key=lambda x: x[1]["killrate"])
 
-        # 选择杀死率最低的方法
-        selected_key, selected_stat = candidates[0]
+        # 优先选择未处理的目标
+        unprocessed_candidates = [(k, s) for k, s in candidates if k not in processed_targets]
+
+        if unprocessed_candidates:
+            selected_key, selected_stat = unprocessed_candidates[0]
+            is_processed = False
+        else:
+            # 所有候选都已处理，选择已处理中杀死率最低的
+            selected_key, selected_stat = candidates[0]
+            is_processed = True
         class_name = selected_stat["class_name"]
         method_name = selected_stat["method_name"]
 
-        logger.info(
-            f"选择目标（按杀死率）: {class_name}.{method_name} "
-            f"(杀死率: {selected_stat['killrate']:.1%}, "
-            f"已杀死: {selected_stat['killed']}/{selected_stat['total']}, "
-            f"幸存: {selected_stat['survived']})"
-        )
+        if is_processed:
+            logger.warning(
+                f"选择目标（按杀死率，已处理）: {class_name}.{method_name} "
+                f"(杀死率: {selected_stat['killrate']:.1%}, "
+                f"已杀死: {selected_stat['killed']}/{selected_stat['total']}, "
+                f"幸存: {selected_stat['survived']})"
+            )
+        else:
+            logger.info(
+                f"选择目标（按杀死率）: {class_name}.{method_name} "
+                f"(杀死率: {selected_stat['killrate']:.1%}, "
+                f"已杀死: {selected_stat['killed']}/{selected_stat['total']}, "
+                f"幸存: {selected_stat['survived']})"
+            )
 
         # 获取方法签名
         methods = self._get_public_methods(class_name)
@@ -387,14 +500,35 @@ class TargetSelector:
 
     def _get_all_classes(self) -> List[str]:
         """
-        获取项目中所有的类名（缓存）
+        获取项目中所有的类名（缓存，排除接口）
 
         Returns:
-            类名列表
+            类名列表（不包括接口）
         """
         if self._class_cache is None:
-            self._class_cache = get_all_java_classes(self.project_path)
-            logger.info(f"找到 {len(self._class_cache)} 个 Java 类")
+            # 传入数据库对象，以便获取所有类名（包括同一文件中的多个类）
+            all_classes = get_all_java_classes(self.project_path, db=self.db)
+
+            # 过滤掉接口（接口没有实现代码，无法生成测试和变异体）
+            if self.db:
+                filtered_classes = []
+                for class_name in all_classes:
+                    mappings = self.db.get_all_class_mappings()
+                    is_interface = False
+                    for mapping in mappings:
+                        if mapping.get('simple_name') == class_name and mapping.get('is_interface'):
+                            is_interface = True
+                            break
+                    if not is_interface:
+                        filtered_classes.append(class_name)
+
+                if len(filtered_classes) < len(all_classes):
+                    logger.info(f"过滤掉 {len(all_classes) - len(filtered_classes)} 个接口，保留 {len(filtered_classes)} 个类")
+                self._class_cache = filtered_classes
+            else:
+                self._class_cache = all_classes
+
+            logger.info(f"找到 {len(self._class_cache)} 个 Java 类（不含接口）")
         return self._class_cache
 
     def _get_public_methods(self, class_name: str) -> List[str]:
@@ -405,22 +539,34 @@ class TargetSelector:
             class_name: 类名
 
         Returns:
-            方法名列表
+            方法名列表（只返回属于指定类的方法）
         """
         from ..utils.project_utils import find_java_file
 
-        # 查找文件
-        file_path = find_java_file(self.project_path, class_name)
+        # 优先从数据库查找类文件映射（支持同一文件中的多个类）
+        file_path = find_java_file(self.project_path, class_name, db=self.db)
+
         if not file_path:
             logger.warning(f"未找到类文件: {class_name}")
             return []
 
         # 使用 JavaExecutor 获取 public 方法
         try:
-            methods = self.java_executor.get_public_methods(str(file_path))
-            if methods:
-                logger.debug(f"类 {class_name} 有 {len(methods)} 个 public 方法")
-                return methods
+            all_methods = self.java_executor.get_public_methods(str(file_path))
+            if all_methods:
+                # 过滤出属于指定类的方法
+                class_methods = []
+                for method in all_methods:
+                    if isinstance(method, dict):
+                        # 新格式：包含 className 字段
+                        if method.get('className') == class_name:
+                            class_methods.append(method)
+                    else:
+                        # 旧格式：字符串，无法区分类，保留所有方法（向后兼容）
+                        class_methods.append(method)
+
+                logger.debug(f"类 {class_name} 有 {len(class_methods)} 个 public 方法")
+                return class_methods
         except Exception as e:
             logger.error(f"获取 public 方法失败: {e}")
 
@@ -428,7 +574,12 @@ class TargetSelector:
         return []
 
     def _get_first_available_method(
-        self, class_name: str, blacklist: set, allow_first_only: bool = True
+        self,
+        class_name: str,
+        blacklist: set,
+        processed_targets: Optional[set] = None,
+        prefer_unprocessed: bool = True,
+        allow_first_only: bool = True
     ) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
         """
         获取指定类中未命中黑名单的第一个 public 方法
@@ -436,13 +587,20 @@ class TargetSelector:
         Args:
             class_name: 类名
             blacklist: 黑名单集合，元素格式 ClassName.methodName
+            processed_targets: 已处理目标列表，元素格式 ClassName.methodName
+            prefer_unprocessed: 是否优先返回未处理的方法
             allow_first_only: 为 False 时会返回可用列表中的第一个，同时用于随机策略筛选
         """
+        if processed_targets is None:
+            processed_targets = set()
+
         methods = self._get_public_methods(class_name)
         if not methods:
             return None, None, None
 
-        candidates = []
+        unprocessed_candidates = []
+        processed_candidates = []
+
         for method in methods:
             method_name = method.get("name") if isinstance(method, dict) else method
             target_key = f"{class_name}.{method_name}" if method_name else class_name
@@ -451,16 +609,32 @@ class TargetSelector:
 
             method_signature = method.get("signature") if isinstance(method, dict) else None
             method_info = method if isinstance(method, dict) else None
-            candidates.append((method_info, method_name, method_signature))
+            candidate = (method_info, method_name, method_signature)
 
-            if allow_first_only:
+            if target_key in processed_targets:
+                processed_candidates.append(candidate)
+            else:
+                unprocessed_candidates.append(candidate)
+
+            # 如果只需要第一个且优先未处理的，找到未处理的就返回
+            if allow_first_only and prefer_unprocessed and unprocessed_candidates:
                 break
 
-        if not candidates:
-            return None, None, None
+        # 根据优先级返回
+        if prefer_unprocessed:
+            # 优先返回未处理的，没有的话返回已处理的
+            if unprocessed_candidates:
+                return unprocessed_candidates[0]
+            elif processed_candidates:
+                return processed_candidates[0]
+        else:
+            # 不区分优先级，优先返回已处理的，没有的话返回未处理的
+            if processed_candidates:
+                return processed_candidates[0]
+            elif unprocessed_candidates:
+                return unprocessed_candidates[0]
 
-        # 返回第一个可用方法
-        return candidates[0]
+        return None, None, None
 
     def clear_cache(self) -> None:
         """清除缓存"""

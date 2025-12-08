@@ -119,7 +119,7 @@ public class CodeAnalyzer {
     }
 
     /**
-     * 获取类的所有 public 方法
+     * 获取类的所有 public 方法（包含所属类名）
      */
     public String getPublicMethods(String filePath) throws Exception {
         File file = new File(filePath);
@@ -133,10 +133,19 @@ public class CodeAnalyzer {
             new RuntimeException("Parse result is empty"));
         JsonArray methods = new JsonArray();
 
-        cu.findAll(MethodDeclaration.class).forEach(method -> {
-            if (method.isPublic()) {
-                methods.add(extractMethodInfo(method));
-            }
+        // 遍历文件中的每个类
+        cu.findAll(ClassOrInterfaceDeclaration.class).forEach(cls -> {
+            String className = cls.getNameAsString();
+
+            // 遍历该类的所有方法
+            cls.getMethods().forEach(method -> {
+                if (method.isPublic()) {
+                    JsonObject methodInfo = extractMethodInfo(method);
+                    // 添加所属类名
+                    methodInfo.addProperty("className", className);
+                    methods.add(methodInfo);
+                }
+            });
         });
 
         return gson.toJson(methods);

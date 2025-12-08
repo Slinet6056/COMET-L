@@ -60,7 +60,7 @@ class SurefireParser:
         """
         reports_path = Path(reports_dir)
         if not reports_path.exists() or not reports_path.is_dir():
-            logger.warning(f"Surefire 报告目录不存在: {reports_dir}")
+            logger.debug(f"Surefire 报告目录不存在: {reports_dir}")
             return []
 
         results = []
