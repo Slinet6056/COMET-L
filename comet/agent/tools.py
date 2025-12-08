@@ -53,10 +53,20 @@ class AgentTools:
             func=self.select_target,
             metadata=ToolMetadata(
                 name="select_target",
-                description="选择要处理的类/方法",
-                params={},  # 无参数（空对象 {}）
-                when_to_use="当前没有选中目标时",
-                notes=[]
+                description="选择要处理的类/方法（支持多种选择策略）",
+                params={
+                    "criteria": "选择策略（可选）：coverage（默认）、killrate、mutations、priority、random"
+                },
+                when_to_use="当前没有选中目标时，或需要切换目标时",
+                notes=[
+                    "criteria 参数说明：",
+                    "- coverage: 优先选择覆盖率低的方法（适合提升整体覆盖率）",
+                    "- killrate: 优先选择杀死率低的方法（适合改进测试质量，当有较多幸存变异体时）",
+                    "- mutations: 优先选择变异体少的类（适合为缺少变异体的类生成测试）",
+                    "- priority: 综合评分策略（平衡覆盖率和变异体数量）",
+                    "- random: 随机选择（用于探索性测试）",
+                    "如果不指定 criteria，默认使用 coverage 策略"
+                ]
             )
         )
 

@@ -38,7 +38,7 @@ class TargetSelector:
         根据策略选择目标
 
         Args:
-            criteria: 选择策略（coverage/mutations/priority/random）
+            criteria: 选择策略（coverage/killrate/mutations/priority/random）
             blacklist: 黑名单（格式为"ClassName.methodName"）
 
         Returns:
@@ -49,6 +49,8 @@ class TargetSelector:
 
         if criteria == "coverage":
             return self.select_by_coverage(blacklist)
+        elif criteria == "killrate":
+            return self.select_by_killrate(blacklist)
         elif criteria == "mutations":
             return self.select_by_mutations(blacklist)
         elif criteria == "priority":
@@ -305,6 +307,82 @@ class TargetSelector:
             "method_signature": method_signature,
             "method_info": selected_method_info,
             "strategy": "random",
+        }
+
+    def select_by_killrate(self, blacklist: Optional[set] = None) -> Dict[str, Any]:
+        """
+        按杀死率选择目标（优先选择杀死率低的方法）
+
+        选择有较多幸存变异体的方法，这些方法的测试质量需要改进。
+
+        Args:
+            blacklist: 黑名单（格式为"ClassName.methodName"）
+
+        Returns:
+            目标信息字典
+        """
+        if blacklist is None:
+            blacklist = set()
+
+        # 获取所有方法的变异体统计信息
+        stats = self.db.get_method_mutant_stats()
+
+        if not stats:
+            logger.info("没有变异体统计数据，使用默认选择策略")
+            # 如果没有变异体数据，回退到 coverage 策略
+            return self.select_by_coverage(blacklist)
+
+        # 过滤黑名单，只保留有变异体的方法
+        candidates = []
+        for key, stat in stats.items():
+            if key in blacklist:
+                continue
+
+            # 只选择有变异体的方法（至少有1个变异体）
+            if stat["total"] > 0:
+                candidates.append((key, stat))
+
+        if not candidates:
+            logger.warning("所有有变异体的方法都在黑名单中")
+            return {"class_name": None, "method_name": None}
+
+        # 按杀死率升序排序（杀死率低的优先）
+        candidates.sort(key=lambda x: x[1]["killrate"])
+
+        # 选择杀死率最低的方法
+        selected_key, selected_stat = candidates[0]
+        class_name = selected_stat["class_name"]
+        method_name = selected_stat["method_name"]
+
+        logger.info(
+            f"选择目标（按杀死率）: {class_name}.{method_name} "
+            f"(杀死率: {selected_stat['killrate']:.1%}, "
+            f"已杀死: {selected_stat['killed']}/{selected_stat['total']}, "
+            f"幸存: {selected_stat['survived']})"
+        )
+
+        # 获取方法签名
+        methods = self._get_public_methods(class_name)
+        selected_method_info = None
+        method_signature = None
+
+        if methods:
+            for method in methods:
+                if isinstance(method, dict) and method.get("name") == method_name:
+                    selected_method_info = method
+                    method_signature = method.get("signature")
+                    break
+
+        return {
+            "class_name": class_name,
+            "method_name": method_name,
+            "method_signature": method_signature,
+            "method_info": selected_method_info,
+            "strategy": "killrate",
+            "killrate": selected_stat["killrate"],
+            "killed_mutants": selected_stat["killed"],
+            "total_mutants": selected_stat["total"],
+            "survived_mutants": selected_stat["survived"],
         }
 
     def _get_all_classes(self) -> List[str]:

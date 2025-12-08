@@ -300,6 +300,61 @@ class Database:
             logger.info(f"已将 {class_name}.{method_name} 的 {updated_count} 个变异体标记为 outdated")
             return updated_count
 
+    def get_method_mutant_stats(self) -> Dict[str, Dict[str, Any]]:
+        """
+        获取所有方法的变异体统计信息
+
+        Returns:
+            字典，键为 "ClassName.methodName"，值为包含统计信息的字典：
+            {
+                "class_name": str,
+                "method_name": str,
+                "total": int,  # 总变异体数（仅 valid 状态）
+                "killed": int,  # 已击杀数量
+                "survived": int,  # 幸存数量
+                "killrate": float  # 杀死率（0.0-1.0）
+            }
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            # 查询所有有效变异体的统计信息
+            cursor.execute("""
+                SELECT
+                    class_name,
+                    method_name,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status = 'killed' THEN 1 ELSE 0 END) as killed,
+                    SUM(CASE WHEN survived = 1 THEN 1 ELSE 0 END) as survived
+                FROM mutants
+                WHERE status IN ('valid', 'killed') AND method_name IS NOT NULL
+                GROUP BY class_name, method_name
+            """)
+
+            rows = cursor.fetchall()
+            stats = {}
+
+            for row in rows:
+                class_name = row["class_name"]
+                method_name = row["method_name"]
+                total = row["total"]
+                killed = row["killed"]
+                survived = row["survived"]
+
+                # 计算杀死率
+                killrate = killed / total if total > 0 else 0.0
+
+                key = f"{class_name}.{method_name}"
+                stats[key] = {
+                    "class_name": class_name,
+                    "method_name": method_name,
+                    "total": total,
+                    "killed": killed,
+                    "survived": survived,
+                    "killrate": killrate
+                }
+
+            return stats
+
     def save_test_case(self, test_case: TestCase) -> None:
         """
         保存测试用例（支持方法级别的版本控制）
