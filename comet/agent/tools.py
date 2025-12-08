@@ -1040,7 +1040,13 @@ class AgentTools:
             blacklist = {ft.get("target") for ft in self.state.failed_targets if ft.get("target")}
             logger.debug(f"黑名单中有 {len(blacklist)} 个失败的目标")
 
-        target = selector.select(criteria, blacklist=blacklist)
+        # 获取已处理目标列表
+        processed_targets = set()
+        if self.state and self.state.processed_targets:
+            processed_targets = set(self.state.processed_targets)
+            logger.debug(f"已处理目标列表中有 {len(processed_targets)} 个目标")
+
+        target = selector.select(criteria, blacklist=blacklist, processed_targets=processed_targets)
 
         # 获取目标方法的覆盖率
         if target.get("class_name") and target.get("method_name"):
@@ -1060,6 +1066,12 @@ class AgentTools:
             if previous and previous.get("class_name") and previous.get("method_name"):
                 old_class = previous["class_name"]
                 old_method = previous["method_name"]
+
+                # 将旧目标标记为已处理
+                old_target_key = f"{old_class}.{old_method}" if old_method else old_class
+                self.state.mark_target_processed(old_target_key)
+                logger.info(f"将旧目标 {old_target_key} 标记为已处理")
+
                 outdated_count = self.db.mark_mutants_outdated(old_class, old_method)
                 logger.info(
                     f"目标已切换，将 {old_class}.{old_method} 的 "
@@ -1089,8 +1101,9 @@ class AgentTools:
         from ..utils.project_utils import find_java_file
         from ..utils.code_utils import extract_class_from_file
 
-        # 查找源文件
-        file_path = find_java_file(self.project_path, class_name)
+        # 查找类文件（支持同一文件中的多个类）
+        file_path = find_java_file(self.project_path, class_name, db=self.db)
+
         if not file_path:
             logger.error(f"未找到类文件: {class_name}")
             return {"generated": 0}
@@ -1143,8 +1156,9 @@ class AgentTools:
         from ..utils.project_utils import find_java_file, write_test_file
         from ..utils.code_utils import extract_class_from_file
 
-        # 读取源代码
-        file_path = find_java_file(self.project_path, class_name)
+        # 查找类文件（支持同一文件中的多个类）
+        file_path = find_java_file(self.project_path, class_name, db=self.db)
+
         if not file_path:
             logger.error(f"未找到类文件: {class_name}")
             return {"generated": 0}
@@ -1309,8 +1323,9 @@ class AgentTools:
         logger.info(f"将完善测试用例: {test_case.class_name} (共 {len(test_case.methods)} 个测试方法)")
         logger.debug(f"选中的测试用例: ID={test_case.id}, version={test_case.version}")
 
-        # 读取被测类代码
-        file_path = find_java_file(self.project_path, class_name)
+        # 查找类文件（支持同一文件中的多个类）
+        file_path = find_java_file(self.project_path, class_name, db=self.db)
+
         if not file_path:
             logger.error(f"未找到类文件: {class_name}")
             return {"refined": 0}
@@ -1902,8 +1917,9 @@ class AgentTools:
         from ..utils.project_utils import find_java_file
         from ..utils.code_utils import extract_class_from_file
 
-        # 查找源文件
-        file_path = find_java_file(self.project_path, class_name)
+        # 查找类文件（支持同一文件中的多个类）
+        file_path = find_java_file(self.project_path, class_name, db=self.db)
+
         if not file_path:
             logger.error(f"未找到类文件: {class_name}")
             return {"generated": 0}

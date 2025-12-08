@@ -117,12 +117,7 @@ class MutationEvaluator:
             if test_result.get("stdout"):
                 logger.debug(f"  测试stdout: {test_result['stdout'][:200]}")
 
-            # 解析 Surefire 报告，获取精确的测试结果
-            reports_dir = str(Path(sandbox_path) / "target" / "surefire-reports")
-            failed_tests = self.surefire_parser.get_failed_test_names(reports_dir)
-
             # 构建测试用例名称到ID的映射
-            # 假设 TestCase.id 包含测试方法名或类名.方法名
             results = {}
 
             if test_result.get("success"):
@@ -131,47 +126,66 @@ class MutationEvaluator:
                 for test_case in test_cases:
                     results[test_case.id] = True
             else:
-                # 有测试失败 - 精确识别哪个测试失败了
-                logger.debug(f"  检测到 {len(failed_tests)} 个失败的测试")
+                # 测试失败：先检查是否存在 Surefire 报告
+                # 如果不存在，说明是编译错误，直接杀死变异体
+                reports_dir = str(Path(sandbox_path) / "target" / "surefire-reports")
+                reports_path = Path(reports_dir)
 
-                # 构建测试用例的完整名称映射
-                # 从 TestCase 的 methods 中提取每个测试方法的名称
-                test_full_names = {}  # {test_case.id: [完整测试名称列表]}
-                for test_case in test_cases:
-                    full_names = []
-                    for method in test_case.methods:
-                        # 构建完整的测试名称: package.class_name.method_name
-                        # 例如: com.example.CalculatorTest.testAddTwoPositiveNumbers
-                        if test_case.package_name:
-                            full_name = f"{test_case.package_name}.{test_case.class_name}.{method.method_name}"
-                        else:
-                            full_name = f"{test_case.class_name}.{method.method_name}"
-                        full_names.append(full_name)
-                    test_full_names[test_case.id] = full_names
-
-                for test_case in test_cases:
-                    # 检查这个测试用例中的任何一个测试方法是否失败
-                    test_failed = False
-
-                    for full_name in test_full_names[test_case.id]:
-                        if full_name in failed_tests:
-                            test_failed = True
-                            logger.debug(f"    测试方法 {full_name} (测试用例 {test_case.id}) 击杀了变异体")
-                            break
-
-                    # True = 测试通过（变异体幸存）
-                    # False = 测试失败（变异体被击杀）
-                    results[test_case.id] = not test_failed
-
-                # 如果有失败但没有匹配到任何测试用例，可能是编译错误或其他问题
-                if not any(not passed for passed in results.values()) and failed_tests:
-                    logger.warning(
-                        f"  检测到测试失败但无法匹配到具体测试用例: {failed_tests}"
-                    )
-                    logger.debug(f"  可用的测试名称: {test_full_names}")
-                    # 保守策略：标记所有测试为失败
+                if not reports_path.exists():
+                    # 编译错误或其他构建错误 - 变异体被杀死
+                    logger.debug(f"  Surefire 报告目录不存在（可能是编译错误），变异体 {mutant.id} 被杀死")
                     for test_case in test_cases:
                         results[test_case.id] = False
+                else:
+                    # 解析 Surefire 报告，获取精确的测试结果
+                    failed_tests = self.surefire_parser.get_failed_test_names(reports_dir)
+                    logger.debug(f"  检测到 {len(failed_tests)} 个失败的测试")
+
+                    if not failed_tests:
+                        # 有报告但没有失败的测试，可能是其他错误（如测试超时）
+                        # 保守策略：标记所有测试为失败
+                        logger.debug(f"  未找到具体失败的测试，保守策略标记所有测试为失败")
+                        for test_case in test_cases:
+                            results[test_case.id] = False
+                    else:
+                        # 构建测试用例的完整名称映射
+                        # 从 TestCase 的 methods 中提取每个测试方法的名称
+                        test_full_names = {}  # {test_case.id: [完整测试名称列表]}
+                        for test_case in test_cases:
+                            full_names = []
+                            for method in test_case.methods:
+                                # 构建完整的测试名称: package.class_name.method_name
+                                # 例如: com.example.CalculatorTest.testAddTwoPositiveNumbers
+                                if test_case.package_name:
+                                    full_name = f"{test_case.package_name}.{test_case.class_name}.{method.method_name}"
+                                else:
+                                    full_name = f"{test_case.class_name}.{method.method_name}"
+                                full_names.append(full_name)
+                            test_full_names[test_case.id] = full_names
+
+                        for test_case in test_cases:
+                            # 检查这个测试用例中的任何一个测试方法是否失败
+                            test_failed = False
+
+                            for full_name in test_full_names[test_case.id]:
+                                if full_name in failed_tests:
+                                    test_failed = True
+                                    logger.debug(f"    测试方法 {full_name} (测试用例 {test_case.id}) 击杀了变异体")
+                                    break
+
+                            # True = 测试通过（变异体幸存）
+                            # False = 测试失败（变异体被击杀）
+                            results[test_case.id] = not test_failed
+
+                        # 如果有失败但没有匹配到任何测试用例，可能是测试名称不匹配
+                        if not any(not passed for passed in results.values()):
+                            logger.warning(
+                                f"  检测到测试失败但无法匹配到具体测试用例: {failed_tests}"
+                            )
+                            logger.debug(f"  可用的测试名称: {test_full_names}")
+                            # 保守策略：标记所有测试为失败
+                            for test_case in test_cases:
+                                results[test_case.id] = False
 
             return results
 
