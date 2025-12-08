@@ -73,6 +73,13 @@ class LoggingConfig(BaseModel):
     file: str = Field(default="comet.log", description="日志文件")
 
 
+class PreprocessingConfig(BaseModel):
+    """并行预处理配置"""
+    enabled: bool = Field(default=True, description="是否启用并行预处理")
+    max_workers: Optional[int] = Field(default=None, description="最大并发数，null表示自动（cpu_count * 4）")
+    timeout_per_method: int = Field(default=300, ge=1, description="单个方法的超时时间（秒）")
+
+
 class Settings(BaseModel):
     """系统配置"""
     llm: LLMConfig
@@ -81,6 +88,7 @@ class Settings(BaseModel):
     evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
 
     @classmethod
     def from_yaml(cls, config_path: str) -> "Settings":

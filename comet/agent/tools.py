@@ -260,20 +260,54 @@ class AgentTools:
         # 从数据库获取所有针对同一个目标类的TestCase
         all_test_cases = self.db.get_tests_by_target_class(test_case.target_class)
 
-        # 收集所有有效的测试方法
-        all_valid_methods = []
+        # 使用字典去重：{method_name: (TestMethod, updated_at)}
+        # 保留更新时间最新的方法（同名方法只保留一个）
+        unique_methods = {}
 
+        # 先处理当前 test_case（优先使用最新的内存中的版本）
+        for method in test_case.methods:
+            # 跳过需要丢弃的方法
+            if method.method_name in discarded_methods:
+                continue
+
+            method_updated = method.updated_at or method.created_at
+            unique_methods[method.method_name] = (method, method_updated)
+
+        # 再处理数据库中的其他 TestCase
         for tc in all_test_cases:
+            # 跳过当前 test_case（已经处理过了）
             if tc.id == test_case.id:
-                # 当前TestCase：使用过滤后的方法
-                all_valid_methods.extend(test_case.methods)
-            else:
-                # 其他TestCase：使用数据库中的方法
-                all_valid_methods.extend(tc.methods)
+                continue
 
-        if not all_valid_methods:
+            for method in tc.methods:
+                # 跳过需要丢弃的方法
+                if method.method_name in discarded_methods:
+                    continue
+
+                # 检查是否已存在同名方法
+                if method.method_name in unique_methods:
+                    existing_method, existing_updated = unique_methods[method.method_name]
+                    # 比较更新时间，保留更新的
+                    method_updated = method.updated_at or method.created_at
+                    if method_updated and existing_updated:
+                        if method_updated > existing_updated:
+                            unique_methods[method.method_name] = (method, method_updated)
+                        elif method_updated == existing_updated and method.version > existing_method.version:
+                            # 时间相同时比较版本号
+                            unique_methods[method.method_name] = (method, method_updated)
+                    # 如果没有时间信息，只比较版本号
+                    elif method.version > existing_method.version:
+                        unique_methods[method.method_name] = (method, method_updated)
+                else:
+                    method_updated = method.updated_at or method.created_at
+                    unique_methods[method.method_name] = (method, method_updated)
+
+        if not unique_methods:
             logger.warning("没有有效的测试方法，跳过写入")
             return
+
+        # 提取去重后的方法列表
+        all_valid_methods = [m for m, _ in unique_methods.values()]
 
         # 构建完整的测试类代码
         method_codes = [m.code for m in all_valid_methods]
@@ -294,7 +328,7 @@ class AgentTools:
             merge=False,
         )
 
-        logger.info(f"从数据库重建测试文件: 总共 {len(all_valid_methods)} 个方法 ({len(test_case.methods)} 来自当前TestCase, {len(all_valid_methods) - len(test_case.methods)} 来自其他TestCase)")
+        logger.info(f"从数据库重建测试文件: 总共 {len(all_valid_methods)} 个方法（去重后）")
 
     def _restore_test_file_from_db(self, original_test_case):
         """
@@ -309,14 +343,32 @@ class AgentTools:
         # 从数据库获取所有针对同一个目标类的TestCase
         all_test_cases = self.db.get_tests_by_target_class(original_test_case.target_class)
 
-        # 收集所有测试方法（使用数据库中的原始数据）
-        all_methods = []
-        for tc in all_test_cases:
-            all_methods.extend(tc.methods)
+        # 使用字典去重：{method_name: (TestMethod, updated_at)}
+        # 保留更新时间最新的方法（同名方法只保留一个）
+        unique_methods = {}
 
-        if not all_methods:
+        for tc in all_test_cases:
+            for method in tc.methods:
+                # 检查是否已存在同名方法
+                if method.method_name in unique_methods:
+                    existing_method, existing_updated = unique_methods[method.method_name]
+                    # 比较更新时间，保留更新的
+                    method_updated = method.updated_at or method.created_at
+                    if method_updated and existing_updated and method_updated > existing_updated:
+                        unique_methods[method.method_name] = (method, method_updated)
+                    # 如果时间相同，比较版本号
+                    elif method.version > existing_method.version:
+                        unique_methods[method.method_name] = (method, method_updated)
+                else:
+                    method_updated = method.updated_at or method.created_at
+                    unique_methods[method.method_name] = (method, method_updated)
+
+        if not unique_methods:
             logger.warning("数据库中没有有效的测试方法，无法恢复")
             return
+
+        # 提取去重后的方法列表
+        all_methods = [m for m, _ in unique_methods.values()]
 
         # 构建完整的测试类代码
         method_codes = [m.code for m in all_methods]
@@ -337,7 +389,7 @@ class AgentTools:
             merge=False,
         )
 
-        logger.info(f"已从数据库恢复测试文件: {original_test_case.class_name} (共 {len(all_methods)} 个方法)")
+        logger.info(f"已从数据库恢复测试文件: {original_test_case.class_name} (共 {len(all_methods)} 个方法，去重后)")
 
     def _get_test_file_path(self, test_case) -> str:
         """
@@ -1141,6 +1193,37 @@ class AgentTools:
             max_test_retries=3,
         )
 
+        # 静态校验：检查测试方法代码中是否包含明显的错误模式
+        if test_case.compile_success:
+            from ..utils.code_utils import validate_test_methods, build_test_class
+            invalid_methods = validate_test_methods(test_case.methods, class_code)
+            if invalid_methods:
+                logger.warning(f"静态校验发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除")
+                test_case.methods = [m for m in test_case.methods if m.method_name not in invalid_methods]
+
+                if not test_case.methods:
+                    logger.error(f"静态校验后所有测试方法都被移除: {class_name}.{method_name}")
+                    test_case.compile_success = False
+                    test_case.compile_error = "All test methods removed by static validation"
+                else:
+                    # 重新构建测试代码
+                    method_codes = [m.code for m in test_case.methods]
+                    test_case.full_code = build_test_class(
+                        test_class_name=test_case.class_name,
+                        target_class=test_case.target_class,
+                        package_name=test_case.package_name,
+                        imports=test_case.imports,
+                        test_methods=method_codes,
+                    )
+                    # 重新写入测试文件
+                    write_test_file(
+                        project_path=self.project_path,
+                        package_name=test_case.package_name,
+                        test_code=test_case.full_code,
+                        test_class_name=test_case.class_name,
+                    )
+                    logger.info(f"静态校验后保留 {len(test_case.methods)} 个有效测试方法")
+
         # 只有编译成功才保存
         if not test_case.compile_success:
             logger.error(f"✗ 测试用例编译失败（已重试3次），不保存到数据库")
@@ -1291,6 +1374,37 @@ class AgentTools:
             max_compile_retries=3,
             max_test_retries=3,
         )
+
+        # 静态校验：检查测试方法代码中是否包含明显的错误模式
+        if refined_test_case.compile_success:
+            from ..utils.code_utils import validate_test_methods, build_test_class
+            invalid_methods = validate_test_methods(refined_test_case.methods, class_code)
+            if invalid_methods:
+                logger.warning(f"静态校验发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除")
+                refined_test_case.methods = [m for m in refined_test_case.methods if m.method_name not in invalid_methods]
+
+                if not refined_test_case.methods:
+                    logger.error(f"静态校验后所有测试方法都被移除: {class_name}.{method_name}")
+                    refined_test_case.compile_success = False
+                    refined_test_case.compile_error = "All test methods removed by static validation"
+                else:
+                    # 重新构建测试代码
+                    method_codes = [m.code for m in refined_test_case.methods]
+                    refined_test_case.full_code = build_test_class(
+                        test_class_name=refined_test_case.class_name,
+                        target_class=refined_test_case.target_class,
+                        package_name=refined_test_case.package_name,
+                        imports=refined_test_case.imports,
+                        test_methods=method_codes,
+                    )
+                    # 重新写入测试文件
+                    write_test_file(
+                        project_path=self.project_path,
+                        package_name=refined_test_case.package_name,
+                        test_code=refined_test_case.full_code,
+                        test_class_name=refined_test_case.class_name,
+                    )
+                    logger.info(f"静态校验后保留 {len(refined_test_case.methods)} 个有效测试方法")
 
         # 只有编译成功才保存
         if not refined_test_case.compile_success:

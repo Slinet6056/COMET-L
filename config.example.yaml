@@ -38,3 +38,8 @@ knowledge:
 logging:
   level: "INFO"
   file: "comet.log"
+
+preprocessing:
+  enabled: true  # 是否启用并行预处理
+  max_workers: null  # 最大并发数，null表示自动（cpu_count * 4）
+  timeout_per_method: 600  # 单个方法的超时时间（秒）
