@@ -5,7 +5,7 @@ llm:
   temperature: 0.7
   max_tokens: 4096
   supports_json_mode: true # 如果使用本地模型不支持 JSON 模式，请设置为 false
-  timeout: 300  # API 请求超时时间（秒）
+  timeout: 120  # API 请求超时时间（秒）
 
 execution:
   timeout: 300  # 秒
@@ -42,4 +42,4 @@ logging:
 preprocessing:
   enabled: true  # 是否启用并行预处理
   max_workers: null  # 最大并发数，null表示自动（cpu_count * 4）
-  timeout_per_method: 600  # 单个方法的超时时间（秒）
+  timeout_per_method: 300  # 单个方法的超时时间（秒）

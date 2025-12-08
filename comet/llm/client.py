@@ -3,8 +3,10 @@
 import time
 import logging
 from typing import Optional, List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +38,12 @@ class LLMClient:
             supports_json_mode: 是否支持 JSON 模式
             timeout: 请求超时时间（秒），默认 600 秒
         """
+        # 使用简单的超时配置
+        # OpenAI SDK 会自动处理超时，我们在每次请求时传入
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
-            timeout=timeout,
+            max_retries=0,  # 禁用SDK自动重试，我们自己处理重试逻辑
         )
         self.model = model
         self.temperature = temperature
@@ -52,6 +56,9 @@ class LLMClient:
         self.total_calls = 0
         self.total_tokens = 0
         self.total_cost = 0.0
+
+        # 用于强制超时的线程池（支持并发调用）
+        self._timeout_executor = ThreadPoolExecutor(max_workers=100)
 
     def chat(
         self,
@@ -76,19 +83,38 @@ class LLMClient:
         max_tok = max_tokens if max_tokens is not None else self.max_tokens
 
         for attempt in range(self.max_retries):
+            start_time = time.time()
             try:
                 kwargs = {
                     "model": self.model,
                     "messages": messages,
                     "temperature": temp,
                     "max_tokens": max_tok,
+                    "stream": False,  # 明确禁用流式响应
                 }
 
                 if response_format and self.supports_json_mode:
                     kwargs["response_format"] = response_format
 
-                logger.debug(f"LLM 调用参数: model={self.model}, max_tokens={max_tok}, temperature={temp}")
-                response: ChatCompletion = self.client.chat.completions.create(**kwargs)
+                logger.debug(f"LLM 调用参数: model={self.model}, max_tokens={max_tok}, temperature={temp}, timeout={self.timeout}s")
+                logger.debug(f"开始请求 LLM，超时设置: {self.timeout}s")
+
+                # 使用线程池执行器来强制实现总超时
+                def _make_request():
+                    return self.client.chat.completions.create(**kwargs)
+
+                future = self._timeout_executor.submit(_make_request)
+
+                try:
+                    response: ChatCompletion = future.result(timeout=self.timeout)
+                except FutureTimeoutError:
+                    elapsed = time.time() - start_time
+                    raise httpx.TimeoutException(
+                        f"请求总超时 ({self.timeout}s)，实际耗时: {elapsed:.2f}s"
+                    )
+
+                elapsed = time.time() - start_time
+                logger.debug(f"LLM 请求完成，耗时: {elapsed:.2f}s")
 
                 # 更新统计
                 self.total_calls += 1
@@ -118,8 +144,22 @@ class LLMClient:
                 logger.debug(f"LLM 调用成功，使用 {response.usage.total_tokens if response.usage else '?'} tokens")
                 return content
 
+            except httpx.TimeoutException as e:
+                elapsed = time.time() - start_time
+                logger.warning(
+                    f"LLM 请求超时 (尝试 {attempt + 1}/{self.max_retries}): "
+                    f"耗时 {elapsed:.2f}s, 错误: {e}"
+                )
+                if attempt == self.max_retries - 1:
+                    raise RuntimeError(f"LLM 请求超时，已重试 {self.max_retries} 次: {e}")
+                time.sleep(2 ** attempt)  # 指数退避
+
             except Exception as e:
-                logger.warning(f"LLM 调用失败 (尝试 {attempt + 1}/{self.max_retries}): {e}")
+                elapsed = time.time() - start_time
+                logger.warning(
+                    f"LLM 调用失败 (尝试 {attempt + 1}/{self.max_retries}): "
+                    f"耗时 {elapsed:.2f}s, 错误: {e}"
+                )
                 if attempt == self.max_retries - 1:
                     raise
                 time.sleep(2 ** attempt)  # 指数退避
