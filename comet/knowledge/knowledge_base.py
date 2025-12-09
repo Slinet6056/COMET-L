@@ -47,10 +47,14 @@ class KnowledgeBase:
             契约列表
         """
         if class_name not in self._contracts_cache:
-            self._contracts_cache[class_name] = self.store.get_contracts_by_class(class_name)
+            self._contracts_cache[class_name] = self.store.get_contracts_by_class(
+                class_name
+            )
         return self._contracts_cache[class_name]
 
-    def get_contracts_for_method(self, class_name: str, method_name: str) -> List[Contract]:
+    def get_contracts_for_method(
+        self, class_name: str, method_name: str
+    ) -> List[Contract]:
         """
         获取方法的契约
 
@@ -98,7 +102,9 @@ class KnowledgeBase:
         """
         return self.store.get_patterns_by_category(category)
 
-    def get_top_patterns(self, n: int = 5, min_confidence: float = 0.5) -> List[Pattern]:
+    def get_top_patterns(
+        self, n: int = 5, min_confidence: float = 0.5
+    ) -> List[Pattern]:
         """
         获取最佳模式（根据成功率和置信度）
 
@@ -126,7 +132,9 @@ class KnowledgeBase:
         self._patterns_cache = None
         logger.debug(f"更新模式统计: {pattern_id}, 成功={success}")
 
-    def get_relevant_patterns(self, class_code: str, max_patterns: int = 10) -> List[Pattern]:
+    def get_relevant_patterns(
+        self, class_code: str, max_patterns: int = 10
+    ) -> List[Pattern]:
         """
         获取与代码相关的模式（简化版：返回高成功率的模式）
 
@@ -157,7 +165,8 @@ class KnowledgeBase:
             "pattern_categories": len(set(p.category for p in all_patterns)),
             "avg_pattern_success_rate": (
                 sum(p.success_rate for p in all_patterns) / len(all_patterns)
-                if all_patterns else 0.0
+                if all_patterns
+                else 0.0
             ),
         }
 

@@ -60,8 +60,8 @@ def find_java_file(project_path: str, class_name: str, db=None) -> Optional[Path
 
     # 处理内部类：如果类名包含 $，则提取外部类名
     # 例如：ShippingService$ShippingInfo -> ShippingService
-    if '$' in class_name:
-        outer_class = class_name.split('$')[0]
+    if "$" in class_name:
+        outer_class = class_name.split("$")[0]
         logger.debug(f"检测到内部类 {class_name}，使用外部类 {outer_class} 查找文件")
         class_name = outer_class
 
@@ -150,7 +150,7 @@ def get_all_java_classes(project_path: str, db=None) -> List[str]:
             mappings = db.get_all_class_mappings()
             if mappings:
                 # 返回简单类名列表（去重）
-                class_names = list(set(m['simple_name'] for m in mappings))
+                class_names = list(set(m["simple_name"] for m in mappings))
                 logger.debug(f"从数据库获取到 {len(class_names)} 个类名")
                 return class_names
         except Exception as e:
@@ -168,7 +168,13 @@ def get_all_java_classes(project_path: str, db=None) -> List[str]:
     return class_names
 
 
-def write_test_file(project_path: str, package_name: str, test_code: str, test_class_name: str, merge: bool = True) -> Optional[Path]:
+def write_test_file(
+    project_path: str,
+    package_name: str,
+    test_code: str,
+    test_class_name: str,
+    merge: bool = True,
+) -> Optional[Path]:
     """
     将测试代码写入文件（支持追加模式）
 
@@ -199,12 +205,12 @@ def write_test_file(project_path: str, package_name: str, test_code: str, test_c
     try:
         # 如果文件存在且需要合并，则提取现有测试方法
         if merge and test_file.exists():
-            existing_code = test_file.read_text(encoding='utf-8')
+            existing_code = test_file.read_text(encoding="utf-8")
             merged_code = _merge_test_methods(existing_code, test_code)
-            test_file.write_text(merged_code, encoding='utf-8')
+            test_file.write_text(merged_code, encoding="utf-8")
             logger.info(f"测试文件已更新（合并模式）: {test_file}")
         else:
-            test_file.write_text(test_code, encoding='utf-8')
+            test_file.write_text(test_code, encoding="utf-8")
             logger.info(f"测试文件已写入: {test_file}")
         return test_file
     except Exception as e:
@@ -266,16 +272,18 @@ def _merge_test_methods(existing_code: str, new_code: str) -> str:
 
     # 在类结束前插入新方法
     if methods_to_add:
-        last_brace_pos = result_code.rfind('}')
+        last_brace_pos = result_code.rfind("}")
         if last_brace_pos == -1:
             logger.error("无法找到类结束标记")
             return result_code
 
         before_brace = result_code[:last_brace_pos].rstrip()
-        new_methods_str = '\n\n    '.join(methods_to_add)
+        new_methods_str = "\n\n    ".join(methods_to_add)
         result_code = f"{before_brace}\n\n    {new_methods_str}\n}}"
 
-    logger.info(f"成功更新 {len(methods_to_update)} 个测试方法，添加 {len(methods_to_add)} 个新测试方法")
+    logger.info(
+        f"成功更新 {len(methods_to_update)} 个测试方法，添加 {len(methods_to_add)} 个新测试方法"
+    )
     return result_code
 
 
@@ -290,15 +298,16 @@ def _extract_test_methods(code: str) -> dict:
         {method_name: method_code} 字典
     """
     import re
+
     methods = {}
-    lines = code.split('\n')
+    lines = code.split("\n")
     i = 0
 
     while i < len(lines):
         line = lines[i].strip()
 
         # 找到@Test或@ParameterizedTest注解（支持多行注解）
-        if line.startswith('@Test') or line.startswith('@ParameterizedTest'):
+        if line.startswith("@Test") or line.startswith("@ParameterizedTest"):
             method_start = i
 
             # 收集所有注解行（@Test, @ParameterizedTest, @CsvSource, @ValueSource等）
@@ -309,7 +318,14 @@ def _extract_test_methods(code: str) -> dict:
             while i < len(lines):
                 current_line = lines[i].strip()
                 # 如果是注解相关的行（@开头或注解内容如CsvSource的值）
-                if current_line.startswith('@') or (annotation_lines and (current_line.startswith('"') or current_line.startswith('}') or current_line.startswith('{'))):
+                if current_line.startswith("@") or (
+                    annotation_lines
+                    and (
+                        current_line.startswith('"')
+                        or current_line.startswith("}")
+                        or current_line.startswith("{")
+                    )
+                ):
                     annotation_lines.append(lines[i])
                     i += 1
                 else:
@@ -320,7 +336,7 @@ def _extract_test_methods(code: str) -> dict:
                 break
 
             # 提取方法名
-            match = re.search(r'void\s+(\w+)\s*\(', lines[i])
+            match = re.search(r"void\s+(\w+)\s*\(", lines[i])
             if not match:
                 continue
             method_name = match.group(1)
@@ -329,7 +345,7 @@ def _extract_test_methods(code: str) -> dict:
             method_lines = annotation_lines + [lines[i]]
 
             # 计算方法签名行中的大括号
-            brace_count = lines[i].count('{') - lines[i].count('}')
+            brace_count = lines[i].count("{") - lines[i].count("}")
             i += 1
 
             # 找到匹配的闭合大括号
@@ -338,12 +354,12 @@ def _extract_test_methods(code: str) -> dict:
                 method_lines.append(line)
 
                 # 计算大括号
-                brace_count += line.count('{') - line.count('}')
+                brace_count += line.count("{") - line.count("}")
 
                 # 当大括号平衡且当前行包含}时，方法结束
-                if brace_count == 0 and '}' in line:
+                if brace_count == 0 and "}" in line:
                     # 方法结束
-                    methods[method_name] = '\n'.join(method_lines)
+                    methods[method_name] = "\n".join(method_lines)
                     break
 
                 i += 1

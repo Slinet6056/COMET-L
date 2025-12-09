@@ -17,7 +17,8 @@ class PromptManager:
 - postconditions: 后置条件列表（返回值的保证）
 - exceptions: 异常条件列表（什么情况下抛出什么异常）"""
 
-    EXTRACT_CONTRACT_USER = Template("""请分析以下 Java 方法：
+    EXTRACT_CONTRACT_USER = Template(
+        """请分析以下 Java 方法：
 
 类名：{{ class_name }}
 方法签名：{{ method_signature }}
@@ -32,7 +33,8 @@ Javadoc：
 {{ javadoc }}
 {% endif %}
 
-请提取该方法的契约信息。""")
+请提取该方法的契约信息。"""
+    )
 
     # 模式提取提示词
     EXTRACT_PATTERN_SYSTEM = """你是一个软件缺陷分析专家，专门从 Bug 报告和修复补丁中学习缺陷模式。
@@ -46,7 +48,8 @@ Javadoc：
 - template: 如何应用这个模式进行代码变异
 - examples: 具体示例"""
 
-    EXTRACT_PATTERN_USER = Template("""请分析以下 Bug 报告：
+    EXTRACT_PATTERN_USER = Template(
+        """请分析以下 Bug 报告：
 
 {% if bug_description %}
 Bug 描述：
@@ -74,7 +77,8 @@ Bug 描述：
 ```
 {% endif %}
 
-请提取该 Bug 反映的缺陷模式。""")
+请提取该 Bug 反映的缺陷模式。"""
+    )
 
     # 变异生成提示词
     GENERATE_MUTATION_SYSTEM = """你是一个代码变异专家，专门生成语义变异来暴露测试的不足。
@@ -131,7 +135,8 @@ Bug 描述：
 4. line_start 和 line_end 必须完全覆盖要替换的代码范围
 5. 不要在 original 或 mutated 中包含行号标记（如 "1 |"）"""
 
-    GENERATE_MUTATION_USER = Template("""请为以下 Java 类生成变异体：
+    GENERATE_MUTATION_USER = Template(
+        """请为以下 Java 类生成变异体：
 
 类名：{{ class_name }}
 
@@ -173,7 +178,8 @@ Bug 描述：
 7. **只针对 `{{ target_method }}` 方法生成变异体**
 {% endif %}
 
-请生成 {{ num_mutations }} 个有意义的变异体。""")
+请生成 {{ num_mutations }} 个有意义的变异体。"""
+    )
 
     # 变异完善提示词
     REFINE_MUTATION_SYSTEM = """你是一个高级代码变异专家，专门基于现有测试的弱点生成更具针对性的变异体。
@@ -228,7 +234,8 @@ Bug 描述：
 - intent: 语义意图（字符串，说明为什么这个变异能利用测试的弱点）
 - pattern_id: 使用的缺陷模式 ID（字符串，可选）"""
 
-    REFINE_MUTATION_USER = Template("""请基于现有测试生成更具针对性的变异体：
+    REFINE_MUTATION_USER = Template(
+        """请基于现有测试生成更具针对性的变异体：
 
 类名：{{ class_name }}
 
@@ -297,7 +304,8 @@ Bug 描述：
 6. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
 {% if target_method %}
 7. **只针对 `{{ target_method }}` 方法生成变异体**
-{% endif %}""")
+{% endif %}"""
+    )
 
     # 测试生成提示词
     GENERATE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门为 Java 代码生成高质量的测试用例。
@@ -394,7 +402,8 @@ void testUserServiceWithMock() {
 - code: 测试方法完整代码（字符串，包含 @Test 注解和方法体，使用 \n 表示换行。注意：在 JSON 中直接使用 \n，JSON 解析器会自动将其转换为换行符）
 - description: 测试描述（字符串，说明这个测试验证什么）"""
 
-    GENERATE_TEST_USER = Template("""请为以下方法生成测试：
+    GENERATE_TEST_USER = Template(
+        """请为以下方法生成测试：
 
 类名：{{ class_name }}
 方法签名：{{ method_signature }}
@@ -482,7 +491,8 @@ void testServiceWithMockedDependency() {
 }
 ```
 
-请生成适量的测试方法。""")
+请生成适量的测试方法。"""
+    )
 
     # 测试完善提示词
     REFINE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门完善和改进现有的测试用例。
@@ -554,7 +564,8 @@ void testServiceWithMockedDependency() {
 - description: 测试描述
 - target_method: 目标方法名（可选）"""
 
-    REFINE_TEST_USER = Template("""请完善以下测试用例：
+    REFINE_TEST_USER = Template(
+        """请完善以下测试用例：
 
 目标类：{{ test_case.target_class }}
 {% if target_method %}
@@ -620,7 +631,8 @@ void testServiceWithMockedDependency() {
 6. **每个测试方法必须在方法内部创建被测对象实例**，不要使用类字段或依赖 @BeforeEach 初始化
 7. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
 
-请完善这些测试。""")
+请完善这些测试。"""
+    )
 
     # 测试修复提示词
     FIX_TEST_SYSTEM = """你是一个 Java 测试代码修复专家。
@@ -674,7 +686,8 @@ void testServiceWithMockedDependency() {
   "changes": "修复了什么问题的说明"
 }"""
 
-    FIX_TEST_USER = Template("""请修复以下测试代码的错误：
+    FIX_TEST_USER = Template(
+        """请修复以下测试代码的错误：
 
 被测类代码：
 ```java
@@ -706,7 +719,8 @@ void testServiceWithMockedDependency() {
 8. 返回完整的测试类代码（包括未修改的部分）
 9. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
 
-请提供修复后的完整测试类代码。""")
+请提供修复后的完整测试类代码。"""
+    )
 
     # 单个测试方法修复提示词
     FIX_SINGLE_METHOD_SYSTEM = """你是一个专业的 Java 单元测试专家。
@@ -752,7 +766,8 @@ void testServiceWithMockedDependency() {
 
 注意：code 和 fixed_method_code 字段中，在 JSON 中直接使用 \n 表示换行，JSON 解析器会自动将其转换为换行符。"""
 
-    FIX_SINGLE_METHOD_USER = Template("""请修复以下失败的测试方法：
+    FIX_SINGLE_METHOD_USER = Template(
+        """请修复以下失败的测试方法：
 
 被测类代码：
 ```java
@@ -769,10 +784,12 @@ void testServiceWithMockedDependency() {
 {{ error_message }}
 ```
 
-请分析错误原因，修复这个测试方法，并返回修复后的完整方法代码（包含 @Test 注解）。""")
+请分析错误原因，修复这个测试方法，并返回修复后的完整方法代码（包含 @Test 注解）。"""
+    )
 
     # Agent 调度提示词（使用 Template 支持动态工具描述）
-    AGENT_PLANNER_SYSTEM = Template("""你是 COMET-L 系统的调度器 Agent，负责协调测试生成和变异生成的协同进化过程。
+    AGENT_PLANNER_SYSTEM = Template(
+        """你是 COMET-L 系统的调度器 Agent，负责协调测试生成和变异生成的协同进化过程。
 
 你可以使用以下工具及其参数：
 
@@ -884,9 +901,11 @@ void testServiceWithMockedDependency() {
     "params": {"参数名": "参数值"}（对象，即使无参数也要返回 {}）,
     "reasoning": "决策理由（字符串）",
     "should_stop": false  // 可选，如果建议停止设为 true
-}""")
+}"""
+    )
 
-    AGENT_PLANNER_USER = Template("""当前状态：
+    AGENT_PLANNER_USER = Template(
+        """当前状态：
 
 迭代次数: {{ state.iteration }}
 LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
@@ -937,7 +956,8 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
 {% endfor %}
 {% endif %}
 
-请决定下一步操作。""")
+请决定下一步操作。"""
+    )
 
     @classmethod
     def render_extract_contract(
@@ -1104,7 +1124,9 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         return system, user
 
     @classmethod
-    def render_agent_planner(cls, state: Dict[str, Any], tools_description: str) -> tuple[str, str]:
+    def render_agent_planner(
+        cls, state: Dict[str, Any], tools_description: str
+    ) -> tuple[str, str]:
         """
         渲染 Agent 调度提示词
 

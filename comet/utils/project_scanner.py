@@ -56,7 +56,8 @@ class ProjectScanner:
 
         # 只保留 src/main/java 目录下的源文件
         source_files = [
-            f for f in java_files
+            f
+            for f in java_files
             if "/src/main/java/" in str(f) or "\\src\\main\\java\\" in str(f)
         ]
 
@@ -133,13 +134,15 @@ class ProjectScanner:
                 is_interface=is_interface,
             )
 
-            classes.append({
-                "class_name": full_class_name,
-                "simple_name": class_name,
-                "package": package_name,
-                "is_public": is_public,
-                "is_interface": is_interface,
-            })
+            classes.append(
+                {
+                    "class_name": full_class_name,
+                    "simple_name": class_name,
+                    "package": package_name,
+                    "is_public": is_public,
+                    "is_interface": is_interface,
+                }
+            )
 
         return classes
 

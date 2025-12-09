@@ -22,7 +22,7 @@ def extract_json_from_response(response: str) -> str:
         first_newline = response.find("\n")
         if first_newline != -1:
             # 去除开头的代码块标记（如 ```json 或 ```）
-            response = response[first_newline + 1:]
+            response = response[first_newline + 1 :]
         else:
             # 如果没有换行符，直接去除开头的 ```
             response = response[3:]

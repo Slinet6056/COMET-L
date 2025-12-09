@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MethodCoverage:
     """方法级覆盖率数据"""
+
     class_name: str
     method_name: str
     covered_lines: List[int]
@@ -28,6 +29,7 @@ class MethodCoverage:
 @dataclass
 class SourceFileCoverage:
     """源文件级覆盖率数据"""
+
     source_filename: str
     covered_lines: List[int]  # 唯一的已覆盖行号
     missed_lines: List[int]  # 唯一的未覆盖行号
@@ -70,60 +72,66 @@ class CoverageParser:
 
             method_coverages = []
 
-            for package in root.findall('.//package'):
+            for package in root.findall(".//package"):
                 # 首先收集所有 sourcefile 的行覆盖信息
                 source_line_info = {}  # {source_filename: {line_nr: {covered, missed}}}
 
-                for sourcefile in package.findall('sourcefile'):
-                    source_name = sourcefile.get('name', '')
+                for sourcefile in package.findall("sourcefile"):
+                    source_name = sourcefile.get("name", "")
                     source_line_info[source_name] = {}
 
-                    for line in sourcefile.findall('line'):
-                        line_nr = int(line.get('nr', 0))
-                        covered_instructions = int(line.get('ci', 0))
-                        missed_instructions = int(line.get('mi', 0))
+                    for line in sourcefile.findall("line"):
+                        line_nr = int(line.get("nr", 0))
+                        covered_instructions = int(line.get("ci", 0))
+                        missed_instructions = int(line.get("mi", 0))
 
                         source_line_info[source_name][line_nr] = {
-                            'covered': covered_instructions > 0,
-                            'missed': missed_instructions > 0,
+                            "covered": covered_instructions > 0,
+                            "missed": missed_instructions > 0,
                         }
 
                 # 然后解析每个类的方法
-                for clazz in package.findall('class'):
-                    class_name = clazz.get('name', '').replace('/', '.')
-                    source_filename = clazz.get('sourcefilename', '')
+                for clazz in package.findall("class"):
+                    class_name = clazz.get("name", "").replace("/", ".")
+                    source_filename = clazz.get("sourcefilename", "")
 
                     # 收集该类所有方法及其起始行号
                     methods_info = []
-                    for method in clazz.findall('method'):
-                        method_name = method.get('name', '')
+                    for method in clazz.findall("method"):
+                        method_name = method.get("name", "")
                         # 跳过构造函数
-                        if method_name == '<init>' or method_name == '<clinit>':
+                        if method_name == "<init>" or method_name == "<clinit>":
                             continue
 
-                        start_line = int(method.get('line', 0))
-                        methods_info.append({
-                            'element': method,
-                            'name': method_name,
-                            'start_line': start_line,
-                        })
+                        start_line = int(method.get("line", 0))
+                        methods_info.append(
+                            {
+                                "element": method,
+                                "name": method_name,
+                                "start_line": start_line,
+                            }
+                        )
 
                     # 按起始行号排序
-                    methods_info.sort(key=lambda x: x['start_line'])
+                    methods_info.sort(key=lambda x: x["start_line"])
 
                     # 为每个方法推断行范围并提取覆盖信息
                     for i, method_info in enumerate(methods_info):
-                        method = method_info['element']
-                        method_name = method_info['name']
-                        start_line = method_info['start_line']
+                        method = method_info["element"]
+                        method_name = method_info["name"]
+                        start_line = method_info["start_line"]
 
                         # 推断方法结束行：下一个方法的起始行-1，或文件末尾
                         if i + 1 < len(methods_info):
-                            end_line = methods_info[i + 1]['start_line'] - 1
+                            end_line = methods_info[i + 1]["start_line"] - 1
                         else:
                             # 最后一个方法：使用源文件中的最大行号
                             if source_filename in source_line_info:
-                                end_line = max(source_line_info[source_filename].keys()) if source_line_info[source_filename] else start_line
+                                end_line = (
+                                    max(source_line_info[source_filename].keys())
+                                    if source_line_info[source_filename]
+                                    else start_line
+                                )
                             else:
                                 end_line = start_line + 100  # 默认范围
 
@@ -134,27 +142,29 @@ class CoverageParser:
                         if source_filename in source_line_info:
                             for line_nr in range(start_line, end_line + 1):
                                 if line_nr in source_line_info[source_filename]:
-                                    line_info = source_line_info[source_filename][line_nr]
-                                    if line_info['covered']:
+                                    line_info = source_line_info[source_filename][
+                                        line_nr
+                                    ]
+                                    if line_info["covered"]:
                                         covered_lines.append(line_nr)
-                                    elif line_info['missed']:
+                                    elif line_info["missed"]:
                                         missed_lines.append(line_nr)
 
                         # 获取覆盖率计数器（用于验证）
                         line_counter = None
                         branch_counter = None
 
-                        for counter in method.findall('counter'):
-                            counter_type = counter.get('type', '')
-                            if counter_type == 'LINE':
+                        for counter in method.findall("counter"):
+                            counter_type = counter.get("type", "")
+                            if counter_type == "LINE":
                                 line_counter = counter
-                            elif counter_type == 'BRANCH':
+                            elif counter_type == "BRANCH":
                                 branch_counter = counter
 
                         # 解析行覆盖率统计
                         if line_counter is not None:
-                            missed_lines_count = int(line_counter.get('missed', 0))
-                            covered_lines_count = int(line_counter.get('covered', 0))
+                            missed_lines_count = int(line_counter.get("missed", 0))
+                            covered_lines_count = int(line_counter.get("covered", 0))
                             total_lines = missed_lines_count + covered_lines_count
                         else:
                             # 如果没有 counter，使用实际收集的行数
@@ -164,8 +174,8 @@ class CoverageParser:
 
                         # 解析分支覆盖率
                         if branch_counter is not None:
-                            missed_branches = int(branch_counter.get('missed', 0))
-                            covered_branches = int(branch_counter.get('covered', 0))
+                            missed_branches = int(branch_counter.get("missed", 0))
+                            covered_branches = int(branch_counter.get("covered", 0))
                             total_branches = missed_branches + covered_branches
                         else:
                             missed_branches = 0
@@ -199,7 +209,9 @@ class CoverageParser:
 
                         method_coverages.append(method_coverage)
 
-            logger.info(f"成功解析 {len(method_coverages)} 个方法的覆盖率信息（含精确行号）")
+            logger.info(
+                f"成功解析 {len(method_coverages)} 个方法的覆盖率信息（含精确行号）"
+            )
             return method_coverages
 
         except ET.ParseError as e:
@@ -209,7 +221,9 @@ class CoverageParser:
             logger.error(f"解析覆盖率报告时出错: {e}")
             return []
 
-    def aggregate_coverage_by_sourcefile(self, method_coverages: List[MethodCoverage]) -> List[SourceFileCoverage]:
+    def aggregate_coverage_by_sourcefile(
+        self, method_coverages: List[MethodCoverage]
+    ) -> List[SourceFileCoverage]:
         """
         按源文件聚合覆盖率，避免重复计算行号
 
@@ -261,8 +275,12 @@ class CoverageParser:
             total_lines = len(covered_lines_sorted) + len(missed_lines_sorted)
 
             # 计算覆盖率
-            line_coverage_rate = len(covered_lines_sorted) / total_lines if total_lines > 0 else 0.0
-            branch_coverage_rate = total_covered_branches / total_branches if total_branches > 0 else 0.0
+            line_coverage_rate = (
+                len(covered_lines_sorted) / total_lines if total_lines > 0 else 0.0
+            )
+            branch_coverage_rate = (
+                total_covered_branches / total_branches if total_branches > 0 else 0.0
+            )
 
             source_coverage = SourceFileCoverage(
                 source_filename=source_filename,
@@ -311,18 +329,18 @@ class CoverageParser:
 
             source_coverages = []
 
-            for package in root.findall('.//package'):
-                for sourcefile in package.findall('sourcefile'):
-                    source_name = sourcefile.get('name', '')
+            for package in root.findall(".//package"):
+                for sourcefile in package.findall("sourcefile"):
+                    source_name = sourcefile.get("name", "")
 
                     # 从 line 元素收集行覆盖信息
                     covered_lines = []
                     missed_lines = []
 
-                    for line in sourcefile.findall('line'):
-                        line_nr = int(line.get('nr', 0))
-                        covered_instructions = int(line.get('ci', 0))
-                        missed_instructions = int(line.get('mi', 0))
+                    for line in sourcefile.findall("line"):
+                        line_nr = int(line.get("nr", 0))
+                        covered_instructions = int(line.get("ci", 0))
+                        missed_instructions = int(line.get("mi", 0))
 
                         if covered_instructions > 0:
                             covered_lines.append(line_nr)
@@ -334,28 +352,36 @@ class CoverageParser:
                     branch_counter = sourcefile.find('counter[@type="BRANCH"]')
 
                     if line_counter is not None:
-                        total_lines = int(line_counter.get('covered', 0)) + int(line_counter.get('missed', 0))
-                        covered_count = int(line_counter.get('covered', 0))
+                        total_lines = int(line_counter.get("covered", 0)) + int(
+                            line_counter.get("missed", 0)
+                        )
+                        covered_count = int(line_counter.get("covered", 0))
                     else:
                         total_lines = len(covered_lines) + len(missed_lines)
                         covered_count = len(covered_lines)
 
                     if branch_counter is not None:
-                        total_branches = int(branch_counter.get('covered', 0)) + int(branch_counter.get('missed', 0))
-                        covered_branches = int(branch_counter.get('covered', 0))
+                        total_branches = int(branch_counter.get("covered", 0)) + int(
+                            branch_counter.get("missed", 0)
+                        )
+                        covered_branches = int(branch_counter.get("covered", 0))
                     else:
                         total_branches = 0
                         covered_branches = 0
 
                     # 计算覆盖率
-                    line_coverage_rate = covered_count / total_lines if total_lines > 0 else 0.0
-                    branch_coverage_rate = covered_branches / total_branches if total_branches > 0 else 0.0
+                    line_coverage_rate = (
+                        covered_count / total_lines if total_lines > 0 else 0.0
+                    )
+                    branch_coverage_rate = (
+                        covered_branches / total_branches if total_branches > 0 else 0.0
+                    )
 
                     # 收集该源文件包含的类
                     classes = []
-                    for clazz in package.findall('class'):
-                        if clazz.get('sourcefilename') == source_name:
-                            class_name = clazz.get('name', '').replace('/', '.')
+                    for clazz in package.findall("class"):
+                        if clazz.get("sourcefilename") == source_name:
+                            class_name = clazz.get("name", "").replace("/", ".")
                             classes.append(class_name)
 
                     source_coverage = SourceFileCoverage(
@@ -378,7 +404,9 @@ class CoverageParser:
                         f"分支 {covered_branches}/{total_branches} ({branch_coverage_rate:.1%})"
                     )
 
-            logger.info(f"从 sourcefile 元素解析得到 {len(source_coverages)} 个源文件的覆盖率信息")
+            logger.info(
+                f"从 sourcefile 元素解析得到 {len(source_coverages)} 个源文件的覆盖率信息"
+            )
             return source_coverages
 
         except ET.ParseError as e:
@@ -388,7 +416,9 @@ class CoverageParser:
             logger.error(f"解析覆盖率报告时出错: {e}")
             return []
 
-    def aggregate_global_coverage(self, method_coverages: List[MethodCoverage]) -> Dict[str, Any]:
+    def aggregate_global_coverage(
+        self, method_coverages: List[MethodCoverage]
+    ) -> Dict[str, Any]:
         """
         计算全局覆盖率（基于源文件聚合，避免重复计算）
 
@@ -427,7 +457,9 @@ class CoverageParser:
             total_branches += sc.total_branches
 
         line_coverage = total_covered_lines / total_lines if total_lines > 0 else 0.0
-        branch_coverage = total_covered_branches / total_branches if total_branches > 0 else 0.0
+        branch_coverage = (
+            total_covered_branches / total_branches if total_branches > 0 else 0.0
+        )
 
         logger.info(
             f"全局覆盖率: "
@@ -478,21 +510,27 @@ class CoverageParser:
             branch_counter = root.find('counter[@type="BRANCH"]')
 
             if line_counter is not None:
-                total_lines = int(line_counter.get('covered', 0)) + int(line_counter.get('missed', 0))
-                covered_lines = int(line_counter.get('covered', 0))
+                total_lines = int(line_counter.get("covered", 0)) + int(
+                    line_counter.get("missed", 0)
+                )
+                covered_lines = int(line_counter.get("covered", 0))
             else:
                 total_lines = 0
                 covered_lines = 0
 
             if branch_counter is not None:
-                total_branches = int(branch_counter.get('covered', 0)) + int(branch_counter.get('missed', 0))
-                covered_branches = int(branch_counter.get('covered', 0))
+                total_branches = int(branch_counter.get("covered", 0)) + int(
+                    branch_counter.get("missed", 0)
+                )
+                covered_branches = int(branch_counter.get("covered", 0))
             else:
                 total_branches = 0
                 covered_branches = 0
 
             line_coverage = covered_lines / total_lines if total_lines > 0 else 0.0
-            branch_coverage = covered_branches / total_branches if total_branches > 0 else 0.0
+            branch_coverage = (
+                covered_branches / total_branches if total_branches > 0 else 0.0
+            )
 
             logger.info(
                 f"全局覆盖率（从 XML）: "

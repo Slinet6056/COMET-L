@@ -57,9 +57,6 @@ class LLMClient:
         self.total_tokens = 0
         self.total_cost = 0.0
 
-        # 用于强制超时的线程池（支持并发调用）
-        self._timeout_executor = ThreadPoolExecutor(max_workers=100)
-
     def chat(
         self,
         messages: List[Dict[str, str]],
@@ -96,22 +93,26 @@ class LLMClient:
                 if response_format and self.supports_json_mode:
                     kwargs["response_format"] = response_format
 
-                logger.debug(f"LLM 调用参数: model={self.model}, max_tokens={max_tok}, temperature={temp}, timeout={self.timeout}s")
+                logger.debug(
+                    f"LLM 调用参数: model={self.model}, max_tokens={max_tok}, temperature={temp}, timeout={self.timeout}s"
+                )
                 logger.debug(f"开始请求 LLM，超时设置: {self.timeout}s")
 
-                # 使用线程池执行器来强制实现总超时
+                # 为每次请求创建独立的线程池执行器，避免并发场景下的共享状态问题
                 def _make_request():
                     return self.client.chat.completions.create(**kwargs)
 
-                future = self._timeout_executor.submit(_make_request)
+                # 使用 with 语句确保 executor 被正确清理
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_make_request)
 
-                try:
-                    response: ChatCompletion = future.result(timeout=self.timeout)
-                except FutureTimeoutError:
-                    elapsed = time.time() - start_time
-                    raise httpx.TimeoutException(
-                        f"请求总超时 ({self.timeout}s)，实际耗时: {elapsed:.2f}s"
-                    )
+                    try:
+                        response: ChatCompletion = future.result(timeout=self.timeout)
+                    except FutureTimeoutError:
+                        elapsed = time.time() - start_time
+                        raise httpx.TimeoutException(
+                            f"请求总超时 ({self.timeout}s)，实际耗时: {elapsed:.2f}s"
+                        )
 
                 elapsed = time.time() - start_time
                 logger.debug(f"LLM 请求完成，耗时: {elapsed:.2f}s")
@@ -137,11 +138,15 @@ class LLMClient:
                 if content is None or content == "":
                     error_msg = f"模型返回空内容 (finish_reason: {finish_reason}"
                     if response.usage:
-                        error_msg += f", completion_tokens: {response.usage.completion_tokens}"
+                        error_msg += (
+                            f", completion_tokens: {response.usage.completion_tokens}"
+                        )
                     error_msg += ")"
                     raise ValueError(error_msg)
 
-                logger.debug(f"LLM 调用成功，使用 {response.usage.total_tokens if response.usage else '?'} tokens")
+                logger.debug(
+                    f"LLM 调用成功，使用 {response.usage.total_tokens if response.usage else '?'} tokens"
+                )
                 return content
 
             except httpx.TimeoutException as e:
@@ -151,8 +156,10 @@ class LLMClient:
                     f"耗时 {elapsed:.2f}s, 错误: {e}"
                 )
                 if attempt == self.max_retries - 1:
-                    raise RuntimeError(f"LLM 请求超时，已重试 {self.max_retries} 次: {e}")
-                time.sleep(2 ** attempt)  # 指数退避
+                    raise RuntimeError(
+                        f"LLM 请求超时，已重试 {self.max_retries} 次: {e}"
+                    )
+                time.sleep(2**attempt)  # 指数退避
 
             except Exception as e:
                 elapsed = time.time() - start_time
@@ -162,7 +169,7 @@ class LLMClient:
                 )
                 if attempt == self.max_retries - 1:
                     raise
-                time.sleep(2 ** attempt)  # 指数退避
+                time.sleep(2**attempt)  # 指数退避
 
         raise RuntimeError("LLM 调用失败，已达最大重试次数")
 

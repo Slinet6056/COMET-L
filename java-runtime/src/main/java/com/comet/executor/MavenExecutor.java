@@ -5,8 +5,6 @@ import com.google.gson.JsonObject;
 import org.apache.maven.shared.invoker.*;
 
 import java.io.*;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Properties;
 
@@ -45,13 +43,13 @@ public class MavenExecutor {
         try {
             // 尝试多种方式执行 which 命令
             String[] commands = {
-                "which mvn",
-                "/usr/bin/which mvn",
-                "command -v mvn"
+                    "which mvn",
+                    "/usr/bin/which mvn",
+                    "command -v mvn"
             };
 
             for (String cmd : commands) {
-                Process process = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
+                Process process = Runtime.getRuntime().exec(new String[] { "sh", "-c", cmd });
                 BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
                 String mvnPath = reader.readLine();
                 reader.close();
@@ -89,7 +87,7 @@ public class MavenExecutor {
      */
     private String findMavenHomeByVersion() {
         try {
-            Process process = Runtime.getRuntime().exec(new String[]{"sh", "-c", "mvn --version"});
+            Process process = Runtime.getRuntime().exec(new String[] { "sh", "-c", "mvn --version" });
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {

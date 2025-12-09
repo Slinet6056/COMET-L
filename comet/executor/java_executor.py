@@ -15,7 +15,13 @@ logger = logging.getLogger(__name__)
 class JavaExecutor:
     """Java 执行器 - Python 侧接口，调用 Java 模块"""
 
-    def __init__(self, java_runtime_jar: str, java_cmd: str = "java", test_timeout: int = 30, coverage_timeout: int = 300):
+    def __init__(
+        self,
+        java_runtime_jar: str,
+        java_cmd: str = "java",
+        test_timeout: int = 30,
+        coverage_timeout: int = 300,
+    ):
         """
         初始化 Java 执行器
 
@@ -294,7 +300,7 @@ class JavaExecutor:
                 return {
                     "success": True,
                     "exitCode": 0,
-                    "note": "Compilation succeeded but output could not be parsed"
+                    "note": "Compilation succeeded but output could not be parsed",
                 }
 
         # 命令执行失败，提取详细错误信息
@@ -367,7 +373,9 @@ class JavaExecutor:
                 }
         return result
 
-    def run_single_test_method(self, project_path: str, test_class: str, test_method: str) -> Dict[str, Any]:
+    def run_single_test_method(
+        self, project_path: str, test_class: str, test_method: str
+    ) -> Dict[str, Any]:
         """
         运行单个测试方法
 

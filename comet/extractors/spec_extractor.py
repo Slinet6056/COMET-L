@@ -18,7 +18,9 @@ logger = logging.getLogger(__name__)
 class SpecExtractor:
     """契约提取器 - 从源代码中提取前置条件、后置条件和异常条件"""
 
-    def __init__(self, llm_client: LLMClient, java_executor: Optional[JavaExecutor] = None):
+    def __init__(
+        self, llm_client: LLMClient, java_executor: Optional[JavaExecutor] = None
+    ):
         """
         初始化契约提取器
 
@@ -71,7 +73,7 @@ class SpecExtractor:
             data = json.loads(cleaned_response)
 
             # 提取方法名
-            method_name = method_signature.split('(')[0].strip().split()[-1]
+            method_name = method_signature.split("(")[0].strip().split()[-1]
 
             # 创建 Contract 对象
             contract = Contract(
@@ -125,12 +127,12 @@ class SpecExtractor:
                 return []
 
             # 读取源代码
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 source_code = f.read()
 
             contracts = []
             for method in methods_data:
-                method_name = method.get('name')
+                method_name = method.get("name")
 
                 # 如果指定了方法名列表，只提取列表中的方法
                 if method_names and method_name not in method_names:
@@ -138,10 +140,10 @@ class SpecExtractor:
 
                 # 提取契约
                 contract = self.extract_from_method(
-                    class_name=class_name or method.get('className', 'Unknown'),
-                    method_signature=method.get('signature', ''),
-                    source_code=method.get('body', ''),
-                    javadoc=method.get('javadoc'),
+                    class_name=class_name or method.get("className", "Unknown"),
+                    method_signature=method.get("signature", ""),
+                    source_code=method.get("body", ""),
+                    javadoc=method.get("javadoc"),
                 )
 
                 if contract:

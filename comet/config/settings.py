@@ -9,7 +9,10 @@ from pydantic import BaseModel, Field
 
 class LLMConfig(BaseModel):
     """LLM 配置"""
-    base_url: str = Field(default="https://api.openai.com/v1", description="API 基础 URL")
+
+    base_url: str = Field(
+        default="https://api.openai.com/v1", description="API 基础 URL"
+    )
     api_key: str = Field(description="API 密钥")
     model: str = Field(default="gpt-4", description="模型名称")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
@@ -20,15 +23,19 @@ class LLMConfig(BaseModel):
 
 class ExecutionConfig(BaseModel):
     """执行配置"""
+
     timeout: int = Field(default=300, ge=1, description="超时时间（秒）")
     test_timeout: int = Field(default=30, ge=1, description="测试执行超时时间（秒）")
-    coverage_timeout: int = Field(default=300, ge=1, description="覆盖率收集超时时间（秒）")
+    coverage_timeout: int = Field(
+        default=300, ge=1, description="覆盖率收集超时时间（秒）"
+    )
     max_retries: int = Field(default=3, ge=0, description="最大重试次数")
     maven_home: Optional[str] = Field(default=None, description="Maven 安装路径")
 
 
 class PathsConfig(BaseModel):
     """路径配置"""
+
     workspace: str = Field(default="./workspace", description="工作目录")
     cache: str = Field(default="./cache", description="缓存目录")
     output: str = Field(default="./output", description="输出目录")
@@ -37,6 +44,7 @@ class PathsConfig(BaseModel):
 
 class EvolutionConfig(BaseModel):
     """进化配置"""
+
     max_iterations: int = Field(default=10, ge=1, description="最大迭代次数")
     min_improvement_threshold: float = Field(
         default=0.01, ge=0.0, le=1.0, description="最小改进阈值"
@@ -60,6 +68,7 @@ class EvolutionConfig(BaseModel):
 
 class KnowledgeConfig(BaseModel):
     """知识库配置"""
+
     enable_dynamic_update: bool = Field(default=True, description="启用动态更新")
     pattern_confidence_threshold: float = Field(
         default=0.5, ge=0.0, le=1.0, description="模式置信度阈值"
@@ -69,19 +78,26 @@ class KnowledgeConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     """日志配置"""
+
     level: str = Field(default="INFO", description="日志级别")
     file: str = Field(default="comet.log", description="日志文件")
 
 
 class PreprocessingConfig(BaseModel):
     """并行预处理配置"""
+
     enabled: bool = Field(default=True, description="是否启用并行预处理")
-    max_workers: Optional[int] = Field(default=None, description="最大并发数，null表示自动（cpu_count * 4）")
-    timeout_per_method: int = Field(default=300, ge=1, description="单个方法的超时时间（秒）")
+    max_workers: Optional[int] = Field(
+        default=None, description="最大并发数，null表示自动（cpu_count * 4）"
+    )
+    timeout_per_method: int = Field(
+        default=300, ge=1, description="单个方法的超时时间（秒）"
+    )
 
 
 class Settings(BaseModel):
     """系统配置"""
+
     llm: LLMConfig
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
@@ -142,7 +158,7 @@ class Settings(BaseModel):
         return cls(
             llm=LLMConfig(
                 api_key=api_key,
-                base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+                base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             )
         )
 

@@ -12,9 +12,6 @@ import com.google.gson.JsonArray;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
 
 /**
@@ -45,14 +42,11 @@ public class CodeAnalyzer {
             throw new Exception("Failed to parse file: " + filePath);
         }
 
-        CompilationUnit cu = parseResult.getResult().orElseThrow(() ->
-            new RuntimeException("Parse result is empty"));
+        CompilationUnit cu = parseResult.getResult().orElseThrow(() -> new RuntimeException("Parse result is empty"));
         JsonObject result = new JsonObject();
 
         // 提取包名
-        cu.getPackageDeclaration().ifPresent(pd ->
-            result.addProperty("package", pd.getNameAsString())
-        );
+        cu.getPackageDeclaration().ifPresent(pd -> result.addProperty("package", pd.getNameAsString()));
 
         // 提取类信息
         JsonArray classes = new JsonArray();
@@ -129,8 +123,7 @@ public class CodeAnalyzer {
             throw new Exception("Failed to parse file");
         }
 
-        CompilationUnit cu = parseResult.getResult().orElseThrow(() ->
-            new RuntimeException("Parse result is empty"));
+        CompilationUnit cu = parseResult.getResult().orElseThrow(() -> new RuntimeException("Parse result is empty"));
         JsonArray methods = new JsonArray();
 
         // 遍历文件中的每个类
