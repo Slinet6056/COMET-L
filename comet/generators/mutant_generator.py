@@ -37,7 +37,7 @@ def _normalize_code(code: str) -> str:
         if not has_actual_newline:
             # 使用 Python 的字符串转义处理
             try:
-                code = code.encode().decode('unicode_escape')
+                code = code.encode().decode("unicode_escape")
             except (UnicodeDecodeError, UnicodeEncodeError):
                 # 如果 unicode_escape 失败，直接替换
                 code = code.replace("\\n", "\n")
@@ -95,7 +95,9 @@ class MutantGenerator:
                 all_mutants.extend(mutants)
 
                 if len(all_mutants) >= num_mutations:
-                    logger.info(f"成功生成足够的变异体: {len(all_mutants)}/{num_mutations}")
+                    logger.info(
+                        f"成功生成足够的变异体: {len(all_mutants)}/{num_mutations}"
+                    )
                     return all_mutants[:num_mutations]
 
                 logger.warning(
@@ -170,7 +172,9 @@ class MutantGenerator:
                 return []
 
             mutations_data = data.get("mutations", [])
-            logger.debug(f"提取到 {len(mutations_data) if isinstance(mutations_data, list) else 1} 个变异数据")
+            logger.debug(
+                f"提取到 {len(mutations_data) if isinstance(mutations_data, list) else 1} 个变异数据"
+            )
             if not isinstance(mutations_data, list):
                 # 如果返回的是单个对象，转换为列表
                 mutations_data = [mutations_data]
@@ -179,11 +183,15 @@ class MutantGenerator:
             mutants = []
             for idx, mut_data in enumerate(mutations_data):
                 try:
-                    logger.debug(f"处理变异 #{idx+1}: {mut_data.get('intent', 'Unknown')}")
+                    logger.debug(
+                        f"处理变异 #{idx+1}: {mut_data.get('intent', 'Unknown')}"
+                    )
 
                     # 验证必需字段
                     if not mut_data.get("original") or not mut_data.get("mutated"):
-                        logger.warning(f"跳过变异 #{idx+1}: 缺少 original 或 mutated 字段")
+                        logger.warning(
+                            f"跳过变异 #{idx+1}: 缺少 original 或 mutated 字段"
+                        )
                         logger.debug(f"变异数据: {mut_data}")
                         continue
 
@@ -200,7 +208,9 @@ class MutantGenerator:
                     )
 
                     mutant = Mutant(
-                        id=generate_id("mutant", f"{class_name}_{mut_data.get('intent', '')}"),
+                        id=generate_id(
+                            "mutant", f"{class_name}_{mut_data.get('intent', '')}"
+                        ),
                         class_name=class_name,
                         method_name=target_method,  # 使用传入的目标方法名
                         patch=patch,
@@ -269,7 +279,9 @@ class MutantGenerator:
                 all_mutants.extend(mutants)
 
                 if len(all_mutants) >= num_mutations:
-                    logger.info(f"成功完善足够的变异体: {len(all_mutants)}/{num_mutations}")
+                    logger.info(
+                        f"成功完善足够的变异体: {len(all_mutants)}/{num_mutations}"
+                    )
                     return all_mutants[:num_mutations]
 
                 logger.warning(
@@ -353,7 +365,9 @@ class MutantGenerator:
                 return []
 
             mutations_data = data.get("mutations", [])
-            logger.debug(f"提取到 {len(mutations_data) if isinstance(mutations_data, list) else 1} 个变异数据")
+            logger.debug(
+                f"提取到 {len(mutations_data) if isinstance(mutations_data, list) else 1} 个变异数据"
+            )
             if not isinstance(mutations_data, list):
                 mutations_data = [mutations_data]
 
@@ -361,11 +375,15 @@ class MutantGenerator:
             mutants = []
             for idx, mut_data in enumerate(mutations_data):
                 try:
-                    logger.debug(f"处理变异 #{idx+1}: {mut_data.get('intent', 'Unknown')}")
+                    logger.debug(
+                        f"处理变异 #{idx+1}: {mut_data.get('intent', 'Unknown')}"
+                    )
 
                     # 验证必需字段
                     if not mut_data.get("original") or not mut_data.get("mutated"):
-                        logger.warning(f"跳过变异 #{idx+1}: 缺少 original 或 mutated 字段")
+                        logger.warning(
+                            f"跳过变异 #{idx+1}: 缺少 original 或 mutated 字段"
+                        )
                         logger.debug(f"变异数据: {mut_data}")
                         continue
 
@@ -382,7 +400,9 @@ class MutantGenerator:
                     )
 
                     mutant = Mutant(
-                        id=generate_id("mutant", f"{class_name}_{mut_data.get('intent', '')}"),
+                        id=generate_id(
+                            "mutant", f"{class_name}_{mut_data.get('intent', '')}"
+                        ),
                         class_name=class_name,
                         method_name=target_method,  # 使用传入的目标方法名
                         patch=patch,

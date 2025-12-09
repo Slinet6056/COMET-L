@@ -51,9 +51,9 @@ class StaticGuard:
             tmp_path = Path(temp_dir) / class_file_name
 
             # 创建临时文件应用变异
-            with open(tmp_path, 'w', encoding='utf-8') as tmp_file:
+            with open(tmp_path, "w", encoding="utf-8") as tmp_file:
                 # 读取原始文件
-                with open(original_file, 'r', encoding='utf-8') as f:
+                with open(original_file, "r", encoding="utf-8") as f:
                     lines = f.readlines()
 
                 logger.debug(f"原始文件有 {len(lines)} 行")
@@ -70,11 +70,14 @@ class StaticGuard:
                         # 在起始行，插入变异代码（只插入一次）
                         # 确保变异代码以换行符结尾
                         mutated_code = mutant.patch.mutated_code
-                        if not mutated_code.endswith('\n'):
-                            mutated_code += '\n'
+                        if not mutated_code.endswith("\n"):
+                            mutated_code += "\n"
                         mutated_lines.append(mutated_code)
                         mutation_applied = True
-                    elif line_num > mutant.patch.line_start and line_num <= mutant.patch.line_end:
+                    elif (
+                        line_num > mutant.patch.line_start
+                        and line_num <= mutant.patch.line_end
+                    ):
                         # 在变异范围内（起始行之后），跳过这些行
                         continue
                     else:
@@ -84,7 +87,9 @@ class StaticGuard:
                 tmp_file.writelines(mutated_lines)
 
                 if not mutation_applied:
-                    logger.warning(f"变异体 {mutant.id} 未成功应用（行号范围可能不正确）")
+                    logger.warning(
+                        f"变异体 {mutant.id} 未成功应用（行号范围可能不正确）"
+                    )
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     return False
 
@@ -92,7 +97,7 @@ class StaticGuard:
 
             # 尝试编译
             result = subprocess.run(
-                ['javac', str(tmp_path)],
+                ["javac", str(tmp_path)],
                 capture_output=True,
                 text=True,
                 timeout=30,

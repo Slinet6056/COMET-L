@@ -45,7 +45,9 @@ class AgentState:
         self.recent_improvements: List[Dict[str, Any]] = []
         self.processed_targets: List[str] = []
         self.available_targets: List[Dict[str, Any]] = []
-        self.failed_targets: List[Dict[str, Any]] = []  # 失败的目标（黑名单），包含类名、方法名和失败原因
+        self.failed_targets: List[Dict[str, Any]] = (
+            []
+        )  # 失败的目标（黑名单），包含类名、方法名和失败原因
 
         # 时间戳
         self.start_time: Optional[datetime] = None
@@ -85,7 +87,9 @@ class AgentState:
         """设置可用目标"""
         self.available_targets = targets
 
-    def add_action(self, action: str, params: Dict[str, Any], success: bool, result: Any = None) -> None:
+    def add_action(
+        self, action: str, params: Dict[str, Any], success: bool, result: Any = None
+    ) -> None:
         """
         添加操作记录
 
@@ -95,17 +99,21 @@ class AgentState:
             success: 是否成功
             result: 操作结果
         """
-        self.action_history.append({
-            "iteration": self.iteration,
-            "action": action,
-            "params": params,
-            "success": success,
-            "result": result,
-        })
+        self.action_history.append(
+            {
+                "iteration": self.iteration,
+                "action": action,
+                "params": params,
+                "success": success,
+                "result": result,
+            }
+        )
         # 只保留最近 10 次操作
         self.action_history = self.action_history[-10:]
 
-    def update_target(self, new_target: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def update_target(
+        self, new_target: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
         """
         更新当前目标，并记录上一个目标
 
@@ -145,13 +153,15 @@ class AgentState:
             logger.debug(f"目标 {target_key} 已在黑名单中")
             return
 
-        self.failed_targets.append({
-            "target": target_key,
-            "class_name": class_name,
-            "method_name": method_name,
-            "reason": reason,
-            "iteration": self.iteration,
-        })
+        self.failed_targets.append(
+            {
+                "target": target_key,
+                "class_name": class_name,
+                "method_name": method_name,
+                "reason": reason,
+                "iteration": self.iteration,
+            }
+        )
         logger.warning(f"已将 {target_key} 添加到黑名单，原因: {reason}")
         logger.info(f"当前黑名单大小: {len(self.failed_targets)}")
 
@@ -159,7 +169,11 @@ class AgentState:
         if self.current_target:
             current_class = self.current_target.get("class_name")
             current_method = self.current_target.get("method_name", "")
-            current_target_key = f"{current_class}.{current_method}" if current_method and current_class else (current_class if current_class else None)
+            current_target_key = (
+                f"{current_class}.{current_method}"
+                if current_method and current_class
+                else (current_class if current_class else None)
+            )
             if current_target_key == target_key:
                 logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
                 self.update_target(None)
@@ -236,7 +250,7 @@ class AgentState:
     def save(self, file_path: str) -> None:
         """保存状态到文件"""
         Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
         logger.info(f"状态已保存: {file_path}")
 
@@ -246,7 +260,7 @@ class AgentState:
         if not Path(file_path).exists():
             return None
 
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         logger.info(f"状态已加载: {file_path}")

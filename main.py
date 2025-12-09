@@ -23,10 +23,10 @@ class ColoredFormatter(logging.Formatter):
 
     RESET = "\033[0m"
     COLORS = {
-        logging.DEBUG: "\033[36m",     # 青色
-        logging.INFO: "\033[32m",      # 绿色
-        logging.WARNING: "\033[33m",   # 黄色
-        logging.ERROR: "\033[31m",     # 红色
+        logging.DEBUG: "\033[36m",  # 青色
+        logging.INFO: "\033[32m",  # 绿色
+        logging.WARNING: "\033[33m",  # 黄色
+        logging.ERROR: "\033[31m",  # 红色
         logging.CRITICAL: "\033[35m",  # 洋红
     }
 
@@ -42,10 +42,10 @@ class ColoredFormatter(logging.Formatter):
             record.levelname = original_levelname
 
 
-LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 # 配置日志：文件使用纯文本，终端使用彩色输出
-file_handler = logging.FileHandler('comet.log', encoding='utf-8')
+file_handler = logging.FileHandler("comet.log", encoding="utf-8")
 file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
 console_handler = logging.StreamHandler(sys.stdout)
@@ -57,9 +57,9 @@ logging.basicConfig(
     handlers=[file_handler, console_handler],
 )
 
-logging.getLogger('httpcore').setLevel(logging.WARNING)
-logging.getLogger('openai').setLevel(logging.WARNING)
-logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
@@ -67,55 +67,38 @@ logger = logging.getLogger(__name__)
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
-        description='COMET-L: 基于 LLM 的测试变异协同进化系统'
+        description="COMET-L: 基于 LLM 的测试变异协同进化系统"
     )
 
     parser.add_argument(
-        '--project-path',
+        "--project-path", type=str, required=True, help="目标 Java Maven 项目路径"
+    )
+
+    parser.add_argument(
+        "--config",
         type=str,
-        required=True,
-        help='目标 Java Maven 项目路径'
+        default="config.yaml",
+        help="配置文件路径（默认: config.yaml）",
     )
 
     parser.add_argument(
-        '--config',
-        type=str,
-        default='config.yaml',
-        help='配置文件路径（默认: config.yaml）'
+        "--max-iterations", type=int, default=None, help="最大迭代次数（覆盖配置文件）"
     )
 
     parser.add_argument(
-        '--max-iterations',
-        type=int,
-        default=None,
-        help='最大迭代次数（覆盖配置文件）'
+        "--budget", type=int, default=None, help="LLM 调用预算（覆盖配置文件）"
     )
 
     parser.add_argument(
-        '--budget',
-        type=int,
-        default=None,
-        help='LLM 调用预算（覆盖配置文件）'
+        "--resume", type=str, default=None, help="从保存的状态恢复（状态文件路径）"
     )
 
     parser.add_argument(
-        '--resume',
-        type=str,
-        default=None,
-        help='从保存的状态恢复（状态文件路径）'
+        "--output-dir", type=str, default=None, help="输出目录（覆盖配置文件）"
     )
 
     parser.add_argument(
-        '--output-dir',
-        type=str,
-        default=None,
-        help='输出目录（覆盖配置文件）'
-    )
-
-    parser.add_argument(
-        '--debug',
-        action='store_true',
-        help='启用调试日志（DEBUG级别）'
+        "--debug", action="store_true", help="启用调试日志（DEBUG级别）"
     )
 
     return parser.parse_args()
@@ -164,7 +147,9 @@ def initialize_system(config: Settings):
     test_generator = TestGenerator(llm_client, knowledge_base)
 
     # 初始化 Java 运行时
-    java_runtime_jar = "java-runtime/target/comet-runtime-1.0.0-jar-with-dependencies.jar"
+    java_runtime_jar = (
+        "java-runtime/target/comet-runtime-1.0.0-jar-with-dependencies.jar"
+    )
     if not Path(java_runtime_jar).exists():
         logger.warning(
             f"Java 运行时 JAR 不存在: {java_runtime_jar}\n"
@@ -174,7 +159,7 @@ def initialize_system(config: Settings):
     java_executor = JavaExecutor(
         java_runtime_jar,
         test_timeout=config.execution.test_timeout,
-        coverage_timeout=config.execution.coverage_timeout
+        coverage_timeout=config.execution.coverage_timeout,
     )
     static_guard = StaticGuard(java_runtime_jar)
 
@@ -241,7 +226,9 @@ def initialize_system(config: Settings):
     }
 
 
-def run_evolution(project_path: str, components: dict, resume_state: Optional[str] = None):
+def run_evolution(
+    project_path: str, components: dict, resume_state: Optional[str] = None
+):
     """
     运行协同进化
 
@@ -274,7 +261,7 @@ def run_evolution(project_path: str, components: dict, resume_state: Optional[st
     logger.info(f"工作空间沙箱: {workspace_sandbox}")
 
     # 设置 tools 使用沙箱路径
-    if hasattr(planner, 'tools') and hasattr(planner.tools, 'project_path'):
+    if hasattr(planner, "tools") and hasattr(planner.tools, "project_path"):
         planner.tools.project_path = workspace_sandbox  # 工作路径（沙箱）
         planner.tools.original_project_path = project_path  # 保存原始路径
         logger.info(f"已设置沙箱路径到 AgentTools: {workspace_sandbox}")
@@ -291,22 +278,25 @@ def run_evolution(project_path: str, components: dict, resume_state: Optional[st
                 preprocessing_enabled = True  # 默认启用
 
             if preprocessing_enabled:
-                logger.info("="*60)
+                logger.info("=" * 60)
                 logger.info("开始并行预处理阶段")
-                logger.info("="*60)
+                logger.info("=" * 60)
 
                 try:
                     from comet.parallel_preprocessing import ParallelPreprocessor
+
                     preprocessor = ParallelPreprocessor(config, components)
                     preprocess_stats = preprocessor.run(project_path, workspace_sandbox)
 
-                    logger.info("="*60)
+                    logger.info("=" * 60)
                     logger.info("并行预处理完成")
                     logger.info(f"处理方法数: {preprocess_stats['total_methods']}")
-                    logger.info(f"成功: {preprocess_stats['success']}, 失败: {preprocess_stats['failed']}")
+                    logger.info(
+                        f"成功: {preprocess_stats['success']}, 失败: {preprocess_stats['failed']}"
+                    )
                     logger.info(f"总测试数: {preprocess_stats['total_tests']}")
                     logger.info(f"总变异体数: {preprocess_stats['total_mutants']}")
-                    logger.info("="*60)
+                    logger.info("=" * 60)
                 except KeyboardInterrupt:
                     # 中断信号会传播到外层处理
                     raise
@@ -322,7 +312,7 @@ def run_evolution(project_path: str, components: dict, resume_state: Optional[st
             planner.load_state(resume_state)
         final_state = planner.run(
             stop_on_no_improvement_rounds=config.evolution.stop_on_no_improvement_rounds,
-            min_improvement_threshold=config.evolution.min_improvement_threshold
+            min_improvement_threshold=config.evolution.min_improvement_threshold,
         )
 
         # 保存最终状态
@@ -331,10 +321,10 @@ def run_evolution(project_path: str, components: dict, resume_state: Optional[st
         logger.info(f"最终状态已保存: {state_file}")
 
         # 导出测试文件到原项目
-        logger.info("="*60)
+        logger.info("=" * 60)
         logger.info("导出测试文件到原项目...")
         sandbox_manager.export_test_files("workspace", project_path)
-        logger.info("="*60)
+        logger.info("=" * 60)
 
         # 输出摘要
         print_summary(final_state, components["metrics_collector"])
@@ -375,23 +365,23 @@ def print_summary(state: AgentState, metrics_collector: MetricsCollector):
     llm_calls = state.llm_calls
 
     # 从 metrics_collector 获取初始值（如果有）
-    initial_mutation_score = summary.get('initial_mutation_score', 0.0)
-    initial_coverage = summary.get('initial_coverage', 0.0)
+    initial_mutation_score = summary.get("initial_mutation_score", 0.0)
+    initial_coverage = summary.get("initial_coverage", 0.0)
 
     # 如果 metrics_collector 没有历史记录，使用 state 的当前值作为最终值
     if not metrics_collector.history:
         initial_mutation_score = 0.0
         initial_coverage = 0.0
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("运行摘要")
-    print("="*60)
+    print("=" * 60)
     print(f"总迭代次数: {total_iterations}")
     print(f"变异分数: {initial_mutation_score:.3f} -> {final_mutation_score:.3f}")
     print(f"行覆盖率: {initial_coverage:.3f} -> {final_line_coverage:.3f}")
     print(f"总测试数: {total_tests}")
     print(f"LLM 调用次数: {llm_calls}")
-    print("="*60)
+    print("=" * 60)
 
 
 def main():

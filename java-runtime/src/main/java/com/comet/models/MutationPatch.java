@@ -18,7 +18,8 @@ public class MutationPatch {
     @SerializedName("mutated")
     private String mutatedCode;
 
-    public MutationPatch() {}
+    public MutationPatch() {
+    }
 
     public MutationPatch(String filePath, int lineStart, int lineEnd, String originalCode, String mutatedCode) {
         this.filePath = filePath;
@@ -28,18 +29,43 @@ public class MutationPatch {
         this.mutatedCode = mutatedCode;
     }
 
-    public String getFilePath() { return filePath; }
-    public void setFilePath(String filePath) { this.filePath = filePath; }
+    public String getFilePath() {
+        return filePath;
+    }
 
-    public int getLineStart() { return lineStart; }
-    public void setLineStart(int lineStart) { this.lineStart = lineStart; }
+    public void setFilePath(String filePath) {
+        this.filePath = filePath;
+    }
 
-    public int getLineEnd() { return lineEnd; }
-    public void setLineEnd(int lineEnd) { this.lineEnd = lineEnd; }
+    public int getLineStart() {
+        return lineStart;
+    }
 
-    public String getOriginalCode() { return originalCode; }
-    public void setOriginalCode(String originalCode) { this.originalCode = originalCode; }
+    public void setLineStart(int lineStart) {
+        this.lineStart = lineStart;
+    }
 
-    public String getMutatedCode() { return mutatedCode; }
-    public void setMutatedCode(String mutatedCode) { this.mutatedCode = mutatedCode; }
+    public int getLineEnd() {
+        return lineEnd;
+    }
+
+    public void setLineEnd(int lineEnd) {
+        this.lineEnd = lineEnd;
+    }
+
+    public String getOriginalCode() {
+        return originalCode;
+    }
+
+    public void setOriginalCode(String originalCode) {
+        this.originalCode = originalCode;
+    }
+
+    public String getMutatedCode() {
+        return mutatedCode;
+    }
+
+    public void setMutatedCode(String mutatedCode) {
+        this.mutatedCode = mutatedCode;
+    }
 }

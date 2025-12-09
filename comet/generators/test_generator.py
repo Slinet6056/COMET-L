@@ -37,7 +37,7 @@ def _normalize_code(code: str) -> str:
         if not has_actual_newline:
             # 使用 Python 的字符串转义处理
             try:
-                code = code.encode().decode('unicode_escape')
+                code = code.encode().decode("unicode_escape")
             except (UnicodeDecodeError, UnicodeEncodeError):
                 # 如果 unicode_escape 失败，直接替换
                 code = code.replace("\\n", "\n")
@@ -88,7 +88,7 @@ class TestGenerator:
         """
         try:
             # 提取方法名
-            method_name = method_signature.split('(')[0].strip().split()[-1]
+            method_name = method_signature.split("(")[0].strip().split()[-1]
 
             # 获取契约
             contracts = self.kb.get_contracts_for_method(class_name, method_name)
@@ -140,14 +140,18 @@ class TestGenerator:
                 elif "test_methods" in data:
                     tests_data = data.get("test_methods", [])
 
-            logger.debug(f"提取到 {len(tests_data) if isinstance(tests_data, list) else 1} 个测试数据")
+            logger.debug(
+                f"提取到 {len(tests_data) if isinstance(tests_data, list) else 1} 个测试数据"
+            )
             if not isinstance(tests_data, list):
                 tests_data = [tests_data]
 
             # 创建 TestMethod 对象
             test_methods = []
             for idx, test_data in enumerate(tests_data):
-                logger.debug(f"处理测试 #{idx+1}: {test_data.get('method_name', 'Unknown')}")
+                logger.debug(
+                    f"处理测试 #{idx+1}: {test_data.get('method_name', 'Unknown')}"
+                )
 
                 # 验证必需字段
                 if not test_data.get("code"):
@@ -160,7 +164,7 @@ class TestGenerator:
                 # 如果代码中包含字面的 \n（而不是实际的换行符），进行转换
                 if "\\n" in code and "\n" not in code.replace("\\n", ""):
                     # 使用 Python 的字符串转义处理
-                    code = code.encode().decode('unicode_escape')
+                    code = code.encode().decode("unicode_escape")
                 elif "\\n" in code:
                     # 如果既有字面的 \n 又有实际的换行符，只替换字面的 \n
                     code = code.replace("\\n", "\n")
@@ -192,7 +196,7 @@ class TestGenerator:
             # 构建完整测试类
             # 处理内部类：将 $ 替换为下划线，使测试类名合法
             # 例如：ShippingService$ShippingInfo -> ShippingService_ShippingInfoTest
-            clean_class_name = class_name.replace('$', '_')
+            clean_class_name = class_name.replace("$", "_")
             test_class_name = f"{clean_class_name}Test"
             method_codes = [m.code for m in test_methods]
 
@@ -218,7 +222,9 @@ class TestGenerator:
                 updated_at=datetime.now(),
             )
 
-            logger.info(f"成功生成 {len(test_methods)} 个测试方法用于 {class_name}.{method_name}")
+            logger.info(
+                f"成功生成 {len(test_methods)} 个测试方法用于 {class_name}.{method_name}"
+            )
             return test_case
 
         except Exception as e:
@@ -327,7 +333,9 @@ class TestGenerator:
             test_case.updated_at = datetime.now()
 
             logger.info(f"成功完善测试，现有 {len(test_methods)} 个测试方法")
-            logger.debug(f"返回的测试用例: ID={test_case.id}, version={test_case.version} (未更新版本号)")
+            logger.debug(
+                f"返回的测试用例: ID={test_case.id}, version={test_case.version} (未更新版本号)"
+            )
             return test_case
 
         except Exception as e:
@@ -430,10 +438,12 @@ class TestGenerator:
 
             try:
                 # 使用提示词管理器生成修复提示词
-                system_prompt, user_prompt = self.prompt_manager.render_fix_single_method(
-                    method_code=method_code,
-                    class_code=class_code,
-                    error_message=error_message,
+                system_prompt, user_prompt = (
+                    self.prompt_manager.render_fix_single_method(
+                        method_code=method_code,
+                        class_code=class_code,
+                        error_message=error_message,
+                    )
                 )
 
                 # 调用 LLM

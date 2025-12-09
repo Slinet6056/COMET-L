@@ -34,7 +34,9 @@ class SandboxManager:
         self._sandboxes: Dict[str, str] = {}  # sandbox_id -> sandbox_path
         self._project_path: Optional[str] = None  # 源项目路径（用于创建新沙箱）
 
-    def create_sandbox(self, project_path: str, sandbox_id: Optional[str] = None) -> str:
+    def create_sandbox(
+        self, project_path: str, sandbox_id: Optional[str] = None
+    ) -> str:
         """
         创建新的沙箱环境（线程安全）
 
@@ -60,9 +62,14 @@ class SandboxManager:
                 project_path,
                 sandbox_path,
                 ignore=shutil.ignore_patterns(
-                    'target', '*.class', '.git', '.idea', '__pycache__',
-                    '*.pyc', 'node_modules'
-                )
+                    "target",
+                    "*.class",
+                    ".git",
+                    ".idea",
+                    "__pycache__",
+                    "*.pyc",
+                    "node_modules",
+                ),
             )
 
             # 记录沙箱
@@ -75,8 +82,9 @@ class SandboxManager:
         """获取沙箱路径"""
         return str(self.sandbox_root / sandbox_id)
 
-    def create_target_sandbox(self, project_path: str, class_name: str,
-                              method_name: Optional[str] = None) -> str:
+    def create_target_sandbox(
+        self, project_path: str, class_name: str, method_name: Optional[str] = None
+    ) -> str:
         """
         为特定目标创建独立沙箱（线程安全）
 
@@ -98,7 +106,7 @@ class SandboxManager:
             sandbox_id = f"{class_name}_{timestamp}_{thread_id}"
 
         # 清理类名中的路径分隔符
-        sandbox_id = sandbox_id.replace('.', '_').replace('/', '_').replace('\\', '_')
+        sandbox_id = sandbox_id.replace(".", "_").replace("/", "_").replace("\\", "_")
 
         return self.create_sandbox(project_path, sandbox_id)
 
@@ -123,7 +131,9 @@ class SandboxManager:
             self.sandbox_root.mkdir(parents=True, exist_ok=True)
             logger.info("清理所有沙箱")
 
-    def copy_file_to_sandbox(self, sandbox_id: str, source_file: str, target_rel_path: str) -> str:
+    def copy_file_to_sandbox(
+        self, sandbox_id: str, source_file: str, target_rel_path: str
+    ) -> str:
         """
         复制文件到沙箱
 
@@ -159,7 +169,7 @@ class SandboxManager:
         if not file_path.exists():
             return None
 
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
 
     def list_sandboxes(self) -> list[str]:
@@ -258,7 +268,8 @@ class SandboxManager:
         """清理所有目标沙箱（保留 workspace 沙箱）"""
         with self._lock:
             target_sandboxes = [
-                sandbox_id for sandbox_id in self._sandboxes.keys()
+                sandbox_id
+                for sandbox_id in self._sandboxes.keys()
                 if sandbox_id != "workspace"
             ]
 
@@ -278,8 +289,12 @@ class SandboxContext:
         # 退出时自动清理沙箱
     """
 
-    def __init__(self, manager: SandboxManager, class_name: str,
-                 method_name: Optional[str] = None):
+    def __init__(
+        self,
+        manager: SandboxManager,
+        class_name: str,
+        method_name: Optional[str] = None,
+    ):
         """
         初始化沙箱上下文
 
@@ -297,12 +312,12 @@ class SandboxContext:
     def __enter__(self) -> str:
         """进入上下文，创建沙箱"""
         if not self.manager._project_path:
-            raise ValueError("必须先设置项目路径（调用 set_project_path 或 create_workspace_sandbox）")
+            raise ValueError(
+                "必须先设置项目路径（调用 set_project_path 或 create_workspace_sandbox）"
+            )
 
         self.sandbox_path = self.manager.create_target_sandbox(
-            self.manager._project_path,
-            self.class_name,
-            self.method_name
+            self.manager._project_path, self.class_name, self.method_name
         )
 
         # 从路径中提取 sandbox_id

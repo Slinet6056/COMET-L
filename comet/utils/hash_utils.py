@@ -30,10 +30,10 @@ def signature_hash(obj: Any) -> str:
     Returns:
         SHA256 哈希值
     """
-    if hasattr(obj, 'model_dump'):
+    if hasattr(obj, "model_dump"):
         # Pydantic 模型
         data = obj.model_dump()
-    elif hasattr(obj, '__dict__'):
+    elif hasattr(obj, "__dict__"):
         data = obj.__dict__
     else:
         data = obj

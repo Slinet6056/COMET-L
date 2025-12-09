@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ClassInfo:
     """类信息"""
+
     class_name: str  # 完整类名（包含包名）
     simple_name: str  # 简单类名（不含包名）
     file_path: str  # 源文件路径
@@ -31,8 +32,12 @@ class ClassMapper:
     def __init__(self):
         """初始化映射器"""
         self._class_to_file: Dict[str, ClassInfo] = {}  # 完整类名 -> ClassInfo
-        self._simple_name_to_classes: Dict[str, List[ClassInfo]] = {}  # 简单类名 -> ClassInfo 列表
-        self._file_to_classes: Dict[str, List[ClassInfo]] = {}  # 文件路径 -> ClassInfo 列表
+        self._simple_name_to_classes: Dict[str, List[ClassInfo]] = (
+            {}
+        )  # 简单类名 -> ClassInfo 列表
+        self._file_to_classes: Dict[str, List[ClassInfo]] = (
+            {}
+        )  # 文件路径 -> ClassInfo 列表
 
     def add_class(
         self,
@@ -53,13 +58,13 @@ class ClassMapper:
             is_interface: 是否为接口
         """
         # 构造完整类名
-        if package_name and '.' not in class_name:
+        if package_name and "." not in class_name:
             full_class_name = f"{package_name}.{class_name}"
         else:
             full_class_name = class_name
 
         # 提取简单类名
-        simple_name = class_name.split('.')[-1]
+        simple_name = class_name.split(".")[-1]
 
         # 规范化文件路径
         normalized_path = str(Path(file_path).resolve())
@@ -100,17 +105,19 @@ class ClassMapper:
         # 例如：ShippingService$ShippingInfo -> ShippingService
         # 例如：com.example.ShippingService$ShippingInfo -> com.example.ShippingService
         original_class_name = class_name
-        if '$' in class_name:
+        if "$" in class_name:
             # 提取外部类名（保留包名部分）
-            class_name = class_name.split('$')[0]
-            logger.debug(f"检测到内部类 {original_class_name}，使用外部类 {class_name} 查找文件")
+            class_name = class_name.split("$")[0]
+            logger.debug(
+                f"检测到内部类 {original_class_name}，使用外部类 {class_name} 查找文件"
+            )
 
         # 先尝试完整类名
         if class_name in self._class_to_file:
             return self._class_to_file[class_name].file_path
 
         # 再尝试简单类名
-        simple_name = class_name.split('.')[-1]
+        simple_name = class_name.split(".")[-1]
         if simple_name in self._simple_name_to_classes:
             classes = self._simple_name_to_classes[simple_name]
             if len(classes) == 1:
@@ -140,15 +147,17 @@ class ClassMapper:
         """
         # 处理内部类：如果类名包含 $，则提取外部类名
         original_class_name = class_name
-        if '$' in class_name:
-            class_name = class_name.split('$')[0]
-            logger.debug(f"检测到内部类 {original_class_name}，使用外部类 {class_name} 查找信息")
+        if "$" in class_name:
+            class_name = class_name.split("$")[0]
+            logger.debug(
+                f"检测到内部类 {original_class_name}，使用外部类 {class_name} 查找信息"
+            )
 
         if class_name in self._class_to_file:
             return self._class_to_file[class_name]
 
         # 尝试简单类名
-        simple_name = class_name.split('.')[-1]
+        simple_name = class_name.split(".")[-1]
         if simple_name in self._simple_name_to_classes:
             classes = self._simple_name_to_classes[simple_name]
             if len(classes) == 1:
@@ -194,8 +203,12 @@ class ClassMapper:
         return {
             "total_classes": len(self._class_to_file),
             "total_files": len(self._file_to_classes),
-            "public_classes": sum(1 for c in self._class_to_file.values() if c.is_public),
-            "interfaces": sum(1 for c in self._class_to_file.values() if c.is_interface),
+            "public_classes": sum(
+                1 for c in self._class_to_file.values() if c.is_public
+            ),
+            "interfaces": sum(
+                1 for c in self._class_to_file.values() if c.is_interface
+            ),
         }
 
     def __len__(self) -> int:
@@ -205,12 +218,12 @@ class ClassMapper:
     def __contains__(self, class_name: str) -> bool:
         """检查类名是否存在（支持内部类）"""
         # 处理内部类
-        if '$' in class_name:
-            class_name = class_name.split('$')[0]
+        if "$" in class_name:
+            class_name = class_name.split("$")[0]
 
         if class_name in self._class_to_file:
             return True
-        simple_name = class_name.split('.')[-1]
+        simple_name = class_name.split(".")[-1]
         return simple_name in self._simple_name_to_classes
 
     def __repr__(self) -> str:

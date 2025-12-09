@@ -57,13 +57,16 @@ class MutationEvaluator:
             # 应用变异到沙箱
             # 构建变异补丁 JSON
             import json
-            patch_json = json.dumps({
-                "file_path": mutant.patch.file_path,
-                "line_start": mutant.patch.line_start,
-                "line_end": mutant.patch.line_end,
-                "original": mutant.patch.original_code,
-                "mutated": mutant.patch.mutated_code,
-            })
+
+            patch_json = json.dumps(
+                {
+                    "file_path": mutant.patch.file_path,
+                    "line_start": mutant.patch.line_start,
+                    "line_end": mutant.patch.line_end,
+                    "original": mutant.patch.original_code,
+                    "mutated": mutant.patch.mutated_code,
+                }
+            )
 
             # 确定源文件路径
             original_file_path = mutant.patch.file_path
@@ -73,13 +76,14 @@ class MutationEvaluator:
 
             # 确定沙箱中的目标文件路径
             from pathlib import Path
+
             # 从完整路径中提取相对路径（从 src/main/java 开始）
             file_path_obj = Path(original_file_path)
 
             # 尝试找到 src/main/java 或 src/test/java 的位置
             parts = file_path_obj.parts
             try:
-                src_idx = parts.index('src')
+                src_idx = parts.index("src")
                 rel_path = Path(*parts[src_idx:])
             except ValueError:
                 # 如果找不到 src，尝试直接使用最后几个部分
@@ -98,7 +102,9 @@ class MutationEvaluator:
             if not mutation_result.get("success", False):
                 logger.error(f"应用变异失败: {mutant.id}")
                 logger.error(f"  变异意图: {mutant.semantic_intent}")
-                logger.error(f"  行范围: {mutant.patch.line_start}-{mutant.patch.line_end}")
+                logger.error(
+                    f"  行范围: {mutant.patch.line_start}-{mutant.patch.line_end}"
+                )
                 if mutation_result.get("stderr"):
                     logger.error(f"  Java 错误: {mutation_result['stderr'][:500]}")
                 # 跳过此变异体，不运行测试
@@ -133,18 +139,24 @@ class MutationEvaluator:
 
                 if not reports_path.exists():
                     # 编译错误或其他构建错误 - 变异体被杀死
-                    logger.debug(f"  Surefire 报告目录不存在（可能是编译错误），变异体 {mutant.id} 被杀死")
+                    logger.debug(
+                        f"  Surefire 报告目录不存在（可能是编译错误），变异体 {mutant.id} 被杀死"
+                    )
                     for test_case in test_cases:
                         results[test_case.id] = False
                 else:
                     # 解析 Surefire 报告，获取精确的测试结果
-                    failed_tests = self.surefire_parser.get_failed_test_names(reports_dir)
+                    failed_tests = self.surefire_parser.get_failed_test_names(
+                        reports_dir
+                    )
                     logger.debug(f"  检测到 {len(failed_tests)} 个失败的测试")
 
                     if not failed_tests:
                         # 有报告但没有失败的测试，可能是其他错误（如测试超时）
                         # 保守策略：标记所有测试为失败
-                        logger.debug(f"  未找到具体失败的测试，保守策略标记所有测试为失败")
+                        logger.debug(
+                            f"  未找到具体失败的测试，保守策略标记所有测试为失败"
+                        )
                         for test_case in test_cases:
                             results[test_case.id] = False
                     else:
@@ -159,7 +171,9 @@ class MutationEvaluator:
                                 if test_case.package_name:
                                     full_name = f"{test_case.package_name}.{test_case.class_name}.{method.method_name}"
                                 else:
-                                    full_name = f"{test_case.class_name}.{method.method_name}"
+                                    full_name = (
+                                        f"{test_case.class_name}.{method.method_name}"
+                                    )
                                 full_names.append(full_name)
                             test_full_names[test_case.id] = full_names
 
@@ -170,7 +184,9 @@ class MutationEvaluator:
                             for full_name in test_full_names[test_case.id]:
                                 if full_name in failed_tests:
                                     test_failed = True
-                                    logger.debug(f"    测试方法 {full_name} (测试用例 {test_case.id}) 击杀了变异体")
+                                    logger.debug(
+                                        f"    测试方法 {full_name} (测试用例 {test_case.id}) 击杀了变异体"
+                                    )
                                     break
 
                             # True = 测试通过（变异体幸存）

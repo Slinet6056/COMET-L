@@ -114,8 +114,8 @@ class MetricsCollector:
         """
         improvement = self.get_improvement()
         return (
-            improvement["mutation_score_delta"] > threshold or
-            improvement["coverage_delta"] > threshold
+            improvement["mutation_score_delta"] > threshold
+            or improvement["coverage_delta"] > threshold
         )
 
     def get_summary(self) -> Dict[str, Any]:
@@ -135,7 +135,8 @@ class MetricsCollector:
             "total_iterations": len(self.history),
             "initial_mutation_score": initial.mutation_score,
             "final_mutation_score": latest.mutation_score,
-            "mutation_score_improvement": latest.mutation_score - initial.mutation_score,
+            "mutation_score_improvement": latest.mutation_score
+            - initial.mutation_score,
             "initial_coverage": initial.line_coverage,
             "final_coverage": latest.line_coverage,
             "coverage_improvement": latest.line_coverage - initial.line_coverage,
@@ -164,11 +165,12 @@ class MetricsCollector:
             return []
 
         survived = [
-            m for m in all_mutants
+            m
+            for m in all_mutants
             if m.survived
             and m.class_name == class_name
             and (m.method_name == method_name or method_name is None)
-            and m.status != 'outdated'  # 排除 outdated 状态的变异体
+            and m.status != "outdated"  # 排除 outdated 状态的变异体
         ]
 
         return survived

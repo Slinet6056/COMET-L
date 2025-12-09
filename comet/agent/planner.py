@@ -52,7 +52,11 @@ class PlannerAgent:
         self.state = AgentState()
         self.state.budget = budget
 
-    def run(self, stop_on_no_improvement_rounds: int = 3, min_improvement_threshold: float = 0.01) -> AgentState:
+    def run(
+        self,
+        stop_on_no_improvement_rounds: int = 3,
+        min_improvement_threshold: float = 0.01,
+    ) -> AgentState:
         """
         运行调度循环
 
@@ -114,9 +118,9 @@ class PlannerAgent:
             if action == "run_evaluation":
                 # 检查评估是否成功执行
                 evaluation_succeeded = (
-                    result is not None and
-                    isinstance(result, dict) and
-                    result.get("evaluated", 0) > 0
+                    result is not None
+                    and isinstance(result, dict)
+                    and result.get("evaluated", 0) > 0
                 )
 
                 if not evaluation_succeeded:
@@ -131,23 +135,29 @@ class PlannerAgent:
                     has_improvement = self._check_improvement(
                         prev_mutation_score,
                         prev_line_coverage,
-                        min_improvement_threshold
+                        min_improvement_threshold,
                     )
 
                     if has_improvement:
                         logger.info(f"检测到改进，重置无改进计数器")
                         no_improvement_count = 0
                         # 记录改进（使用全局指标）
-                        self.state.add_improvement({
-                            "iteration": self.state.iteration,
-                            "mutation_score": self.state.global_mutation_score,
-                            "line_coverage": self.state.line_coverage,
-                            "mutation_score_delta": self.state.global_mutation_score - prev_mutation_score,
-                            "coverage_delta": self.state.line_coverage - prev_line_coverage,
-                        })
+                        self.state.add_improvement(
+                            {
+                                "iteration": self.state.iteration,
+                                "mutation_score": self.state.global_mutation_score,
+                                "line_coverage": self.state.line_coverage,
+                                "mutation_score_delta": self.state.global_mutation_score
+                                - prev_mutation_score,
+                                "coverage_delta": self.state.line_coverage
+                                - prev_line_coverage,
+                            }
+                        )
                     else:
                         no_improvement_count += 1
-                        logger.info(f"评估后无显著改进 (连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)")
+                        logger.info(
+                            f"评估后无显著改进 (连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)"
+                        )
 
                     # 更新上一轮指标（只在评估后更新，使用全局指标）
                     prev_mutation_score = self.state.global_mutation_score
@@ -161,15 +171,19 @@ class PlannerAgent:
                 logger.info(f"连续 {no_improvement_count} 轮无改进")
 
                 # 将当前目标加入黑名单并重新选择
-                if self.state.current_target and self.state.current_target.get("class_name"):
+                if self.state.current_target and self.state.current_target.get(
+                    "class_name"
+                ):
                     current_class = self.state.current_target["class_name"]
                     current_method = self.state.current_target.get("method_name", "")
 
-                    logger.info(f"将当前目标 {current_class}.{current_method} 加入黑名单")
+                    logger.info(
+                        f"将当前目标 {current_class}.{current_method} 加入黑名单"
+                    )
                     self.state.add_failed_target(
                         current_class,
                         current_method,
-                        f"连续 {no_improvement_count} 轮无改进"
+                        f"连续 {no_improvement_count} 轮无改进",
                     )
 
                     # 重置无改进计数器
@@ -184,21 +198,25 @@ class PlannerAgent:
                         logger.info("没有更多可选目标，停止")
                         break
 
-                    logger.info(f"已切换到新目标: {new_target.get('class_name')}.{new_target.get('method_name')}")
+                    logger.info(
+                        f"已切换到新目标: {new_target.get('class_name')}.{new_target.get('method_name')}"
+                    )
 
                     # 确保状态已更新（虽然 select_target 内部也会更新，但显式调用确保一致性）
                     self.state.update_target(new_target)
 
                     # 更新当前方法覆盖率
                     if "method_coverage" in new_target:
-                        self.state.current_method_coverage = new_target["method_coverage"]
+                        self.state.current_method_coverage = new_target[
+                            "method_coverage"
+                        ]
 
                     # 记录切换动作
                     self.state.add_action(
                         action="select_target",
                         params={},
                         success=True,
-                        result=new_target
+                        result=new_target,
                     )
                 else:
                     # 没有当前目标，直接停止
@@ -225,7 +243,7 @@ class PlannerAgent:
         self,
         prev_mutation_score: float,
         prev_line_coverage: float,
-        threshold: float = 0.01
+        threshold: float = 0.01,
     ) -> bool:
         """
         检查是否有显著改进（使用全局指标）
@@ -241,7 +259,9 @@ class PlannerAgent:
         mutation_score_delta = self.state.global_mutation_score - prev_mutation_score
         coverage_delta = self.state.line_coverage - prev_line_coverage
 
-        has_improvement = mutation_score_delta >= threshold or coverage_delta >= threshold
+        has_improvement = (
+            mutation_score_delta >= threshold or coverage_delta >= threshold
+        )
 
         if has_improvement:
             logger.info(
@@ -261,9 +281,9 @@ class PlannerAgent:
             是否达到优秀水平
         """
         is_excellent = (
-            self.state.global_mutation_score >= self.excellent_mutation_score and
-            self.state.line_coverage >= self.excellent_line_coverage and
-            self.state.branch_coverage >= self.excellent_branch_coverage
+            self.state.global_mutation_score >= self.excellent_mutation_score
+            and self.state.line_coverage >= self.excellent_line_coverage
+            and self.state.branch_coverage >= self.excellent_branch_coverage
         )
 
         if is_excellent:
@@ -287,7 +307,9 @@ class PlannerAgent:
         logger.info("全局统计（所有目标的累积）:")
         logger.info(f"  变异分数: {self.state.global_mutation_score:.1%}")
         logger.info(f"  总变异体数: {self.state.global_total_mutants}")
-        logger.info(f"  已击杀: {self.state.global_killed_mutants}, 幸存: {self.state.global_survived_mutants}")
+        logger.info(
+            f"  已击杀: {self.state.global_killed_mutants}, 幸存: {self.state.global_survived_mutants}"
+        )
         logger.info("")
         logger.info("覆盖率:")
         logger.info(f"  行覆盖率: {self.state.line_coverage:.1%}")
@@ -314,43 +336,65 @@ class PlannerAgent:
             # ===== 全局统计（包括所有已评估的变异体：valid + outdated）=====
             all_evaluated_mutants = self.tools.db.get_all_evaluated_mutants()
             self.state.global_total_mutants = len(all_evaluated_mutants)
-            self.state.global_survived_mutants = len([m for m in all_evaluated_mutants if m.survived])
-            self.state.global_killed_mutants = self.state.global_total_mutants - self.state.global_survived_mutants
+            self.state.global_survived_mutants = len(
+                [m for m in all_evaluated_mutants if m.survived]
+            )
+            self.state.global_killed_mutants = (
+                self.state.global_total_mutants - self.state.global_survived_mutants
+            )
 
             # 计算全局变异分数
             if self.state.global_total_mutants > 0:
-                self.state.global_mutation_score = self.state.global_killed_mutants / self.state.global_total_mutants
+                self.state.global_mutation_score = (
+                    self.state.global_killed_mutants / self.state.global_total_mutants
+                )
             else:
                 self.state.global_mutation_score = 0.0
 
             # ===== 当前目标统计（仅当前目标方法的 valid 变异体）=====
             current_target = self.state.current_target
-            if current_target and current_target.get("class_name") and current_target.get("method_name"):
+            if (
+                current_target
+                and current_target.get("class_name")
+                and current_target.get("method_name")
+            ):
                 # 获取当前目标方法的 valid 变异体
                 current_mutants = self.tools.db.get_mutants_by_method(
                     class_name=current_target["class_name"],
                     method_name=current_target["method_name"],
-                    status="valid"
+                    status="valid",
                 )
                 self.state.total_mutants = len(current_mutants)
-                self.state.survived_mutants = len([m for m in current_mutants if m.survived])
-                self.state.killed_mutants = self.state.total_mutants - self.state.survived_mutants
+                self.state.survived_mutants = len(
+                    [m for m in current_mutants if m.survived]
+                )
+                self.state.killed_mutants = (
+                    self.state.total_mutants - self.state.survived_mutants
+                )
 
                 # 计算当前目标变异分数
                 if self.state.total_mutants > 0:
-                    self.state.mutation_score = self.state.killed_mutants / self.state.total_mutants
+                    self.state.mutation_score = (
+                        self.state.killed_mutants / self.state.total_mutants
+                    )
                 else:
                     self.state.mutation_score = 0.0
             else:
                 # 没有当前目标时，使用所有 valid 变异体
                 valid_mutants = self.tools.db.get_valid_mutants()
                 self.state.total_mutants = len(valid_mutants)
-                self.state.survived_mutants = len([m for m in valid_mutants if m.survived])
-                self.state.killed_mutants = self.state.total_mutants - self.state.survived_mutants
+                self.state.survived_mutants = len(
+                    [m for m in valid_mutants if m.survived]
+                )
+                self.state.killed_mutants = (
+                    self.state.total_mutants - self.state.survived_mutants
+                )
 
                 # 计算变异分数
                 if self.state.total_mutants > 0:
-                    self.state.mutation_score = self.state.killed_mutants / self.state.total_mutants
+                    self.state.mutation_score = (
+                        self.state.killed_mutants / self.state.total_mutants
+                    )
                 else:
                     self.state.mutation_score = 0.0
 
@@ -361,37 +405,64 @@ class PlannerAgent:
                 else:
                     from pathlib import Path
                     from ..executor.coverage_parser import CoverageParser
+
                     parser = CoverageParser()
 
-                    jacoco_path = Path(self.tools.project_path) / "target" / "site" / "jacoco" / "jacoco.xml"
+                    jacoco_path = (
+                        Path(self.tools.project_path)
+                        / "target"
+                        / "site"
+                        / "jacoco"
+                        / "jacoco.xml"
+                    )
                     if jacoco_path.exists():
                         # 直接从 XML 文件读取全局覆盖率（最准确的方式）
-                        global_coverage = parser.aggregate_global_coverage_from_xml(str(jacoco_path))
+                        global_coverage = parser.aggregate_global_coverage_from_xml(
+                            str(jacoco_path)
+                        )
 
-                        if global_coverage and 'line_coverage' in global_coverage and 'branch_coverage' in global_coverage:
-                            self.state.line_coverage = global_coverage['line_coverage']
-                            self.state.branch_coverage = global_coverage['branch_coverage']
+                        if (
+                            global_coverage
+                            and "line_coverage" in global_coverage
+                            and "branch_coverage" in global_coverage
+                        ):
+                            self.state.line_coverage = global_coverage["line_coverage"]
+                            self.state.branch_coverage = global_coverage[
+                                "branch_coverage"
+                            ]
 
                             logger.debug(
                                 f"同步全局覆盖率（从 XML）: 行 {self.state.line_coverage:.1%}, "
                                 f"分支 {self.state.branch_coverage:.1%}"
                             )
                         else:
-                            logger.warning(f"从 XML 解析的覆盖率数据格式不正确: {global_coverage}")
+                            logger.warning(
+                                f"从 XML 解析的覆盖率数据格式不正确: {global_coverage}"
+                            )
                             # 如果解析失败，保持当前值不变（不重置为0）
                     else:
-                        logger.debug(f"JaCoCo XML 报告不存在: {jacoco_path}，保持当前覆盖率值")
+                        logger.debug(
+                            f"JaCoCo XML 报告不存在: {jacoco_path}，保持当前覆盖率值"
+                        )
                         # 如果文件不存在，保持当前值不变（不重置为0），因为可能是还没有运行过评估
 
                     # 同步当前目标方法的覆盖率
-                    if self.state.current_target and self.state.current_target.get("class_name") and self.state.current_target.get("method_name"):
+                    if (
+                        self.state.current_target
+                        and self.state.current_target.get("class_name")
+                        and self.state.current_target.get("method_name")
+                    ):
                         current_coverage = self.tools.db.get_method_coverage(
                             self.state.current_target["class_name"],
-                            self.state.current_target["method_name"]
+                            self.state.current_target["method_name"],
                         )
                         if current_coverage:
-                            self.state.current_method_coverage = current_coverage.line_coverage_rate
-                            logger.debug(f"已更新当前方法覆盖率: {self.state.current_method_coverage:.1%}")
+                            self.state.current_method_coverage = (
+                                current_coverage.line_coverage_rate
+                            )
+                            logger.debug(
+                                f"已更新当前方法覆盖率: {self.state.current_method_coverage:.1%}"
+                            )
             except Exception as e:
                 logger.warning(f"同步覆盖率数据失败: {e}", exc_info=True)
                 # 异常时保持当前值不变，不重置为0
@@ -438,8 +509,7 @@ class PlannerAgent:
 
             # 渲染提示词
             system, user = self.prompt_manager.render_agent_planner(
-                state=self.state.to_dict(),
-                tools_description=tools_description
+                state=self.state.to_dict(), tools_description=tools_description
             )
 
             # 调用 LLM
@@ -485,7 +555,7 @@ class PlannerAgent:
                 action=safe_action,
                 params=params,
                 success=False,
-                result="invalid action"
+                result="invalid action",
             )
             return None
 
@@ -494,16 +564,22 @@ class PlannerAgent:
             logger.info(f"工具执行成功: {action}")
 
             # 如果是refine_tests，更新当前方法的覆盖率
-            if action == "refine_tests" and isinstance(result, dict) and "method_coverage" in result:
+            if (
+                action == "refine_tests"
+                and isinstance(result, dict)
+                and "method_coverage" in result
+            ):
                 self.state.current_method_coverage = result["method_coverage"]
-                logger.debug(f"更新当前方法覆盖率: {self.state.current_method_coverage:.1%}")
+                logger.debug(
+                    f"更新当前方法覆盖率: {self.state.current_method_coverage:.1%}"
+                )
 
             # 记录操作历史
             self.state.add_action(
                 action=action,
                 params=params,
                 success=True,
-                result=self._simplify_result(result)
+                result=self._simplify_result(result),
             )
 
             # 执行自动化工作流
@@ -515,10 +591,7 @@ class PlannerAgent:
 
             # 记录失败的操作
             self.state.add_action(
-                action=action,
-                params=params,
-                success=False,
-                result=str(e)
+                action=action, params=params, success=False, result=str(e)
             )
 
             return None
@@ -578,11 +651,17 @@ class PlannerAgent:
         need_evaluation = False
 
         # 检查是否需要生成测试（检查目标方法是否有测试，而不是整个类）
-        existing_tests = self.tools.db.get_tests_by_target_method(class_name, method_name) if self.tools.db else []
+        existing_tests = (
+            self.tools.db.get_tests_by_target_method(class_name, method_name)
+            if self.tools.db
+            else []
+        )
         if not existing_tests:
             logger.info("→ 自动执行: generate_tests（目标方法没有测试）")
             try:
-                test_result = self.tools.call("generate_tests", class_name=class_name, method_name=method_name)
+                test_result = self.tools.call(
+                    "generate_tests", class_name=class_name, method_name=method_name
+                )
                 if test_result and test_result.get("generated", 0) > 0:
                     logger.info(f"  ✓ 成功生成 {test_result.get('generated')} 个测试")
                     need_evaluation = True
@@ -591,7 +670,7 @@ class PlannerAgent:
                         action="generate_tests",
                         params={"class_name": class_name, "method_name": method_name},
                         success=True,
-                        result=self._simplify_result(test_result)
+                        result=self._simplify_result(test_result),
                     )
                 else:
                     logger.warning("  ✗ 测试生成失败或未生成任何测试，停止自动流程")
@@ -603,20 +682,28 @@ class PlannerAgent:
             logger.info("→ 跳过 generate_tests（目标方法已有测试）")
 
         # 检查是否需要生成变异体
-        existing_mutants = self.tools.db.get_mutants_by_method(class_name, method_name, status="valid") if self.tools.db else []
+        existing_mutants = (
+            self.tools.db.get_mutants_by_method(class_name, method_name, status="valid")
+            if self.tools.db
+            else []
+        )
         if not existing_mutants:
             logger.info("→ 自动执行: generate_mutants（目标没有变异体）")
             try:
-                mutant_result = self.tools.call("generate_mutants", class_name=class_name, method_name=method_name)
+                mutant_result = self.tools.call(
+                    "generate_mutants", class_name=class_name, method_name=method_name
+                )
                 if mutant_result and mutant_result.get("generated", 0) > 0:
-                    logger.info(f"  ✓ 成功生成 {mutant_result.get('generated')} 个变异体")
+                    logger.info(
+                        f"  ✓ 成功生成 {mutant_result.get('generated')} 个变异体"
+                    )
                     need_evaluation = True
                     # 记录自动执行的操作
                     self.state.add_action(
                         action="generate_mutants",
                         params={"class_name": class_name, "method_name": method_name},
                         success=True,
-                        result=self._simplify_result(mutant_result)
+                        result=self._simplify_result(mutant_result),
                     )
                 else:
                     logger.warning("  ✗ 变异体生成失败或未生成任何变异体，停止自动流程")
@@ -638,13 +725,15 @@ class PlannerAgent:
             try:
                 eval_result = self.tools.call("run_evaluation")
                 if eval_result:
-                    logger.info(f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体")
+                    logger.info(
+                        f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体"
+                    )
                     # 记录自动执行的操作
                     self.state.add_action(
                         action="run_evaluation",
                         params={},
                         success=True,
-                        result=self._simplify_result(eval_result)
+                        result=self._simplify_result(eval_result),
                     )
                 else:
                     logger.warning("  ✗ 评估失败")
@@ -672,13 +761,15 @@ class PlannerAgent:
         try:
             eval_result = self.tools.call("run_evaluation")
             if eval_result:
-                logger.info(f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体")
+                logger.info(
+                    f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体"
+                )
                 # 记录自动执行的操作
                 self.state.add_action(
                     action="run_evaluation",
                     params={},
                     success=True,
-                    result=self._simplify_result(eval_result)
+                    result=self._simplify_result(eval_result),
                 )
             else:
                 logger.warning("  ✗ 评估失败")
@@ -693,7 +784,19 @@ class PlannerAgent:
             return None
         if isinstance(result, dict):
             # 只保留关键字段
-            return {k: v for k, v in result.items() if k in ['generated', 'evaluated', 'killed', 'mutation_score', 'class_name', 'method_name']}
+            return {
+                k: v
+                for k, v in result.items()
+                if k
+                in [
+                    "generated",
+                    "evaluated",
+                    "killed",
+                    "mutation_score",
+                    "class_name",
+                    "method_name",
+                ]
+            }
         return str(result)[:100]  # 截断过长的字符串
 
     def save_state(self, file_path: str) -> None:

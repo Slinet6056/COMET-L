@@ -21,9 +21,7 @@ class Contract(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
 
     class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class Pattern(BaseModel):
@@ -31,21 +29,23 @@ class Pattern(BaseModel):
 
     id: str = Field(description="模式 ID")
     name: str = Field(description="模式名称")
-    category: str = Field(description="类别（如 null_pointer、boundary、resource_leak）")
+    category: str = Field(
+        description="类别（如 null_pointer、boundary、resource_leak）"
+    )
     description: str = Field(description="模式描述")
     template: str = Field(description="变异模板")
     examples: List[str] = Field(default_factory=list, description="示例")
     mutation_strategy: Optional[str] = Field(default=None, description="变异策略")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="置信度")
-    success_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="成功率（发现缺陷的比例）")
+    success_rate: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="成功率（发现缺陷的比例）"
+    )
     usage_count: int = Field(default=0, ge=0, description="使用次数")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 
     class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class MutationPatch(BaseModel):
@@ -72,7 +72,7 @@ class Mutant(BaseModel):
     pattern_id: Optional[str] = Field(default=None, description="关联的缺陷模式 ID")
     status: str = Field(
         default="pending",
-        description="状态（pending、valid、invalid、killed、survived）"
+        description="状态（pending、valid、invalid、killed、survived）",
     )
     killed_by: List[str] = Field(default_factory=list, description="被哪些测试击杀")
     survived: bool = Field(default=False, description="是否幸存")
@@ -81,9 +81,7 @@ class Mutant(BaseModel):
     evaluated_at: Optional[datetime] = Field(default=None, description="评估时间")
 
     class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class TestMethod(BaseModel):
@@ -98,9 +96,7 @@ class TestMethod(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 
     class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class TestCase(BaseModel):
@@ -123,9 +119,7 @@ class TestCase(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 
     class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class CoverageInfo(BaseModel):
@@ -138,7 +132,9 @@ class CoverageInfo(BaseModel):
     covered_branches: int = Field(default=0, ge=0, description="覆盖的分支数")
     total_branches: int = Field(default=0, ge=0, description="总分支数")
     line_coverage: float = Field(default=0.0, ge=0.0, le=1.0, description="行覆盖率")
-    branch_coverage: float = Field(default=0.0, ge=0.0, le=1.0, description="分支覆盖率")
+    branch_coverage: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="分支覆盖率"
+    )
 
 
 class EvaluationResult(BaseModel):
@@ -153,17 +149,14 @@ class EvaluationResult(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now, description="时间戳")
 
     class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class KillMatrix(BaseModel):
     """击杀矩阵 K(T,M) - 记录哪些测试击杀了哪些变异体"""
 
     matrix: Dict[str, List[str]] = Field(
-        default_factory=dict,
-        description="键为变异体 ID，值为击杀它的测试 ID 列表"
+        default_factory=dict, description="键为变异体 ID，值为击杀它的测试 ID 列表"
     )
 
     def add_kill(self, mutant_id: str, test_id: str) -> None:
@@ -196,14 +189,14 @@ class Metrics(BaseModel):
     total_tests: int = Field(default=0, ge=0, description="总测试数")
     mutation_score: float = Field(default=0.0, ge=0.0, le=1.0, description="变异分数")
     line_coverage: float = Field(default=0.0, ge=0.0, le=1.0, description="行覆盖率")
-    branch_coverage: float = Field(default=0.0, ge=0.0, le=1.0, description="分支覆盖率")
+    branch_coverage: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="分支覆盖率"
+    )
     llm_calls: int = Field(default=0, ge=0, description="LLM 调用次数")
     timestamp: datetime = Field(default_factory=datetime.now, description="时间戳")
 
     class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
     def calculate_mutation_score(self) -> None:
         """计算变异分数"""

@@ -79,10 +79,9 @@ public class MutationApplier {
     public boolean validateCompilation(String mutatedFilePath, String classpath) {
         try {
             ProcessBuilder pb = new ProcessBuilder(
-                "javac",
-                "-cp", classpath,
-                mutatedFilePath
-            );
+                    "javac",
+                    "-cp", classpath,
+                    mutatedFilePath);
             pb.redirectErrorStream(true);
             Process process = pb.start();
 
