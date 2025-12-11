@@ -343,6 +343,26 @@ class AgentTools:
             f"从数据库重建测试文件: 总共 {len(all_valid_methods)} 个方法（去重后）"
         )
 
+        # 修复：同步更新所有相关TestCase的full_code到数据库
+        # 重要：首先更新当前的 test_case（即使它不在数据库查询结果中）
+        update_count = 0
+
+        test_case.full_code = full_code
+        self.db.save_test_case(test_case)
+        update_count += 1
+
+        # 然后更新数据库中的其他相关 TestCase
+        for tc in all_test_cases:
+            # 跳过当前 test_case（已经更新过了）
+            if tc.id == test_case.id:
+                continue
+
+            tc.full_code = full_code
+            self.db.save_test_case(tc)
+            update_count += 1
+
+        logger.info(f"已同步更新数据库中 {update_count} 个测试用例的 full_code")
+
     def _restore_test_file_from_db(self, original_test_case):
         """
         从数据库恢复测试文件（用于验证失败后回滚）
@@ -410,9 +430,28 @@ class AgentTools:
             merge=False,
         )
 
+        # 修复：同步更新所有相关TestCase的full_code到数据库（与_rebuild_test_file_from_db保持一致）
+        # 重要：首先更新当前的 original_test_case（即使它不在数据库查询结果中）
+        update_count = 0
+
+        original_test_case.full_code = full_code
+        self.db.save_test_case(original_test_case)
+        update_count += 1
+
+        # 然后更新数据库中的其他相关 TestCase
+        for tc in all_test_cases:
+            # 跳过当前 original_test_case（已经更新过了）
+            if tc.id == original_test_case.id:
+                continue
+
+            tc.full_code = full_code
+            self.db.save_test_case(tc)
+            update_count += 1
+
         logger.info(
             f"已从数据库恢复测试文件: {original_test_case.class_name} (共 {len(all_methods)} 个方法，去重后)"
         )
+        logger.info(f"已同步更新数据库中 {update_count} 个测试用例的 full_code")
 
     def _get_test_file_path(self, test_case) -> str:
         """
@@ -657,6 +696,7 @@ class AgentTools:
             if use_actual_file:
                 # 此处分支确保 actual_test_code 不为 None
                 assert actual_test_code is not None
+
                 logger.debug(
                     f"检测到实际测试文件与 test_case.full_code 不一致，使用实际文件内容进行修复"
                 )
@@ -711,6 +751,32 @@ class AgentTools:
                     test_case.compile_success = False
                     test_case.compile_error = str(sync_error)
                     return test_case
+
+                # 3. 修复：同步更新数据库中所有相关 TestCase 的 full_code
+                #    因为写入的是完整文件，需要确保所有 TestCase 的 full_code 都同步
+                all_test_cases = self.db.get_tests_by_target_class(
+                    test_case.target_class
+                )
+                update_count = 0
+
+                # 重要：首先更新当前的 fixed_test_case（即使它不在数据库查询结果中）
+                # 注意：fixed_test_case 是修复后的版本，需要赋值给 test_case
+                test_case.full_code = fixed_test_case.full_code
+                test_case.methods = fixed_test_case.methods
+                self.db.save_test_case(test_case)
+                update_count += 1
+
+                # 然后更新数据库中的其他相关 TestCase
+                for tc in all_test_cases:
+                    # 跳过当前 test_case（已经更新过了）
+                    if tc.id == test_case.id:
+                        continue
+
+                    tc.full_code = fixed_test_case.full_code
+                    self.db.save_test_case(tc)
+                    update_count += 1
+
+                logger.info(f"已同步更新数据库中 {update_count} 个测试用例的 full_code")
             else:
                 # 普通情况：写入修复后的测试文件（使用合并模式，保留其他测试方法）
                 test_file = write_test_file(

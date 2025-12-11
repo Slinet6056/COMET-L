@@ -187,60 +187,137 @@ class ParallelPreprocessor:
         self, all_methods: List[Tuple[str, str, Dict[str, Any]]]
     ) -> None:
         """
-        并行处理所有方法
+        并行处理所有方法（使用动态调度策略避免文件锁冲突）
+
+        策略：按文件分组方法，确保同一时间只处理来自不同文件的方法，
+        避免同一文件的多个方法因为锁而串行执行
 
         Args:
             all_methods: 方法列表
         """
+        from .utils.project_utils import find_java_file
+
         completed_count = 0
         interrupted = False
 
+        # 按文件路径分组方法
+        methods_by_file = defaultdict(list)
+        for class_name, method_name, method_info in all_methods:
+            file_path = find_java_file(self.workspace_sandbox, class_name, db=self.db)
+            if file_path:
+                methods_by_file[str(file_path)].append(
+                    (class_name, method_name, method_info)
+                )
+            else:
+                logger.warning(f"未找到类文件: {class_name}，跳过该方法")
+
+        logger.info(
+            f"方法分组结果: {len(methods_by_file)} 个文件，共 {len(all_methods)} 个方法"
+        )
+        for file_path, methods in methods_by_file.items():
+            logger.debug(f"  {file_path}: {len(methods)} 个方法")
+
+        # 为每个文件创建方法队列
+        file_queues = {
+            file_path: list(methods) for file_path, methods in methods_by_file.items()
+        }
+
+        # 跟踪正在处理的文件
+        active_files = set()
+        active_files_lock = threading.Lock()
+
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # 提交所有任务
-            future_to_method = {
-                executor.submit(
-                    self._process_method_with_timeout,
-                    class_name,
-                    method_name,
-                    method_info,
-                ): (class_name, method_name)
-                for class_name, method_name, method_info in all_methods
-            }
+            # future到文件路径的映射
+            future_to_info = {}
+
+            def submit_next_from_file(file_path: str):
+                """从指定文件提交下一个待处理的方法"""
+                with active_files_lock:
+                    if file_path in active_files:
+                        # 该文件已有方法在处理中，不提交
+                        return None
+
+                    if not file_queues[file_path]:
+                        # 该文件的所有方法都已提交
+                        return None
+
+                    # 获取下一个方法
+                    class_name, method_name, method_info = file_queues[file_path].pop(0)
+
+                    # 标记该文件为活跃状态
+                    active_files.add(file_path)
+
+                    # 提交任务
+                    future = executor.submit(
+                        self._process_method_with_timeout,
+                        class_name,
+                        method_name,
+                        method_info,
+                    )
+                    future_to_info[future] = {
+                        "file_path": file_path,
+                        "class_name": class_name,
+                        "method_name": method_name,
+                    }
+                    return future
+
+            # 初始提交：为每个文件提交一个方法
+            for file_path in list(file_queues.keys()):
+                submit_next_from_file(file_path)
 
             # 处理完成的任务
             try:
-                for future in as_completed(future_to_method):
-                    class_name, method_name = future_to_method[future]
-                    completed_count += 1
+                while future_to_info:
+                    # 等待任意一个任务完成
+                    done_futures = []
+                    for future in as_completed(future_to_info.keys()):
+                        done_futures.append(future)
+                        break  # 只处理一个，然后尝试提交新任务
 
-                    try:
-                        result = future.result(timeout=5)  # 获取结果时再加一个超时保护
-                        if result["success"]:
-                            logger.info(
-                                f"[{completed_count}/{len(all_methods)}] ✓ {class_name}.{method_name} "
-                                f"(测试: {result['tests']}, 变异体: {result['mutants']}, "
-                                f"耗时: {result['elapsed']:.2f}s)"
+                    for future in done_futures:
+                        info = future_to_info.pop(future)
+                        file_path = info["file_path"]
+                        class_name = info["class_name"]
+                        method_name = info["method_name"]
+                        completed_count += 1
+
+                        # 释放文件锁定状态
+                        with active_files_lock:
+                            active_files.discard(file_path)
+
+                        # 处理结果
+                        try:
+                            result = future.result(timeout=5)
+                            if result["success"]:
+                                logger.info(
+                                    f"[{completed_count}/{len(all_methods)}] ✓ {class_name}.{method_name} "
+                                    f"(测试: {result['tests']}, 变异体: {result['mutants']}, "
+                                    f"耗时: {result['elapsed']:.2f}s)"
+                                )
+                            else:
+                                logger.warning(
+                                    f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} "
+                                    f"失败: {result.get('error', 'Unknown')}"
+                                )
+                        except TimeoutError:
+                            logger.error(
+                                f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 超时"
                             )
-                        else:
-                            logger.warning(
-                                f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} "
-                                f"失败: {result.get('error', 'Unknown')}"
+                        except Exception as e:
+                            logger.error(
+                                f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 异常: {e}"
                             )
-                    except TimeoutError:
-                        logger.error(
-                            f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 超时"
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 异常: {e}"
-                        )
+
+                        # 尝试从该文件提交下一个方法
+                        submit_next_from_file(file_path)
+
             except KeyboardInterrupt:
                 interrupted = True
                 logger.warning("\n收到中断信号，正在取消未完成的任务...")
 
                 # 取消所有未完成的任务
                 pending_count = 0
-                for future in future_to_method:
+                for future in future_to_info:
                     if not future.done():
                         future.cancel()
                         pending_count += 1
@@ -252,7 +329,7 @@ class ParallelPreprocessor:
                 import time
 
                 wait_start = time.time()
-                for future in future_to_method:
+                for future in future_to_info:
                     if not future.done() and not future.cancelled():
                         try:
                             future.result(
@@ -288,7 +365,9 @@ class ParallelPreprocessor:
         # 直接调用处理方法（不使用额外的线程池包装）
         # 超时控制在 _process_method 内部通过检查时间来实现
         try:
-            result = self._process_method(class_name, method_name, method_info, start_time)
+            result = self._process_method(
+                class_name, method_name, method_info, start_time
+            )
             return result
         except Exception as e:
             logger.error(f"方法 {class_name}.{method_name} 处理异常: {e}")
@@ -339,7 +418,11 @@ class ParallelPreprocessor:
             logger.warning(f"清理超时任务数据时出错: {e}")
 
     def _process_method(
-        self, class_name: str, method_name: str, method_info: Dict[str, Any], task_start_time=None
+        self,
+        class_name: str,
+        method_name: str,
+        method_info: Dict[str, Any],
+        task_start_time=None,
     ) -> Dict[str, Any]:
         """
         处理单个方法：生成测试、变异体并评估
@@ -548,7 +631,9 @@ class ParallelPreprocessor:
                         logger.error(
                             f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在生成变异体后"
                         )
-                        self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                        self._cleanup_timeout_data(
+                            class_name, method_name, task_start_time
+                        )
                         with self._stats_lock:
                             self._stats["failed"] += 1
                         return {
