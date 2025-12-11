@@ -270,6 +270,8 @@ class ParallelPreprocessor:
         """
         带超时控制的方法处理（包装函数）
 
+        注意：超时不包括等待文件锁的时间，只计算实际处理时间
+
         Args:
             class_name: 类名
             method_name: 方法名
@@ -278,37 +280,21 @@ class ParallelPreprocessor:
         Returns:
             处理结果
         """
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         # 记录开始时间，用于后续清理
         start_time = datetime.now()
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                self._process_method, class_name, method_name, method_info
-            )
-            try:
-                return future.result(timeout=self.timeout_per_method)
-            except TimeoutError:
-                logger.error(
-                    f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s)"
-                )
-
-                # 清理超时任务可能已保存到数据库的数据
-                self._cleanup_timeout_data(class_name, method_name, start_time)
-
-                with self._stats_lock:
-                    self._stats["failed"] += 1
-                return {
-                    "success": False,
-                    "error": f"Timeout after {self.timeout_per_method}s",
-                }
-            except Exception as e:
-                logger.error(f"方法 {class_name}.{method_name} 处理异常: {e}")
-                with self._stats_lock:
-                    self._stats["failed"] += 1
-                return {"success": False, "error": str(e)}
+        # 直接调用处理方法（不使用额外的线程池包装）
+        # 超时控制在 _process_method 内部通过检查时间来实现
+        try:
+            result = self._process_method(class_name, method_name, method_info, start_time)
+            return result
+        except Exception as e:
+            logger.error(f"方法 {class_name}.{method_name} 处理异常: {e}")
+            with self._stats_lock:
+                self._stats["failed"] += 1
+            return {"success": False, "error": str(e)}
 
     def _cleanup_timeout_data(
         self, class_name: str, method_name: str, start_time
@@ -353,7 +339,7 @@ class ParallelPreprocessor:
             logger.warning(f"清理超时任务数据时出错: {e}")
 
     def _process_method(
-        self, class_name: str, method_name: str, method_info: Dict[str, Any]
+        self, class_name: str, method_name: str, method_info: Dict[str, Any], task_start_time=None
     ) -> Dict[str, Any]:
         """
         处理单个方法：生成测试、变异体并评估
@@ -362,12 +348,18 @@ class ParallelPreprocessor:
             class_name: 类名
             method_name: 方法名
             method_info: 方法信息
+            task_start_time: 任务开始时间（用于清理超时数据），如果未提供则使用当前时间
 
         Returns:
             处理结果字典
         """
         from .utils.project_utils import find_java_file, write_test_file
         from .utils.code_utils import extract_class_from_file
+        from datetime import datetime
+
+        # 如果未提供任务开始时间，使用当前时间
+        if task_start_time is None:
+            task_start_time = datetime.now()
 
         start_time = time.time()
         sandbox_path = None
@@ -396,6 +388,22 @@ class ParallelPreprocessor:
             file_lock = self._file_locks[str(file_path)]
 
             with file_lock:
+                # 重置超时计时起点：从获取锁后开始计算处理时间
+                processing_start_time = time.time()
+                timeout_deadline = processing_start_time + self.timeout_per_method
+                # 检查超时（在获取锁之后的第一个检查点）
+                if time.time() > timeout_deadline:
+                    logger.error(
+                        f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s)"
+                    )
+                    self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                    with self._stats_lock:
+                        self._stats["failed"] += 1
+                    return {
+                        "success": False,
+                        "error": f"Timeout after {self.timeout_per_method}s",
+                    }
+
                 # 1. 生成测试
                 class_code = extract_class_from_file(str(file_path))
                 method_signature = method_info.get(
@@ -416,6 +424,19 @@ class ParallelPreprocessor:
                     logger.warning(f"测试生成失败: {class_name}.{method_name}")
                     return result
 
+                # 检查超时
+                if time.time() > timeout_deadline:
+                    logger.error(
+                        f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试生成后"
+                    )
+                    self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                    with self._stats_lock:
+                        self._stats["failed"] += 1
+                    return {
+                        "success": False,
+                        "error": f"Timeout after {self.timeout_per_method}s",
+                    }
+
                 # 写入测试文件到沙箱（传入数据库以支持多类文件）
                 sandbox_file_path = find_java_file(sandbox_path, class_name, db=self.db)
                 test_file = write_test_file(
@@ -430,6 +451,19 @@ class ParallelPreprocessor:
                     return result
 
                 # 验证和修复测试
+                # 检查超时
+                if time.time() > timeout_deadline:
+                    logger.error(
+                        f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在写入测试文件后"
+                    )
+                    self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                    with self._stats_lock:
+                        self._stats["failed"] += 1
+                    return {
+                        "success": False,
+                        "error": f"Timeout after {self.timeout_per_method}s",
+                    }
+
                 from .agent.tools import AgentTools
 
                 tools = AgentTools()
@@ -448,6 +482,19 @@ class ParallelPreprocessor:
                 if not test_case.compile_success:
                     logger.warning(f"测试编译失败: {class_name}.{method_name}")
                     return result
+
+                # 检查超时
+                if time.time() > timeout_deadline:
+                    logger.error(
+                        f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试验证后"
+                    )
+                    self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                    with self._stats_lock:
+                        self._stats["failed"] += 1
+                    return {
+                        "success": False,
+                        "error": f"Timeout after {self.timeout_per_method}s",
+                    }
 
                 # 额外验证：检查测试方法代码中是否包含明显的错误模式
                 from .utils.code_utils import validate_test_methods
@@ -496,6 +543,18 @@ class ParallelPreprocessor:
                 if not mutants:
                     logger.warning(f"未生成任何变异体: {class_name}.{method_name}")
                 else:
+                    # 检查超时
+                    if time.time() > timeout_deadline:
+                        logger.error(
+                            f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在生成变异体后"
+                        )
+                        self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                        with self._stats_lock:
+                            self._stats["failed"] += 1
+                        return {
+                            "success": False,
+                            "error": f"Timeout after {self.timeout_per_method}s",
+                        }
                     # 静态过滤
                     valid_mutants = self.static_guard.filter_mutants(
                         mutants, str(sandbox_file_path)
