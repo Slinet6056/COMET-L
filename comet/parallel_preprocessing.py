@@ -65,7 +65,7 @@ class ParallelPreprocessor:
             import multiprocessing
 
             cpu_count = multiprocessing.cpu_count()
-            self.max_workers = min(32, cpu_count * 4)
+            self.max_workers = cpu_count
 
         logger.info(f"并行预处理器初始化完成，最大并发数: {self.max_workers}")
 

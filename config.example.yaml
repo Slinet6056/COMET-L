@@ -41,5 +41,5 @@ logging:
 
 preprocessing:
   enabled: true  # 是否启用并行预处理
-  max_workers: null  # 最大并发数，null表示自动（cpu_count * 4）
+  max_workers: null  # 最大并发数，null表示自动（cpu_count）
   timeout_per_method: 300  # 单个方法的超时时间（秒）
