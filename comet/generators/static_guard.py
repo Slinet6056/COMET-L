@@ -230,6 +230,7 @@ class StaticGuard:
 
         # 使用系统路径分隔符连接
         import os
+
         classpath = os.pathsep.join(classpath_parts)
         logger.debug(f"构建的 classpath: {classpath[:200]}...")
         return classpath
