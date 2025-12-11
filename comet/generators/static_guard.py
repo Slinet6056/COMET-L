@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from ..models import Mutant
 
@@ -45,6 +45,17 @@ class StaticGuard:
             # 从原始文件中提取类名
             original_path = Path(original_file)
             class_file_name = original_path.name  # 例如: Calculator.java
+
+            # 推断项目根目录和 classpath
+            # 从 original_file 路径向上查找包含 pom.xml 的目录
+            project_root = self._find_project_root(original_file)
+
+            # 如果找不到 target/classes，尝试编译项目
+            classpath = self._build_classpath(project_root)
+            if not classpath and project_root:
+                logger.info(f"未找到编译输出，尝试编译项目: {project_root}")
+                if self._compile_project(project_root):
+                    classpath = self._build_classpath(project_root)
 
             # 创建临时目录和文件（使用正确的类名）
             temp_dir = tempfile.mkdtemp()
@@ -96,8 +107,13 @@ class StaticGuard:
             logger.debug(f"创建临时文件: {tmp_path}")
 
             # 尝试编译
+            javac_cmd = ["javac"]
+            if classpath:
+                javac_cmd.extend(["-cp", classpath])
+            javac_cmd.append(str(tmp_path))
+
             result = subprocess.run(
-                ["javac", str(tmp_path)],
+                javac_cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -155,3 +171,99 @@ class StaticGuard:
             logger.warning(f"过滤掉 {invalid_count} 个不合法的变异体")
 
         return valid_mutants
+
+    def _find_project_root(self, file_path: str) -> Optional[Path]:
+        """
+        从文件路径向上查找包含 pom.xml 的项目根目录
+
+        Args:
+            file_path: 源文件路径
+
+        Returns:
+            项目根目录路径，如果找不到返回 None
+        """
+        current = Path(file_path).parent
+        while current != current.parent:  # 到达文件系统根目录就停止
+            if (current / "pom.xml").exists():
+                logger.debug(f"找到项目根目录: {current}")
+                return current
+            current = current.parent
+        logger.warning(f"未找到项目根目录 (pom.xml) for {file_path}")
+        return None
+
+    def _build_classpath(self, project_root: Optional[Path]) -> Optional[str]:
+        """
+        构建 javac 的 classpath
+
+        Args:
+            project_root: 项目根目录
+
+        Returns:
+            classpath 字符串，如果无法构建返回 None
+        """
+        if not project_root:
+            return None
+
+        classpath_parts = []
+
+        # 添加项目的编译输出目录
+        target_classes = project_root / "target" / "classes"
+        if target_classes.exists():
+            classpath_parts.append(str(target_classes))
+            logger.debug(f"添加 target/classes 到 classpath: {target_classes}")
+        else:
+            logger.warning(f"target/classes 不存在: {target_classes}")
+
+        # 添加项目依赖的 jar 包（如果有）
+        target_deps = project_root / "target" / "dependency"
+        if target_deps.exists():
+            # 添加所有 jar 文件
+            jar_files = list(target_deps.glob("*.jar"))
+            for jar in jar_files:
+                classpath_parts.append(str(jar))
+            if jar_files:
+                logger.debug(f"添加 {len(jar_files)} 个依赖 jar 到 classpath")
+
+        if not classpath_parts:
+            logger.warning("无法构建 classpath - 没有找到编译输出或依赖")
+            return None
+
+        # 使用系统路径分隔符连接
+        import os
+        classpath = os.pathsep.join(classpath_parts)
+        logger.debug(f"构建的 classpath: {classpath[:200]}...")
+        return classpath
+
+    def _compile_project(self, project_root: Path) -> bool:
+        """
+        编译 Maven 项目
+
+        Args:
+            project_root: 项目根目录
+
+        Returns:
+            编译是否成功
+        """
+        try:
+            logger.info(f"开始编译项目: {project_root}")
+            result = subprocess.run(
+                ["mvn", "compile", "-q"],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5分钟超时
+            )
+
+            if result.returncode == 0:
+                logger.info(f"项目编译成功: {project_root}")
+                return True
+            else:
+                logger.warning(f"项目编译失败: {project_root}")
+                logger.debug(f"编译错误: {result.stderr[:500]}")
+                return False
+        except subprocess.TimeoutExpired:
+            logger.error(f"项目编译超时: {project_root}")
+            return False
+        except Exception as e:
+            logger.error(f"项目编译出错: {e}")
+            return False
