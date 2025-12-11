@@ -88,7 +88,7 @@ class PreprocessingConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="是否启用并行预处理")
     max_workers: Optional[int] = Field(
-        default=None, description="最大并发数，null表示自动（cpu_count * 4）"
+        default=None, description="最大并发数，null表示自动（cpu_count）"
     )
     timeout_per_method: int = Field(
         default=300, ge=1, description="单个方法的超时时间（秒）"
