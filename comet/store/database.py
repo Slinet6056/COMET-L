@@ -607,7 +607,7 @@ class Database:
 
     def delete_test_method(self, test_case_id: str, method_name: str) -> bool:
         """
-        删除指定测试用例中的指定测试方法（所有版本）
+        删除指定测试用例中的指定测试方法（所有版本），并更新相关变异体的击杀信息
 
         Args:
             test_case_id: 测试用例 ID
@@ -619,6 +619,15 @@ class Database:
         with self._lock:
             cursor = self.conn.cursor()
             try:
+                # 先更新变异体的击杀信息
+                updated_mutants = self.batch_update_mutant_kill_info(
+                    test_case_id, method_name
+                )
+                if updated_mutants > 0:
+                    logger.info(
+                        f"删除测试方法前，已更新 {updated_mutants} 个变异体的击杀信息"
+                    )
+
                 # 删除所有版本的该方法
                 cursor.execute(
                     """
@@ -651,6 +660,160 @@ class Database:
                 logger.info(f"已删除变异体: {mutant_id}")
             except Exception as e:
                 logger.error(f"删除变异体失败: {e}")
+                self.conn.rollback()
+                raise
+
+    def update_mutant_kill_info(
+        self, mutant_id: str, test_method_to_remove: str
+    ) -> bool:
+        """
+        从变异体的 killed_by 列表中移除指定测试方法
+
+        Args:
+            mutant_id: 变异体 ID
+            test_method_to_remove: 要移除的测试方法名（格式：TestClassName.testMethodName）
+
+        Returns:
+            是否成功更新（True 表示有变更）
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            try:
+                # 获取当前的 killed_by 列表
+                cursor.execute(
+                    "SELECT killed_by, status FROM mutants WHERE id = ?", (mutant_id,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"变异体不存在: {mutant_id}")
+                    return False
+
+                killed_by_json = row["killed_by"]
+                current_status = row["status"]
+
+                if not killed_by_json:
+                    return False
+
+                killed_by = json.loads(killed_by_json)
+
+                # 移除指定的测试方法
+                if test_method_to_remove in killed_by:
+                    killed_by.remove(test_method_to_remove)
+
+                    # 更新数据库
+                    new_killed_by_json = json.dumps(killed_by)
+
+                    # 如果 killed_by 为空且状态是 killed，需要更新状态为 survived
+                    new_status = current_status
+                    if not killed_by and current_status == "killed":
+                        new_status = "valid"
+                        logger.info(
+                            f"变异体 {mutant_id} 的所有击杀测试都被移除，状态从 killed 变为 valid"
+                        )
+
+                    cursor.execute(
+                        """
+                        UPDATE mutants
+                        SET killed_by = ?, status = ?, survived = ?
+                        WHERE id = ?
+                    """,
+                        (
+                            new_killed_by_json,
+                            new_status,
+                            1 if not killed_by else 0,
+                            mutant_id,
+                        ),
+                    )
+                    self.conn.commit()
+                    logger.debug(
+                        f"已从变异体 {mutant_id} 的 killed_by 中移除: {test_method_to_remove}"
+                    )
+                    return True
+
+                return False
+            except Exception as e:
+                logger.error(f"更新变异体击杀信息失败: {e}")
+                self.conn.rollback()
+                raise
+
+    def batch_update_mutant_kill_info(self, test_case_id: str, method_name: str) -> int:
+        """
+        批量更新所有被指定测试方法击杀的变异体
+
+        Args:
+            test_case_id: 测试用例 ID
+            method_name: 测试方法名
+
+        Returns:
+            更新的变异体数量
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            try:
+                # 构造测试方法的完整标识（TestClassName.testMethodName）
+                # 先获取测试用例的类名
+                cursor.execute(
+                    "SELECT class_name FROM test_cases WHERE id = ?", (test_case_id,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"测试用例不存在: {test_case_id}")
+                    return 0
+
+                test_class_name = row["class_name"]
+                test_method_full = f"{test_class_name}.{method_name}"
+
+                # 查询所有在 killed_by 中包含该测试方法的变异体
+                cursor.execute("SELECT id, killed_by, status FROM mutants")
+                rows = cursor.fetchall()
+
+                updated_count = 0
+                for row in rows:
+                    mutant_id = row["id"]
+                    killed_by_json = row["killed_by"]
+                    current_status = row["status"]
+
+                    if not killed_by_json:
+                        continue
+
+                    killed_by = json.loads(killed_by_json)
+
+                    # 检查是否包含要删除的测试方法
+                    if test_method_full in killed_by:
+                        killed_by.remove(test_method_full)
+                        new_killed_by_json = json.dumps(killed_by)
+
+                        # 如果 killed_by 为空且状态是 killed，更新状态为 valid
+                        new_status = current_status
+                        if not killed_by and current_status == "killed":
+                            new_status = "valid"
+                            logger.info(
+                                f"变异体 {mutant_id} 的所有击杀测试都被移除，状态从 killed 变为 valid"
+                            )
+
+                        cursor.execute(
+                            """
+                            UPDATE mutants
+                            SET killed_by = ?, status = ?, survived = ?
+                            WHERE id = ?
+                        """,
+                            (
+                                new_killed_by_json,
+                                new_status,
+                                1 if not killed_by else 0,
+                                mutant_id,
+                            ),
+                        )
+                        updated_count += 1
+
+                self.conn.commit()
+                if updated_count > 0:
+                    logger.info(
+                        f"已更新 {updated_count} 个变异体的击杀信息，移除测试方法: {test_method_full}"
+                    )
+                return updated_count
+            except Exception as e:
+                logger.error(f"批量更新变异体击杀信息失败: {e}")
                 self.conn.rollback()
                 raise
 

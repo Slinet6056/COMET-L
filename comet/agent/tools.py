@@ -248,7 +248,12 @@ class AgentTools:
         discarded_methods: set,
     ):
         """
-        从数据库重建完整的测试文件，确保丢弃的方法被删除，同时保留其他TestCase的方法
+        从数据库重建测试文件，只包含当前TestCase的方法（排除被丢弃的）
+
+        重要说明：
+        - 这个方法只更新当前TestCase的full_code和测试文件
+        - 不会影响其他TestCase（避免旧设计中的过度合并问题）
+        - 在并行预处理的最终合并阶段，会统一处理所有TestCase的同步
 
         Args:
             test_case: 当前TestCase
@@ -257,76 +262,35 @@ class AgentTools:
         from ..utils.project_utils import write_test_file
         from ..utils.code_utils import build_test_class
 
-        # 从数据库获取所有针对同一个目标类的TestCase
-        all_test_cases = self.db.get_tests_by_target_class(test_case.target_class)
+        # 只处理当前test_case的方法，排除被丢弃的
+        valid_methods = [
+            method
+            for method in test_case.methods
+            if method.method_name not in discarded_methods
+        ]
 
-        # 使用字典去重：{method_name: (TestMethod, updated_at)}
-        # 保留更新时间最新的方法（同名方法只保留一个）
-        unique_methods = {}
-
-        # 先处理当前 test_case（优先使用最新的内存中的版本）
-        for method in test_case.methods:
-            # 跳过需要丢弃的方法
-            if method.method_name in discarded_methods:
-                continue
-
-            method_updated = method.updated_at or method.created_at
-            unique_methods[method.method_name] = (method, method_updated)
-
-        # 再处理数据库中的其他 TestCase
-        for tc in all_test_cases:
-            # 跳过当前 test_case（已经处理过了）
-            if tc.id == test_case.id:
-                continue
-
-            for method in tc.methods:
-                # 跳过需要丢弃的方法
-                if method.method_name in discarded_methods:
-                    continue
-
-                # 检查是否已存在同名方法
-                if method.method_name in unique_methods:
-                    existing_method, existing_updated = unique_methods[
-                        method.method_name
-                    ]
-                    # 比较更新时间，保留更新的
-                    method_updated = method.updated_at or method.created_at
-                    if method_updated and existing_updated:
-                        if method_updated > existing_updated:
-                            unique_methods[method.method_name] = (
-                                method,
-                                method_updated,
-                            )
-                        elif (
-                            method_updated == existing_updated
-                            and method.version > existing_method.version
-                        ):
-                            # 时间相同时比较版本号
-                            unique_methods[method.method_name] = (
-                                method,
-                                method_updated,
-                            )
-                    # 如果没有时间信息，只比较版本号
-                    elif method.version > existing_method.version:
-                        unique_methods[method.method_name] = (method, method_updated)
-                else:
-                    method_updated = method.updated_at or method.created_at
-                    unique_methods[method.method_name] = (method, method_updated)
-
-        if not unique_methods:
-            logger.warning("没有有效的测试方法，跳过写入")
+        if not valid_methods:
+            logger.warning(f"测试用例 {test_case.id} 没有有效的测试方法，跳过写入")
             return
 
-        # 提取去重后的方法列表
-        all_valid_methods = [m for m, _ in unique_methods.values()]
+        # 从full_code中提取imports（如果存在），否则使用test_case.imports
+        # 修复原因：test_case.imports可能不完整，缺少测试代码需要的imports（如StringWriter）
+        # full_code中的imports是更完整的，包含了编译成功时的所有imports
+        from ..utils.code_utils import extract_imports
+        if test_case.full_code:
+            imports = extract_imports(test_case.full_code)
+            logger.debug(f"从full_code提取到 {len(imports)} 个imports")
+        else:
+            imports = test_case.imports
+            logger.debug(f"使用test_case.imports: {len(imports)} 个imports")
 
         # 构建完整的测试类代码
-        method_codes = [m.code for m in all_valid_methods]
+        method_codes = [m.code for m in valid_methods]
         full_code = build_test_class(
             test_class_name=test_case.class_name,
             target_class=test_case.target_class,
             package_name=test_case.package_name,
-            imports=test_case.imports,
+            imports=imports,
             test_methods=method_codes,
         )
 
@@ -340,28 +304,13 @@ class AgentTools:
         )
 
         logger.info(
-            f"从数据库重建测试文件: 总共 {len(all_valid_methods)} 个方法（去重后）"
+            f"从数据库重建测试文件: {test_case.id}，包含 {len(valid_methods)} 个方法"
         )
 
-        # 修复：同步更新所有相关TestCase的full_code到数据库
-        # 重要：首先更新当前的 test_case（即使它不在数据库查询结果中）
-        update_count = 0
-
+        # 更新当前test_case的full_code
         test_case.full_code = full_code
-        self.db.save_test_case(test_case)
-        update_count += 1
-
-        # 然后更新数据库中的其他相关 TestCase
-        for tc in all_test_cases:
-            # 跳过当前 test_case（已经更新过了）
-            if tc.id == test_case.id:
-                continue
-
-            tc.full_code = full_code
-            self.db.save_test_case(tc)
-            update_count += 1
-
-        logger.info(f"已同步更新数据库中 {update_count} 个测试用例的 full_code")
+        # 注意：不在这里保存到数据库，由调用方决定是否保存
+        # full_code的同步会在并行预处理的_merge_results_to_workspace阶段统一处理
 
     def _restore_test_file_from_db(self, original_test_case):
         """
@@ -1047,6 +996,7 @@ class AgentTools:
         )
 
         final_compile = self.java_executor.compile_tests(self.project_path)
+
         if final_compile.get("success"):
             final_test = self.java_executor.run_tests(self.project_path)
             if final_test.get("success"):

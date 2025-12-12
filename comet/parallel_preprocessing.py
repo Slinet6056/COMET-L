@@ -36,9 +36,6 @@ class ParallelPreprocessor:
         self.db = components["db"]
         self.project_scanner = components["project_scanner"]
 
-        # 线程安全：文件级别的互斥锁
-        self._file_locks = defaultdict(threading.Lock)
-
         # 统计信息
         self._stats = {
             "total_methods": 0,
@@ -187,132 +184,62 @@ class ParallelPreprocessor:
         self, all_methods: List[Tuple[str, str, Dict[str, Any]]]
     ) -> None:
         """
-        并行处理所有方法（使用动态调度策略避免文件锁冲突）
+        并行处理所有方法（简化版本，无文件锁限制）
 
-        策略：按文件分组方法，确保同一时间只处理来自不同文件的方法，
-        避免同一文件的多个方法因为锁而串行执行
+        每个目标方法使用独立沙箱，完全并行处理
 
         Args:
             all_methods: 方法列表
         """
-        from .utils.project_utils import find_java_file
-
         completed_count = 0
-        interrupted = False
-
-        # 按文件路径分组方法
-        methods_by_file = defaultdict(list)
-        for class_name, method_name, method_info in all_methods:
-            file_path = find_java_file(self.workspace_sandbox, class_name, db=self.db)
-            if file_path:
-                methods_by_file[str(file_path)].append(
-                    (class_name, method_name, method_info)
-                )
-            else:
-                logger.warning(f"未找到类文件: {class_name}，跳过该方法")
-
-        logger.info(
-            f"方法分组结果: {len(methods_by_file)} 个文件，共 {len(all_methods)} 个方法"
-        )
-        for file_path, methods in methods_by_file.items():
-            logger.debug(f"  {file_path}: {len(methods)} 个方法")
-
-        # 为每个文件创建方法队列
-        file_queues = {
-            file_path: list(methods) for file_path, methods in methods_by_file.items()
-        }
-
-        # 跟踪正在处理的文件
-        active_files = set()
-        active_files_lock = threading.Lock()
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # future到文件路径的映射
+            # 提交所有任务
             future_to_info = {}
-
-            def submit_next_from_file(file_path: str):
-                """从指定文件提交下一个待处理的方法"""
-                with active_files_lock:
-                    if file_path in active_files:
-                        # 该文件已有方法在处理中，不提交
-                        return None
-
-                    if not file_queues[file_path]:
-                        # 该文件的所有方法都已提交
-                        return None
-
-                    # 获取下一个方法
-                    class_name, method_name, method_info = file_queues[file_path].pop(0)
-
-                    # 标记该文件为活跃状态
-                    active_files.add(file_path)
-
-                    # 提交任务
-                    future = executor.submit(
-                        self._process_method_with_timeout,
-                        class_name,
-                        method_name,
-                        method_info,
-                    )
-                    future_to_info[future] = {
-                        "file_path": file_path,
-                        "class_name": class_name,
-                        "method_name": method_name,
-                    }
-                    return future
-
-            # 初始提交：为每个文件提交一个方法
-            for file_path in list(file_queues.keys()):
-                submit_next_from_file(file_path)
+            for class_name, method_name, method_info in all_methods:
+                future = executor.submit(
+                    self._process_method_with_timeout,
+                    class_name,
+                    method_name,
+                    method_info,
+                )
+                future_to_info[future] = {
+                    "class_name": class_name,
+                    "method_name": method_name,
+                }
 
             # 处理完成的任务
             try:
-                while future_to_info:
-                    # 等待任意一个任务完成
-                    done_futures = []
-                    for future in as_completed(future_to_info.keys()):
-                        done_futures.append(future)
-                        break  # 只处理一个，然后尝试提交新任务
+                for future in as_completed(future_to_info.keys()):
+                    info = future_to_info[future]
+                    class_name = info["class_name"]
+                    method_name = info["method_name"]
+                    completed_count += 1
 
-                    for future in done_futures:
-                        info = future_to_info.pop(future)
-                        file_path = info["file_path"]
-                        class_name = info["class_name"]
-                        method_name = info["method_name"]
-                        completed_count += 1
-
-                        # 释放文件锁定状态
-                        with active_files_lock:
-                            active_files.discard(file_path)
-
-                        # 处理结果
-                        try:
-                            result = future.result(timeout=5)
-                            if result["success"]:
-                                logger.info(
-                                    f"[{completed_count}/{len(all_methods)}] ✓ {class_name}.{method_name} "
-                                    f"(测试: {result['tests']}, 变异体: {result['mutants']}, "
-                                    f"耗时: {result['elapsed']:.2f}s)"
-                                )
-                            else:
-                                logger.warning(
-                                    f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} "
-                                    f"失败: {result.get('error', 'Unknown')}"
-                                )
-                        except TimeoutError:
-                            logger.error(
-                                f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 超时"
+                    # 处理结果
+                    try:
+                        result = future.result(timeout=5)
+                        if result["success"]:
+                            logger.info(
+                                f"[{completed_count}/{len(all_methods)}] ✓ {class_name}.{method_name} "
+                                f"(测试: {result['tests']}, 变异体: {result['mutants']}, "
+                                f"耗时: {result['elapsed']:.2f}s)"
                             )
-                        except Exception as e:
-                            logger.error(
-                                f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 异常: {e}"
+                        else:
+                            logger.warning(
+                                f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} "
+                                f"失败: {result.get('error', 'Unknown')}"
                             )
-
-                        # 尝试从该文件提交下一个方法
-                        submit_next_from_file(file_path)
+                    except TimeoutError:
+                        logger.error(
+                            f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 超时"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 异常: {e}"
+                        )
 
             except KeyboardInterrupt:
-                interrupted = True
                 logger.warning("\n收到中断信号，正在取消未完成的任务...")
 
                 # 取消所有未完成的任务
@@ -326,8 +253,6 @@ class ParallelPreprocessor:
 
                 # 等待正在执行的任务完成（最多等待5秒）
                 logger.info("等待正在执行的任务完成...")
-                import time
-
                 wait_start = time.time()
                 for future in future_to_info:
                     if not future.done() and not future.cancelled():
@@ -461,83 +386,155 @@ class ParallelPreprocessor:
             )
             sandbox_id = Path(sandbox_path).name
 
-            # 获取文件路径和文件锁（传入数据库以支持多类文件）
+            # 获取文件路径（传入数据库以支持多类文件）
             file_path = find_java_file(self.workspace_sandbox, class_name, db=self.db)
             if not file_path:
                 logger.error(f"未找到类文件: {class_name}")
                 return result
 
-            # 在文件锁保护下执行操作
-            file_lock = self._file_locks[str(file_path)]
+            # 设置超时计时
+            processing_start_time = time.time()
+            timeout_deadline = processing_start_time + self.timeout_per_method
 
-            with file_lock:
-                # 重置超时计时起点：从获取锁后开始计算处理时间
-                processing_start_time = time.time()
-                timeout_deadline = processing_start_time + self.timeout_per_method
-                # 检查超时（在获取锁之后的第一个检查点）
-                if time.time() > timeout_deadline:
-                    logger.error(
-                        f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s)"
-                    )
-                    self._cleanup_timeout_data(class_name, method_name, task_start_time)
-                    with self._stats_lock:
-                        self._stats["failed"] += 1
-                    return {
-                        "success": False,
-                        "error": f"Timeout after {self.timeout_per_method}s",
-                    }
+            # 1. 生成测试
+            class_code = extract_class_from_file(str(file_path))
+            method_signature = method_info.get(
+                "signature", f"public void {method_name}()"
+            )
 
-                # 1. 生成测试
-                class_code = extract_class_from_file(str(file_path))
-                method_signature = method_info.get(
-                    "signature", f"public void {method_name}()"
+            # 获取现有测试（用于参考）
+            existing_tests = self.db.get_tests_by_target_class(class_name)
+
+            test_case = self.test_generator.generate_tests_for_method(
+                class_name=class_name,
+                method_signature=method_signature,
+                class_code=class_code,
+                existing_tests=existing_tests,
+            )
+
+            if not test_case:
+                logger.warning(f"测试生成失败: {class_name}.{method_name}")
+                return result
+
+            # 检查超时
+            if time.time() > timeout_deadline:
+                logger.error(
+                    f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试生成后"
                 )
+                self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                with self._stats_lock:
+                    self._stats["failed"] += 1
+                return {
+                    "success": False,
+                    "error": f"Timeout after {self.timeout_per_method}s",
+                }
 
-                # 获取现有测试（用于参考）
-                existing_tests = self.db.get_tests_by_target_class(class_name)
+            # 写入测试文件到沙箱（传入数据库以支持多类文件）
+            sandbox_file_path = find_java_file(sandbox_path, class_name, db=self.db)
+            test_file = write_test_file(
+                project_path=sandbox_path,
+                package_name=test_case.package_name,
+                test_code=test_case.full_code,
+                test_class_name=test_case.class_name,
+            )
 
-                test_case = self.test_generator.generate_tests_for_method(
-                    class_name=class_name,
-                    method_signature=method_signature,
-                    class_code=class_code,
-                    existing_tests=existing_tests,
+            if not test_file:
+                logger.error(f"写入测试文件失败: {class_name}.{method_name}")
+                return result
+
+            # 验证和修复测试
+            # 检查超时
+            if time.time() > timeout_deadline:
+                logger.error(
+                    f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在写入测试文件后"
                 )
+                self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                with self._stats_lock:
+                    self._stats["failed"] += 1
+                return {
+                    "success": False,
+                    "error": f"Timeout after {self.timeout_per_method}s",
+                }
 
-                if not test_case:
-                    logger.warning(f"测试生成失败: {class_name}.{method_name}")
+            from .agent.tools import AgentTools
+
+            tools = AgentTools()
+            tools.project_path = sandbox_path
+            tools.java_executor = self.java_executor
+            tools.test_generator = self.test_generator
+            tools.db = self.db  # 必须设置db，否则_rebuild_test_file_from_db会失败
+
+            test_case = tools._verify_and_fix_tests(
+                test_case=test_case,
+                class_code=class_code,
+                max_compile_retries=3,
+                max_test_retries=3,
+            )
+
+            if not test_case.compile_success:
+                logger.warning(f"测试编译失败: {class_name}.{method_name}")
+                return result
+
+            # 检查超时
+            if time.time() > timeout_deadline:
+                logger.error(
+                    f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试验证后"
+                )
+                self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                with self._stats_lock:
+                    self._stats["failed"] += 1
+                return {
+                    "success": False,
+                    "error": f"Timeout after {self.timeout_per_method}s",
+                }
+
+            # 额外验证：检查测试方法代码中是否包含明显的错误模式
+            from .utils.code_utils import validate_test_methods
+
+            invalid_methods = validate_test_methods(test_case.methods, class_code)
+            if invalid_methods:
+                logger.warning(
+                    f"发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除"
+                )
+                test_case.methods = [
+                    m for m in test_case.methods if m.method_name not in invalid_methods
+                ]
+
+                if not test_case.methods:
+                    logger.error(f"所有测试方法都包含错误: {class_name}.{method_name}")
                     return result
 
-                # 检查超时
-                if time.time() > timeout_deadline:
-                    logger.error(
-                        f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试生成后"
-                    )
-                    self._cleanup_timeout_data(class_name, method_name, task_start_time)
-                    with self._stats_lock:
-                        self._stats["failed"] += 1
-                    return {
-                        "success": False,
-                        "error": f"Timeout after {self.timeout_per_method}s",
-                    }
+                # 重新构建测试代码
+                from .utils.code_utils import build_test_class
 
-                # 写入测试文件到沙箱（传入数据库以支持多类文件）
-                sandbox_file_path = find_java_file(sandbox_path, class_name, db=self.db)
-                test_file = write_test_file(
-                    project_path=sandbox_path,
-                    package_name=test_case.package_name,
-                    test_code=test_case.full_code,
+                method_codes = [m.code for m in test_case.methods]
+                test_case.full_code = build_test_class(
                     test_class_name=test_case.class_name,
+                    target_class=test_case.target_class,
+                    package_name=test_case.package_name,
+                    imports=test_case.imports,
+                    test_methods=method_codes,
                 )
 
-                if not test_file:
-                    logger.error(f"写入测试文件失败: {class_name}.{method_name}")
-                    return result
+            # 保存到数据库
+            self.db.save_test_case(test_case)
+            result["tests"] = len(test_case.methods)
 
-                # 验证和修复测试
+            # 2. 生成变异体
+            mutants = self.mutant_generator.generate_mutants(
+                class_name=class_name,
+                class_code=class_code,
+                num_mutations=5,
+                target_method=method_name,
+            )
+
+            if not mutants:
+                logger.warning(f"未生成任何变异体: {class_name}.{method_name}")
+            else:
                 # 检查超时
                 if time.time() > timeout_deadline:
                     logger.error(
-                        f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在写入测试文件后"
+                        f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在生成变异体后"
                     )
                     self._cleanup_timeout_data(class_name, method_name, task_start_time)
                     with self._stats_lock:
@@ -546,142 +543,46 @@ class ParallelPreprocessor:
                         "success": False,
                         "error": f"Timeout after {self.timeout_per_method}s",
                     }
-
-                from .agent.tools import AgentTools
-
-                tools = AgentTools()
-                tools.project_path = sandbox_path
-                tools.java_executor = self.java_executor
-                tools.test_generator = self.test_generator
-                tools.db = self.db  # 必须设置db，否则_rebuild_test_file_from_db会失败
-
-                test_case = tools._verify_and_fix_tests(
-                    test_case=test_case,
-                    class_code=class_code,
-                    max_compile_retries=3,
-                    max_test_retries=3,
+                # 静态过滤
+                valid_mutants = self.static_guard.filter_mutants(
+                    mutants, str(sandbox_file_path)
                 )
-
-                if not test_case.compile_success:
-                    logger.warning(f"测试编译失败: {class_name}.{method_name}")
-                    return result
-
-                # 检查超时
-                if time.time() > timeout_deadline:
-                    logger.error(
-                        f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试验证后"
-                    )
-                    self._cleanup_timeout_data(class_name, method_name, task_start_time)
-                    with self._stats_lock:
-                        self._stats["failed"] += 1
-                    return {
-                        "success": False,
-                        "error": f"Timeout after {self.timeout_per_method}s",
-                    }
-
-                # 额外验证：检查测试方法代码中是否包含明显的错误模式
-                from .utils.code_utils import validate_test_methods
-
-                invalid_methods = validate_test_methods(test_case.methods, class_code)
-                if invalid_methods:
-                    logger.warning(
-                        f"发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除"
-                    )
-                    test_case.methods = [
-                        m
-                        for m in test_case.methods
-                        if m.method_name not in invalid_methods
-                    ]
-
-                    if not test_case.methods:
-                        logger.error(
-                            f"所有测试方法都包含错误: {class_name}.{method_name}"
-                        )
-                        return result
-
-                    # 重新构建测试代码
-                    from .utils.code_utils import build_test_class
-
-                    method_codes = [m.code for m in test_case.methods]
-                    test_case.full_code = build_test_class(
-                        test_class_name=test_case.class_name,
-                        target_class=test_case.target_class,
-                        package_name=test_case.package_name,
-                        imports=test_case.imports,
-                        test_methods=method_codes,
-                    )
 
                 # 保存到数据库
-                self.db.save_test_case(test_case)
-                result["tests"] = len(test_case.methods)
+                for mutant in valid_mutants:
+                    mutant.patch.file_path = str(file_path)  # 使用workspace的文件路径
+                    self.db.save_mutant(mutant)
 
-                # 2. 生成变异体
-                mutants = self.mutant_generator.generate_mutants(
-                    class_name=class_name,
-                    class_code=class_code,
-                    num_mutations=5,
-                    target_method=method_name,
-                )
+                result["mutants"] = len(valid_mutants)
 
-                if not mutants:
-                    logger.warning(f"未生成任何变异体: {class_name}.{method_name}")
-                else:
-                    # 检查超时
-                    if time.time() > timeout_deadline:
-                        logger.error(
-                            f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在生成变异体后"
-                        )
-                        self._cleanup_timeout_data(
-                            class_name, method_name, task_start_time
-                        )
-                        with self._stats_lock:
-                            self._stats["failed"] += 1
-                        return {
-                            "success": False,
-                            "error": f"Timeout after {self.timeout_per_method}s",
-                        }
-                    # 静态过滤
-                    valid_mutants = self.static_guard.filter_mutants(
-                        mutants, str(sandbox_file_path)
+            # 3. 运行初始评估（在沙箱中）
+            if result["tests"] > 0 and result["mutants"] > 0:
+                try:
+                    # 获取保存的变异体（从数据库）
+                    saved_mutants = self.db.get_mutants_by_method(
+                        class_name=class_name,
+                        method_name=method_name,
+                        status="valid",
                     )
+                    saved_tests = [test_case]
 
-                    # 保存到数据库
-                    for mutant in valid_mutants:
-                        mutant.patch.file_path = str(
-                            file_path
-                        )  # 使用workspace的文件路径
-                        self.db.save_mutant(mutant)
-
-                    result["mutants"] = len(valid_mutants)
-
-                # 3. 运行初始评估（在沙箱中）
-                if result["tests"] > 0 and result["mutants"] > 0:
-                    try:
-                        # 获取保存的变异体（从数据库）
-                        saved_mutants = self.db.get_mutants_by_method(
-                            class_name=class_name,
-                            method_name=method_name,
-                            status="valid",
+                    if saved_mutants and saved_tests:
+                        # 构建击杀矩阵
+                        kill_matrix = self.mutation_evaluator.build_kill_matrix(
+                            mutants=saved_mutants,
+                            test_cases=saved_tests,
+                            project_path=sandbox_path,
                         )
-                        saved_tests = [test_case]
 
-                        if saved_mutants and saved_tests:
-                            # 构建击杀矩阵
-                            kill_matrix = self.mutation_evaluator.build_kill_matrix(
-                                mutants=saved_mutants,
-                                test_cases=saved_tests,
-                                project_path=sandbox_path,
-                            )
+                        # 保存变异体状态
+                        for mutant in saved_mutants:
+                            self.db.save_mutant(mutant)
 
-                            # 保存变异体状态
-                            for mutant in saved_mutants:
-                                self.db.save_mutant(mutant)
+                        logger.debug(f"完成评估: {class_name}.{method_name}")
+                except Exception as e:
+                    logger.warning(f"评估失败 {class_name}.{method_name}: {e}")
 
-                            logger.debug(f"完成评估: {class_name}.{method_name}")
-                    except Exception as e:
-                        logger.warning(f"评估失败 {class_name}.{method_name}: {e}")
-
-                result["success"] = True
+            result["success"] = True
 
         except Exception as e:
             logger.error(f"处理方法失败 {class_name}.{method_name}: {e}", exc_info=True)
@@ -713,28 +614,34 @@ class ParallelPreprocessor:
 
     def _merge_results_to_workspace(self) -> None:
         """
-        将各个独立沙箱中生成的测试文件合并到workspace沙箱
-        合并后会验证编译，如果失败则逐个排除有问题的方法
+        统一构建阶段：清空workspace测试文件，从数据库重建所有测试并验证
         """
-        from .utils.project_utils import write_test_file
+        from .utils.project_utils import write_test_file, clear_test_directory
         from .utils.code_utils import build_test_class
+
+        # 1. 清空workspace测试目录
+        logger.info("步骤 1: 清空workspace测试目录...")
+        if not clear_test_directory(self.workspace_sandbox):
+            logger.error("清空测试目录失败")
+            return
 
         # 使用已有的 java_executor
         java_executor = self.java_executor
 
-        # 从数据库获取所有测试用例
+        # 2. 从数据库获取所有测试用例
+        logger.info("步骤 2: 从数据库加载所有测试用例...")
         all_test_cases = self.db.get_all_test_cases()
 
         if not all_test_cases:
-            logger.info("没有测试用例需要合并")
+            logger.info("没有测试用例需要重建")
             return
 
-        # 按目标类分组
+        # 3. 按目标类分组
         tests_by_class = defaultdict(list)
         for test_case in all_test_cases:
             tests_by_class[test_case.target_class].append(test_case)
 
-        logger.info(f"合并 {len(tests_by_class)} 个类的测试文件到workspace沙箱...")
+        logger.info(f"步骤 3: 重建 {len(tests_by_class)} 个类的测试文件...")
 
         # 为每个目标类重建完整的测试文件
         for target_class, test_cases in tests_by_class.items():
@@ -818,14 +725,18 @@ class ParallelPreprocessor:
                         tc.compile_error = None
                         # 更新方法列表为验证通过的方法
                         # 只保留属于当前测试用例的方法
+                        original_method_names = {m.method_name for m in tc.methods}
                         tc.methods = [
                             m
                             for m in valid_methods
-                            if any(
-                                orig_m.method_name == m.method_name
-                                for orig_m in tc.methods
-                            )
+                            if m.method_name in original_method_names
                         ]
+
+                        # 修复：如果测试用例的所有方法都被过滤掉了，不保存
+                        if not tc.methods:
+                            logger.warning(f"测试用例 {tc.id} 的所有方法都未通过验证，不保存")
+                            continue
+
                         self.db.save_test_case(tc)
 
                     logger.info(
@@ -845,10 +756,9 @@ class ParallelPreprocessor:
         package_name: str,
         imports: list,
         all_methods: list,
-        max_iterations: int = 100,
     ) -> list:
         """
-        写入合并的测试文件并验证编译和测试，循环排除有问题的方法直到全部通过
+        写入合并的测试文件并验证编译和测试，无限重试直到全部通过或无方法可删
 
         Args:
             java_executor: Java执行器
@@ -857,7 +767,6 @@ class ParallelPreprocessor:
             package_name: 包名
             imports: 导入语句
             all_methods: 所有测试方法
-            max_iterations: 最大迭代次数（防止无限循环）
 
         Returns:
             验证通过的方法列表
@@ -868,6 +777,7 @@ class ParallelPreprocessor:
 
         valid_methods = list(all_methods)
         iteration = 0
+        last_method_count = len(valid_methods)
 
         # 计算测试文件路径
         if package_name:
@@ -885,8 +795,16 @@ class ParallelPreprocessor:
                 self.workspace_sandbox, "src", "test", "java", f"{test_class_name}.java"
             )
 
-        while valid_methods and iteration < max_iterations:
+        while valid_methods:
             iteration += 1
+
+            # 检查是否有进展（防止无限循环）
+            if len(valid_methods) == last_method_count and iteration > 1:
+                logger.error(f"验证陷入死循环，方法数量未变化: {len(valid_methods)}")
+                break
+            last_method_count = len(valid_methods)
+
+            logger.info(f"验证迭代 #{iteration}: 测试 {len(valid_methods)} 个方法...")
 
             # 构建完整的测试类代码
             method_codes = [m.code for m in valid_methods]
@@ -918,28 +836,54 @@ class ParallelPreprocessor:
                 )
 
                 if not failed_methods:
-                    # 无法识别具体哪个方法失败，尝试二分查找
+                    # 无法识别具体哪个方法失败，使用二分查找（并行递归）
                     if len(valid_methods) > 1:
-                        # 删除后半部分方法尝试
-                        half = len(valid_methods) // 2
-                        removed_methods = valid_methods[half:]
-                        valid_methods = valid_methods[:half]
                         logger.warning(
-                            f"无法识别失败方法，尝试二分排除 {len(removed_methods)} 个方法"
+                            f"无法从编译错误识别失败方法，启动二分查找 ({len(valid_methods)} 个方法)"
                         )
-                        for m in removed_methods:
-                            self._delete_test_method_from_db(
-                                target_class, m.method_name
+                        failed_methods_from_binary = self._binary_search_failed_methods(
+                            valid_methods,
+                            test_class_name,
+                            target_class,
+                            package_name,
+                            imports,
+                        )
+
+                        if failed_methods_from_binary:
+                            logger.info(
+                                f"二分查找识别到 {len(failed_methods_from_binary)} 个失败方法"
                             )
+                            for method_name in failed_methods_from_binary:
+                                valid_methods = [
+                                    m
+                                    for m in valid_methods
+                                    if m.method_name != method_name
+                                ]
+                                self._delete_test_method_from_db(
+                                    target_class, method_name
+                                )
+                        else:
+                            # 二分查找也没找到，这不应该发生
+                            logger.error("二分查找未能识别失败方法，删除所有方法")
+                            for m in valid_methods:
+                                self._delete_test_method_from_db(
+                                    target_class, m.method_name
+                                )
+                            valid_methods = []
+                            break
                     elif valid_methods:
                         # 只剩一个方法，删除它
                         removed = valid_methods.pop()
                         logger.warning(
-                            f"无法识别失败方法，删除最后的方法: {removed.method_name}"
+                            f"只剩一个方法且编译失败，删除: {removed.method_name}"
                         )
                         self._delete_test_method_from_db(
                             target_class, removed.method_name
                         )
+                    else:
+                        # 没有方法了，退出
+                        logger.error("所有方法都编译失败")
+                        break
                 else:
                     # 删除识别出的失败方法
                     for method_name in failed_methods:
@@ -968,21 +912,50 @@ class ParallelPreprocessor:
             failed_test_methods = self._identify_failed_test_methods(test_class_name)
 
             if not failed_test_methods:
-                # 无法识别失败的测试方法，但测试确实失败了
-                # 尝试二分排除
+                # 无法识别失败的测试方法，使用二分查找（并行递归）
                 if len(valid_methods) > 1:
-                    half = len(valid_methods) // 2
-                    removed_methods = valid_methods[half:]
-                    valid_methods = valid_methods[:half]
                     logger.warning(
-                        f"无法识别失败的测试方法，尝试二分排除 {len(removed_methods)} 个方法"
+                        f"无法从Surefire报告识别失败方法，启动二分查找 ({len(valid_methods)} 个方法)"
                     )
-                    for m in removed_methods:
-                        self._delete_test_method_from_db(target_class, m.method_name)
+                    failed_methods_from_binary = self._binary_search_failed_methods(
+                        valid_methods,
+                        test_class_name,
+                        target_class,
+                        package_name,
+                        imports,
+                    )
+
+                    if failed_methods_from_binary:
+                        logger.info(
+                            f"二分查找识别到 {len(failed_methods_from_binary)} 个失败方法"
+                        )
+                        for method_name in failed_methods_from_binary:
+                            valid_methods = [
+                                m for m in valid_methods if m.method_name != method_name
+                            ]
+                            self._delete_test_method_from_db(target_class, method_name)
+                    else:
+                        # 二分查找也没找到，这不应该发生
+                        logger.error("二分查找未能识别失败方法，删除所有方法")
+                        for m in valid_methods:
+                            self._delete_test_method_from_db(
+                                target_class, m.method_name
+                            )
+                        valid_methods = []
+                        break
+                    continue
+                elif valid_methods:
+                    # 只剩一个方法，删除它
+                    removed = valid_methods.pop()
+                    logger.warning(
+                        f"只剩一个方法且测试失败，删除: {removed.method_name}"
+                    )
+                    self._delete_test_method_from_db(target_class, removed.method_name)
                     continue
                 else:
-                    logger.warning("无法识别失败的测试方法，保留所有方法")
-                    return valid_methods
+                    # 没有方法了
+                    logger.error("所有测试方法都失败")
+                    break
 
             # 从文件和数据库中删除失败的测试方法
             logger.warning(
@@ -997,16 +970,173 @@ class ParallelPreprocessor:
 
             if not valid_methods:
                 logger.error("所有测试方法都失败了")
-                return []
+                break
 
             # 重新构建和验证（确保删除后的方法仍然可以编译和运行）
             logger.info(f"重新验证剩余的 {len(valid_methods)} 个方法...")
             # 继续下一次循环进行验证
 
-        if iteration >= max_iterations:
-            logger.error(f"达到最大迭代次数 {max_iterations}，停止验证")
-
         return valid_methods
+
+    def _binary_search_failed_methods(
+        self,
+        methods: List,
+        test_class_name: str,
+        target_class: str,
+        package_name: str,
+        imports: list,
+    ) -> List[str]:
+        """
+        二分查找失败的测试方法（支持并行递归）
+
+        当两部分都失败时，使用两个独立沙箱并行递归处理
+
+        Args:
+            methods: 测试方法列表
+            test_class_name: 测试类名
+            target_class: 目标类名
+            package_name: 包名
+            imports: 导入语句
+
+        Returns:
+            失败的方法名列表
+        """
+        if len(methods) == 1:
+            # 只有一个方法，直接返回
+            return [methods[0].method_name]
+
+        if not methods:
+            return []
+
+        # 分成两部分
+        mid = len(methods) // 2
+        left_methods = methods[:mid]
+        right_methods = methods[mid:]
+
+        logger.info(
+            f"二分查找: 将 {len(methods)} 个方法分为两部分 ({len(left_methods)} + {len(right_methods)})"
+        )
+
+        # 在两个独立沙箱中并行验证
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            left_future = executor.submit(
+                self._validate_methods_in_sandbox,
+                left_methods,
+                test_class_name,
+                target_class,
+                package_name,
+                imports,
+            )
+            right_future = executor.submit(
+                self._validate_methods_in_sandbox,
+                right_methods,
+                test_class_name,
+                target_class,
+                package_name,
+                imports,
+            )
+
+            left_valid = left_future.result()
+            right_valid = right_future.result()
+
+        failed = []
+
+        # 递归处理失败的部分
+        if not left_valid:
+            logger.info(f"左侧 {len(left_methods)} 个方法验证失败，继续递归查找")
+            failed.extend(
+                self._binary_search_failed_methods(
+                    left_methods, test_class_name, target_class, package_name, imports
+                )
+            )
+
+        if not right_valid:
+            logger.info(f"右侧 {len(right_methods)} 个方法验证失败，继续递归查找")
+            failed.extend(
+                self._binary_search_failed_methods(
+                    right_methods, test_class_name, target_class, package_name, imports
+                )
+            )
+
+        return failed
+
+    def _validate_methods_in_sandbox(
+        self,
+        methods: List,
+        test_class_name: str,
+        target_class: str,
+        package_name: str,
+        imports: list,
+    ) -> bool:
+        """
+        在独立沙箱中验证一组测试方法
+
+        Args:
+            methods: 测试方法列表
+            test_class_name: 测试类名
+            target_class: 目标类名
+            package_name: 包名
+            imports: 导入语句
+
+        Returns:
+            是否验证通过（编译和测试都成功）
+        """
+        from .utils.project_utils import write_test_file
+        from .utils.code_utils import build_test_class
+
+        if not methods:
+            return True
+
+        # 创建验证沙箱
+        validation_sandbox = self.sandbox_manager.create_validation_sandbox(
+            self.project_path
+        )
+        sandbox_id = Path(validation_sandbox).name
+
+        try:
+            # 构建测试代码
+            method_codes = [m.code for m in methods]
+            full_code = build_test_class(
+                test_class_name=test_class_name,
+                target_class=target_class,
+                package_name=package_name,
+                imports=imports,
+                test_methods=method_codes,
+            )
+
+            # 写入测试文件
+            write_test_file(
+                project_path=validation_sandbox,
+                package_name=package_name,
+                test_code=full_code,
+                test_class_name=test_class_name,
+                merge=False,
+            )
+
+            # 编译测试
+            compile_result = self.java_executor.compile_tests(validation_sandbox)
+            if not compile_result.get("success"):
+                logger.debug(f"验证沙箱 {sandbox_id}: 编译失败 ({len(methods)} 个方法)")
+                return False
+
+            # 运行测试
+            test_result = self.java_executor.run_tests(validation_sandbox)
+            if not test_result.get("success"):
+                logger.debug(f"验证沙箱 {sandbox_id}: 测试失败 ({len(methods)} 个方法)")
+                return False
+
+            logger.debug(f"验证沙箱 {sandbox_id}: 验证通过 ({len(methods)} 个方法)")
+            return True
+
+        except Exception as e:
+            logger.error(f"验证沙箱 {sandbox_id} 异常: {e}")
+            return False
+        finally:
+            # 清理沙箱
+            try:
+                self.sandbox_manager.cleanup_sandbox(sandbox_id)
+            except Exception as e:
+                logger.warning(f"清理验证沙箱失败 {sandbox_id}: {e}")
 
     def _delete_test_method_from_db(self, target_class: str, method_name: str) -> None:
         """
