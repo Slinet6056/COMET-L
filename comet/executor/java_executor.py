@@ -308,6 +308,16 @@ class JavaExecutor:
         stderr = result.get("stderr", "")
         stdout = result.get("stdout", "")
 
+        # 修复：如果所有输出都是空的，返回更详细的错误信息
+        if not error_msg and not stderr and not stdout:
+            logger.error(f"编译失败但没有任何输出信息，可能是进程被中断或超时")
+            logger.error(f"  项目路径: {project_path}")
+            return {
+                "success": False,
+                "error": "Compilation failed with no output (possible timeout or interruption)",
+                "output": "",
+            }
+
         # 优先使用 stderr，如果没有则使用 stdout
         detailed_error = stderr if stderr else stdout
         if not detailed_error:
@@ -318,6 +328,7 @@ class JavaExecutor:
             "error": detailed_error,
             "stderr": stderr,
             "stdout": stdout,
+            "output": detailed_error,  # 添加output字段以保持一致性
         }
 
     def run_tests(self, project_path: str) -> Dict[str, Any]:

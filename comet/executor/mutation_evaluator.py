@@ -51,12 +51,21 @@ class MutationEvaluator:
         """
         # 创建沙箱
         sandbox_id = f"mutant_{mutant.id}"
-        sandbox_path = self.sandbox_manager.create_sandbox(project_path, sandbox_id)
+
+        # 修复：检查沙箱是否已存在且正在被使用，避免并发冲突
+        try:
+            sandbox_path = self.sandbox_manager.create_sandbox(project_path, sandbox_id)
+        except Exception as e:
+            logger.warning(f"创建沙箱失败（可能已被其他线程使用）: {mutant.id}, 错误: {e}")
+            # 跳过此变异体，避免并发冲突
+            return {}
 
         try:
             # 应用变异到沙箱
             # 构建变异补丁 JSON
             import json
+            import time
+            import os
 
             patch_json = json.dumps(
                 {
@@ -92,6 +101,13 @@ class MutationEvaluator:
             # 沙箱中的源文件和目标文件路径（同一个文件，原地修改）
             sandbox_file = str(Path(sandbox_path) / rel_path)
 
+            # 修复：验证沙箱文件是否存在，避免NoSuchFileException
+            if not os.path.exists(sandbox_file):
+                logger.error(f"沙箱文件不存在（沙箱可能被意外清理）: {sandbox_file}")
+                logger.error(f"  变异体ID: {mutant.id}")
+                logger.error(f"  沙箱路径: {sandbox_path}")
+                return {}
+
             # 应用变异（源文件和输出文件都在沙箱中）
             mutation_result = self.java_executor.apply_mutation(
                 source_file=sandbox_file,
@@ -107,6 +123,7 @@ class MutationEvaluator:
                 )
                 if mutation_result.get("stderr"):
                     logger.error(f"  Java 错误: {mutation_result['stderr'][:500]}")
+
                 # 跳过此变异体，不运行测试
                 return {}
 

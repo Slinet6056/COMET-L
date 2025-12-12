@@ -110,6 +110,30 @@ class SandboxManager:
 
         return self.create_sandbox(project_path, sandbox_id)
 
+    def create_validation_sandbox(
+        self, project_path: str, validation_id: Optional[str] = None
+    ) -> str:
+        """
+        为验证创建临时沙箱（用于二分查找等验证场景）
+
+        Args:
+            project_path: 源项目路径
+            validation_id: 验证标识（可选，如果为 None 则自动生成）
+
+        Returns:
+            沙箱路径
+        """
+        # 构造沙箱 ID
+        timestamp = int(time.time() * 1000)
+        thread_id = threading.get_ident()
+
+        if validation_id:
+            sandbox_id = f"validation_{validation_id}_{timestamp}_{thread_id}"
+        else:
+            sandbox_id = f"validation_{timestamp}_{thread_id}"
+
+        return self.create_sandbox(project_path, sandbox_id)
+
     def cleanup_sandbox(self, sandbox_id: str) -> None:
         """清理沙箱（线程安全）"""
         with self._lock:
@@ -277,6 +301,21 @@ class SandboxManager:
                 self.cleanup_sandbox(sandbox_id)
 
             logger.info(f"清理了 {len(target_sandboxes)} 个目标沙箱")
+
+    def cleanup_validation_sandboxes(self) -> None:
+        """批量清理所有验证沙箱"""
+        with self._lock:
+            validation_sandboxes = [
+                sandbox_id
+                for sandbox_id in self._sandboxes.keys()
+                if sandbox_id.startswith("validation_")
+            ]
+
+            for sandbox_id in validation_sandboxes:
+                self.cleanup_sandbox(sandbox_id)
+
+            if validation_sandboxes:
+                logger.info(f"清理了 {len(validation_sandboxes)} 个验证沙箱")
 
 
 class SandboxContext:

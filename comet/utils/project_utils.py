@@ -133,6 +133,41 @@ def get_test_root(project_path: str) -> Optional[Path]:
     return test_root
 
 
+def clear_test_directory(project_path: str) -> bool:
+    """
+    清空测试目录中的所有测试文件
+
+    Args:
+        project_path: 项目路径
+
+    Returns:
+        是否成功清空
+    """
+    import shutil
+
+    test_root = Path(project_path) / "src" / "test" / "java"
+
+    if not test_root.exists():
+        logger.info("测试目录不存在，无需清空")
+        return True
+
+    try:
+        # 删除测试目录下的所有内容
+        for item in test_root.iterdir():
+            if item.is_file():
+                item.unlink()
+                logger.debug(f"删除测试文件: {item}")
+            elif item.is_dir():
+                shutil.rmtree(item)
+                logger.debug(f"删除测试目录: {item}")
+
+        logger.info(f"已清空测试目录: {test_root}")
+        return True
+    except Exception as e:
+        logger.error(f"清空测试目录失败: {e}")
+        return False
+
+
 def get_all_java_classes(project_path: str, db=None) -> List[str]:
     """
     获取项目中所有 Java 类的类名
