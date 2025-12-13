@@ -970,7 +970,7 @@ class AgentTools:
 
             # 尝试修复编译错误
             logger.warning(f"编译失败（第 {compile_retry_count} 次），尝试修复...")
-            logger.debug(f"编译错误: {compile_error[:500]}")  # 只记录前500字符
+            logger.debug(f"编译错误: {compile_error}")
 
             # 读取 sandbox 中实际的测试文件内容（可能包含合并的其他测试方法）
             # 这是修复编译错误的关键：需要用实际的文件内容，而不是 test_case.full_code
@@ -1897,7 +1897,7 @@ class AgentTools:
         if not compile_result.get("success"):
             compile_error = compile_result.get("error", "Unknown error")
             logger.error(f"✗ 测试编译失败，无法进行评估")
-            logger.error(f"编译错误: {compile_error[:500]}")
+            logger.error(f"编译错误: {compile_error}")
 
             # 删除整个类的所有测试用例
             if current_target and current_target.get("class_name"):

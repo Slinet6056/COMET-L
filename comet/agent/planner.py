@@ -561,31 +561,62 @@ class PlannerAgent:
 
         try:
             result = self.tools.call(action, **params)
-            logger.info(f"工具执行成功: {action}")
 
-            # 如果是refine_tests，更新当前方法的覆盖率
-            if (
-                action == "refine_tests"
-                and isinstance(result, dict)
-                and "method_coverage" in result
-            ):
-                self.state.current_method_coverage = result["method_coverage"]
-                logger.debug(
-                    f"更新当前方法覆盖率: {self.state.current_method_coverage:.1%}"
+            # 检查工具是否返回了错误标志
+            # 工具可能返回包含错误信息的字典，而不是抛出异常
+            is_success = True
+            error_msg = None
+
+            if isinstance(result, dict):
+                # 检查常见的错误标志
+                if result.get("compile_success") is False:
+                    is_success = False
+                    error_msg = result.get("error", "编译失败")
+                elif "error" in result and result.get("refined", 0) == 0 and result.get("generated", 0) == 0:
+                    # refine_tests 或 generate_tests 返回了错误且没有生成任何测试
+                    is_success = False
+                    error_msg = result.get("error", "Unknown error")
+
+            if is_success:
+                logger.info(f"工具执行成功: {action}")
+
+                # 如果是refine_tests，更新当前方法的覆盖率
+                if (
+                    action == "refine_tests"
+                    and isinstance(result, dict)
+                    and "method_coverage" in result
+                ):
+                    self.state.current_method_coverage = result["method_coverage"]
+                    logger.debug(
+                        f"更新当前方法覆盖率: {self.state.current_method_coverage:.1%}"
+                    )
+
+                # 记录操作历史
+                self.state.add_action(
+                    action=action,
+                    params=params,
+                    success=True,
+                    result=self._simplify_result(result),
                 )
 
-            # 记录操作历史
-            self.state.add_action(
-                action=action,
-                params=params,
-                success=True,
-                result=self._simplify_result(result),
-            )
+                # 执行自动化工作流
+                self._auto_execute_workflow(action, result)
 
-            # 执行自动化工作流
-            self._auto_execute_workflow(action, result)
+                return result
+            else:
+                # 工具返回了错误标志
+                logger.error(f"工具执行失败: {action} - {error_msg}")
 
-            return result
+                # 记录失败的操作
+                self.state.add_action(
+                    action=action,
+                    params=params,
+                    success=False,
+                    result=error_msg or str(result)
+                )
+
+                return None
+
         except Exception as e:
             logger.error(f"工具执行失败: {action} - {e}")
 

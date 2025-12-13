@@ -164,7 +164,7 @@ class StaticGuard:
                 logger.debug(f"过滤掉不合法的变异体: {mutant.id}")
                 logger.debug(f"  语义意图: {mutant.semantic_intent}")
                 if mutant.compile_error:
-                    logger.debug(f"  编译错误: {mutant.compile_error[:100]}...")
+                    logger.debug(f"  编译错误: {mutant.compile_error}")
 
         logger.info(f"过滤结果: {len(valid_mutants)}/{len(mutants)} 个合法变异体")
         if invalid_count > 0:
@@ -260,7 +260,7 @@ class StaticGuard:
                 return True
             else:
                 logger.warning(f"项目编译失败: {project_root}")
-                logger.debug(f"编译错误: {result.stderr[:500]}")
+                logger.debug(f"编译错误: {result.stderr}")
                 return False
         except subprocess.TimeoutExpired:
             logger.error(f"项目编译超时: {project_root}")
