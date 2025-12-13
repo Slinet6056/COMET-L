@@ -516,8 +516,7 @@ class ParallelPreprocessor:
                     test_methods=method_codes,
                 )
 
-            # 保存到数据库
-            self.db.save_test_case(test_case)
+            # 记录测试数量（但不保存到数据库）
             result["tests"] = len(test_case.methods)
 
             # 2. 生成变异体
@@ -528,6 +527,7 @@ class ParallelPreprocessor:
                 target_method=method_name,
             )
 
+            valid_mutants = []
             if not mutants:
                 logger.warning(f"未生成任何变异体: {class_name}.{method_name}")
             else:
@@ -548,39 +548,36 @@ class ParallelPreprocessor:
                     mutants, str(sandbox_file_path)
                 )
 
-                # 保存到数据库
+                # 更新文件路径（但不保存到数据库）
                 for mutant in valid_mutants:
                     mutant.patch.file_path = str(file_path)  # 使用workspace的文件路径
-                    self.db.save_mutant(mutant)
 
                 result["mutants"] = len(valid_mutants)
 
             # 3. 运行初始评估（在沙箱中）
             if result["tests"] > 0 and result["mutants"] > 0:
                 try:
-                    # 获取保存的变异体（从数据库）
-                    saved_mutants = self.db.get_mutants_by_method(
-                        class_name=class_name,
-                        method_name=method_name,
-                        status="valid",
+                    # 构建击杀矩阵
+                    kill_matrix = self.mutation_evaluator.build_kill_matrix(
+                        mutants=valid_mutants,
+                        test_cases=[test_case],
+                        project_path=sandbox_path,
                     )
-                    saved_tests = [test_case]
 
-                    if saved_mutants and saved_tests:
-                        # 构建击杀矩阵
-                        kill_matrix = self.mutation_evaluator.build_kill_matrix(
-                            mutants=saved_mutants,
-                            test_cases=saved_tests,
-                            project_path=sandbox_path,
-                        )
-
-                        # 保存变异体状态
-                        for mutant in saved_mutants:
-                            self.db.save_mutant(mutant)
-
-                        logger.debug(f"完成评估: {class_name}.{method_name}")
+                    logger.debug(f"完成评估: {class_name}.{method_name}")
                 except Exception as e:
                     logger.warning(f"评估失败 {class_name}.{method_name}: {e}")
+
+            # ===== 所有验证通过，保存到数据库 =====
+            # 只有在沙箱中所有步骤都成功后，才保存到数据库
+            logger.debug(f"所有验证通过，保存到数据库: {class_name}.{method_name}")
+
+            # 保存测试用例
+            self.db.save_test_case(test_case)
+
+            # 保存变异体
+            for mutant in valid_mutants:
+                self.db.save_mutant(mutant)
 
             result["success"] = True
 
@@ -615,35 +612,36 @@ class ParallelPreprocessor:
     def _merge_results_to_workspace(self) -> None:
         """
         统一构建阶段：清空workspace测试文件，从数据库重建所有测试并验证
+
+        改进：在独立验证沙箱中构建和验证合并后的测试文件，
+        只有验证通过后才写入 workspace 沙箱
         """
         from .utils.project_utils import write_test_file, clear_test_directory
         from .utils.code_utils import build_test_class
 
-        # 1. 清空workspace测试目录
-        logger.info("步骤 1: 清空workspace测试目录...")
-        if not clear_test_directory(self.workspace_sandbox):
-            logger.error("清空测试目录失败")
-            return
-
         # 使用已有的 java_executor
         java_executor = self.java_executor
 
-        # 2. 从数据库获取所有测试用例
-        logger.info("步骤 2: 从数据库加载所有测试用例...")
+        # 1. 从数据库获取所有测试用例
+        logger.info("步骤 1: 从数据库加载所有测试用例...")
         all_test_cases = self.db.get_all_test_cases()
 
         if not all_test_cases:
             logger.info("没有测试用例需要重建")
             return
 
-        # 3. 按目标类分组
+        # 2. 按目标类分组
         tests_by_class = defaultdict(list)
         for test_case in all_test_cases:
             tests_by_class[test_case.target_class].append(test_case)
 
-        logger.info(f"步骤 3: 重建 {len(tests_by_class)} 个类的测试文件...")
+        logger.info(
+            f"步骤 2: 在验证沙箱中构建和验证 {len(tests_by_class)} 个类的测试文件..."
+        )
 
-        # 为每个目标类重建完整的测试文件
+        # 为每个目标类在验证沙箱中构建和验证测试文件
+        validated_tests = {}  # {target_class: (valid_methods, first_tc, test_cases)}
+
         for target_class, test_cases in tests_by_class.items():
             try:
                 # 使用字典去重：{method_name: (TestMethod, updated_at)}
@@ -690,9 +688,8 @@ class ParallelPreprocessor:
                 # 使用第一个测试用例的元数据
                 first_tc = test_cases[0]
 
-                # 构建完整的测试类代码并写入
-                valid_methods = self._write_and_validate_merged_test(
-                    java_executor=java_executor,
+                # 在验证沙箱中构建和验证测试文件
+                valid_methods = self._build_and_validate_in_sandbox(
                     test_class_name=first_tc.class_name,
                     target_class=first_tc.target_class,
                     package_name=first_tc.package_name,
@@ -702,51 +699,147 @@ class ParallelPreprocessor:
 
                 if valid_methods:
                     logger.debug(
-                        f"已合并测试文件: {first_tc.class_name} ({len(valid_methods)} 个方法，验证通过)"
+                        f"验证沙箱中验证通过: {first_tc.class_name} ({len(valid_methods)} 个方法)"
                     )
-
-                    # 更新数据库中的测试用例，保存合并后的完整代码
-                    # 构建合并后的完整代码
-                    from .utils.code_utils import build_test_class
-
-                    method_codes = [m.code for m in valid_methods]
-                    merged_full_code = build_test_class(
-                        test_class_name=first_tc.class_name,
-                        target_class=first_tc.target_class,
-                        package_name=first_tc.package_name,
-                        imports=first_tc.imports,
-                        test_methods=method_codes,
-                    )
-
-                    # 更新所有相关测试用例的 full_code
-                    for tc in test_cases:
-                        tc.full_code = merged_full_code
-                        tc.compile_success = True
-                        tc.compile_error = None
-                        # 更新方法列表为验证通过的方法
-                        # 只保留属于当前测试用例的方法
-                        original_method_names = {m.method_name for m in tc.methods}
-                        tc.methods = [
-                            m
-                            for m in valid_methods
-                            if m.method_name in original_method_names
-                        ]
-
-                        # 修复：如果测试用例的所有方法都被过滤掉了，不保存
-                        if not tc.methods:
-                            logger.warning(f"测试用例 {tc.id} 的所有方法都未通过验证，不保存")
-                            continue
-
-                        self.db.save_test_case(tc)
-
-                    logger.info(
-                        f"已更新数据库中 {len(test_cases)} 个测试用例的 full_code"
+                    # 保存验证通过的测试信息
+                    validated_tests[target_class] = (
+                        valid_methods,
+                        first_tc,
+                        test_cases,
                     )
                 else:
-                    logger.warning(f"合并后所有方法都编译失败: {first_tc.class_name}")
+                    logger.warning(f"验证沙箱中验证失败: {first_tc.class_name}")
 
             except Exception as e:
-                logger.error(f"合并测试文件失败 {target_class}: {e}")
+                logger.error(f"在验证沙箱中验证测试文件失败 {target_class}: {e}")
+
+        # 3. 清空workspace测试目录
+        logger.info("步骤 3: 清空workspace测试目录...")
+        if not clear_test_directory(self.workspace_sandbox):
+            logger.error("清空测试目录失败")
+            return
+
+        # 4. 将验证通过的测试写入workspace并更新数据库
+        logger.info(
+            f"步骤 4: 将 {len(validated_tests)} 个验证通过的测试写入workspace..."
+        )
+
+        for target_class, (
+            valid_methods,
+            first_tc,
+            test_cases,
+        ) in validated_tests.items():
+            try:
+                # 构建合并后的完整代码
+                method_codes = [m.code for m in valid_methods]
+                merged_full_code = build_test_class(
+                    test_class_name=first_tc.class_name,
+                    target_class=first_tc.target_class,
+                    package_name=first_tc.package_name,
+                    imports=first_tc.imports,
+                    test_methods=method_codes,
+                )
+
+                # 写入workspace
+                write_test_file(
+                    project_path=self.workspace_sandbox,
+                    package_name=first_tc.package_name,
+                    test_code=merged_full_code,
+                    test_class_name=first_tc.class_name,
+                    merge=False,
+                )
+
+                logger.info(
+                    f"已写入workspace: {first_tc.class_name} ({len(valid_methods)} 个方法)"
+                )
+
+                # 更新所有相关测试用例的 full_code
+                for tc in test_cases:
+                    tc.full_code = merged_full_code
+                    tc.compile_success = True
+                    tc.compile_error = None
+                    # 更新方法列表为验证通过的方法
+                    # 只保留属于当前测试用例的方法
+                    original_method_names = {m.method_name for m in tc.methods}
+                    tc.methods = [
+                        m
+                        for m in valid_methods
+                        if m.method_name in original_method_names
+                    ]
+
+                    # 修复：如果测试用例的所有方法都被过滤掉了，不保存
+                    if not tc.methods:
+                        logger.warning(
+                            f"测试用例 {tc.id} 的所有方法都未通过验证，不保存"
+                        )
+                        continue
+
+                    self.db.save_test_case(tc)
+
+                logger.info(f"已更新数据库中 {len(test_cases)} 个测试用例的 full_code")
+
+            except Exception as e:
+                logger.error(f"写入workspace失败 {target_class}: {e}")
+
+    def _build_and_validate_in_sandbox(
+        self,
+        test_class_name: str,
+        target_class: str,
+        package_name: str,
+        imports: list,
+        all_methods: list,
+    ) -> list:
+        """
+        在独立验证沙箱中构建和验证合并后的测试文件
+
+        Args:
+            test_class_name: 测试类名
+            target_class: 目标类名
+            package_name: 包名
+            imports: 导入语句
+            all_methods: 所有测试方法
+
+        Returns:
+            验证通过的方法列表，如果验证失败返回空列表
+        """
+        from .utils.project_utils import write_test_file
+        from .utils.code_utils import build_test_class
+
+        sandbox_path = None
+        sandbox_id = None
+
+        try:
+            # 创建验证沙箱
+            sandbox_path = self.sandbox_manager.create_validation_sandbox(
+                self.project_path, validation_id=f"merge_{target_class}"
+            )
+            sandbox_id = Path(sandbox_path).name
+            logger.debug(f"创建验证沙箱用于合并测试: {sandbox_id}")
+
+            # 在验证沙箱中验证测试
+            valid_methods = self._write_and_validate_merged_test(
+                java_executor=self.java_executor,
+                test_class_name=test_class_name,
+                target_class=target_class,
+                package_name=package_name,
+                imports=imports,
+                all_methods=all_methods,
+                sandbox_path=sandbox_path,  # 传入沙箱路径
+            )
+
+            return valid_methods
+
+        except Exception as e:
+            logger.error(f"在验证沙箱中构建和验证测试失败: {e}")
+            return []
+        finally:
+            # 清理验证沙箱
+            if sandbox_id:
+                try:
+                    self.sandbox_manager.cleanup_sandbox(sandbox_id)
+                    logger.debug(f"已清理验证沙箱: {sandbox_id}")
+                except Exception as e:
+                    logger.warning(f"清理验证沙箱失败 {sandbox_id}: {e}")
 
     def _write_and_validate_merged_test(
         self,
@@ -756,6 +849,7 @@ class ParallelPreprocessor:
         package_name: str,
         imports: list,
         all_methods: list,
+        sandbox_path: Optional[str] = None,
     ) -> list:
         """
         写入合并的测试文件并验证编译和测试，无限重试直到全部通过或无方法可删
@@ -767,6 +861,7 @@ class ParallelPreprocessor:
             package_name: 包名
             imports: 导入语句
             all_methods: 所有测试方法
+            sandbox_path: 可选的沙箱路径，如果提供则在该沙箱中验证，否则使用workspace_sandbox
 
         Returns:
             验证通过的方法列表
@@ -774,6 +869,9 @@ class ParallelPreprocessor:
         from .utils.project_utils import write_test_file
         from .utils.code_utils import build_test_class
         import os
+
+        # 使用提供的沙箱路径或默认的workspace沙箱
+        project_path = sandbox_path if sandbox_path else self.workspace_sandbox
 
         valid_methods = list(all_methods)
         iteration = 0
@@ -783,7 +881,7 @@ class ParallelPreprocessor:
         if package_name:
             package_path = package_name.replace(".", os.sep)
             test_file_path = os.path.join(
-                self.workspace_sandbox,
+                project_path,
                 "src",
                 "test",
                 "java",
@@ -792,7 +890,7 @@ class ParallelPreprocessor:
             )
         else:
             test_file_path = os.path.join(
-                self.workspace_sandbox, "src", "test", "java", f"{test_class_name}.java"
+                project_path, "src", "test", "java", f"{test_class_name}.java"
             )
 
         while valid_methods:
@@ -816,9 +914,9 @@ class ParallelPreprocessor:
                 test_methods=method_codes,
             )
 
-            # 写入workspace沙箱
+            # 写入沙箱（可能是验证沙箱或workspace沙箱）
             write_test_file(
-                project_path=self.workspace_sandbox,
+                project_path=project_path,
                 package_name=package_name,
                 test_code=full_code,
                 test_class_name=test_class_name,
@@ -826,7 +924,7 @@ class ParallelPreprocessor:
             )
 
             # 步骤1: 验证编译
-            compile_result = java_executor.compile_tests(self.workspace_sandbox)
+            compile_result = java_executor.compile_tests(project_path)
 
             if not compile_result.get("success"):
                 # 编译失败，分析错误并排除有问题的方法
@@ -902,14 +1000,16 @@ class ParallelPreprocessor:
             )
             logger.info("开始运行测试，识别失败的测试方法...")
 
-            test_result = java_executor.run_tests(self.workspace_sandbox)
+            test_result = java_executor.run_tests(project_path)
 
             if test_result.get("success"):
                 logger.info(f"✓ 所有测试方法都通过: {test_class_name}")
                 return valid_methods
 
             # 步骤3: 测试失败，解析Surefire报告，识别失败的测试方法
-            failed_test_methods = self._identify_failed_test_methods(test_class_name)
+            failed_test_methods = self._identify_failed_test_methods(
+                test_class_name, project_path
+            )
 
             if not failed_test_methods:
                 # 无法识别失败的测试方法，使用二分查找（并行递归）
@@ -1041,7 +1141,6 @@ class ParallelPreprocessor:
 
         failed = []
 
-
         # 修复：检测方法间冲突的情况（两侧都通过，但合并后失败）
         if left_valid and right_valid:
             # 两侧单独都通过，说明存在方法间冲突
@@ -1081,12 +1180,28 @@ class ParallelPreprocessor:
                 # 方法较多，继续递归二分（每侧再细分）
                 logger.info(f"继续细分查找冲突方法（{total_methods}个）")
                 # 对左侧和右侧分别再进行二分查找
-                left_failed = self._binary_search_failed_methods(
-                    left_methods, test_class_name, target_class, package_name, imports
-                ) if len(left_methods) > 1 else [left_methods[0].method_name]
-                right_failed = self._binary_search_failed_methods(
-                    right_methods, test_class_name, target_class, package_name, imports
-                ) if len(right_methods) > 1 else [right_methods[0].method_name]
+                left_failed = (
+                    self._binary_search_failed_methods(
+                        left_methods,
+                        test_class_name,
+                        target_class,
+                        package_name,
+                        imports,
+                    )
+                    if len(left_methods) > 1
+                    else [left_methods[0].method_name]
+                )
+                right_failed = (
+                    self._binary_search_failed_methods(
+                        right_methods,
+                        test_class_name,
+                        target_class,
+                        package_name,
+                        imports,
+                    )
+                    if len(right_methods) > 1
+                    else [right_methods[0].method_name]
+                )
 
                 # 返回两侧递归找到的失败方法
                 return left_failed + right_failed
@@ -1221,12 +1336,15 @@ class ParallelPreprocessor:
         except Exception as e:
             logger.error(f"从数据库删除测试方法失败: {e}")
 
-    def _identify_failed_test_methods(self, test_class_name: str) -> set:
+    def _identify_failed_test_methods(
+        self, test_class_name: str, project_path: Optional[str] = None
+    ) -> set:
         """
         从Surefire报告中识别失败的测试方法
 
         Args:
             test_class_name: 测试类名
+            project_path: 可选的项目路径，如果提供则在该路径中查找报告，否则使用workspace_sandbox
 
         Returns:
             失败的测试方法名集合
@@ -1236,10 +1354,12 @@ class ParallelPreprocessor:
 
         failed_methods = set()
 
+        # 使用提供的项目路径或默认的workspace沙箱
+        if project_path is None:
+            project_path = self.workspace_sandbox
+
         try:
-            reports_dir = os.path.join(
-                self.workspace_sandbox, "target", "surefire-reports"
-            )
+            reports_dir = os.path.join(project_path, "target", "surefire-reports")
 
             if not os.path.exists(reports_dir):
                 logger.warning(f"Surefire报告目录不存在: {reports_dir}")

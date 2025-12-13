@@ -297,6 +297,25 @@ def run_evolution(
                     logger.info(f"总测试数: {preprocess_stats['total_tests']}")
                     logger.info(f"总变异体数: {preprocess_stats['total_mutants']}")
                     logger.info("=" * 60)
+
+                    # 运行初始覆盖率测试以生成JaCoCo报告
+                    logger.info("运行初始覆盖率测试以生成JaCoCo报告...")
+                    try:
+                        java_executor = components["java_executor"]
+                        coverage_result = java_executor.run_tests_with_coverage(
+                            workspace_sandbox
+                        )
+                        if coverage_result.get("success"):
+                            logger.info("初始覆盖率测试成功")
+                        else:
+                            error_msg = (
+                                f"初始覆盖率测试失败: {coverage_result.get('error')}"
+                            )
+                            logger.error(error_msg)
+                            raise RuntimeError(error_msg)
+                    except Exception as e:
+                        logger.error(f"运行初始覆盖率测试失败: {e}")
+                        raise
                 except KeyboardInterrupt:
                     # 中断信号会传播到外层处理
                     raise
