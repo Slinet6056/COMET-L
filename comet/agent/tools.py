@@ -55,9 +55,7 @@ class AgentTools:
             metadata=ToolMetadata(
                 name="select_target",
                 description="选择要处理的类/方法（支持多种选择策略）",
-                params={
-                    "criteria": "选择策略（可选）：coverage（默认）、killrate"
-                },
+                params={"criteria": "选择策略（可选）：coverage（默认）、killrate"},
                 when_to_use="当前没有选中目标时，或需要切换目标时",
                 notes=[
                     "criteria 参数说明：",
@@ -274,6 +272,7 @@ class AgentTools:
         # 修复原因：test_case.imports可能不完整，缺少测试代码需要的imports（如StringWriter）
         # full_code中的imports是更完整的，包含了编译成功时的所有imports
         from ..utils.code_utils import extract_imports
+
         if test_case.full_code:
             imports = extract_imports(test_case.full_code)
             logger.debug(f"从full_code提取到 {len(imports)} 个imports")
@@ -308,96 +307,6 @@ class AgentTools:
         test_case.full_code = full_code
         # 注意：不在这里保存到数据库，由调用方决定是否保存
         # full_code的同步会在并行预处理的_merge_results_to_workspace阶段统一处理
-
-    def _restore_test_file_from_db(self, original_test_case):
-        """
-        从数据库恢复测试文件（用于验证失败后回滚）
-
-        Args:
-            original_test_case: 原始的 TestCase（数据库中的版本）
-        """
-        from ..utils.project_utils import write_test_file
-        from ..utils.code_utils import build_test_class
-
-        # 从数据库获取所有针对同一个目标类的TestCase
-        all_test_cases = self.db.get_tests_by_target_class(
-            original_test_case.target_class
-        )
-
-        # 使用字典去重：{method_name: (TestMethod, updated_at)}
-        # 保留更新时间最新的方法（同名方法只保留一个）
-        unique_methods = {}
-
-        for tc in all_test_cases:
-            for method in tc.methods:
-                # 检查是否已存在同名方法
-                if method.method_name in unique_methods:
-                    existing_method, existing_updated = unique_methods[
-                        method.method_name
-                    ]
-                    # 比较更新时间，保留更新的
-                    method_updated = method.updated_at or method.created_at
-                    if (
-                        method_updated
-                        and existing_updated
-                        and method_updated > existing_updated
-                    ):
-                        unique_methods[method.method_name] = (method, method_updated)
-                    # 如果时间相同，比较版本号
-                    elif method.version > existing_method.version:
-                        unique_methods[method.method_name] = (method, method_updated)
-                else:
-                    method_updated = method.updated_at or method.created_at
-                    unique_methods[method.method_name] = (method, method_updated)
-
-        if not unique_methods:
-            logger.warning("数据库中没有有效的测试方法，无法恢复")
-            return
-
-        # 提取去重后的方法列表
-        all_methods = [m for m, _ in unique_methods.values()]
-
-        # 构建完整的测试类代码
-        method_codes = [m.code for m in all_methods]
-        full_code = build_test_class(
-            test_class_name=original_test_case.class_name,
-            target_class=original_test_case.target_class,
-            package_name=original_test_case.package_name,
-            imports=original_test_case.imports,
-            test_methods=method_codes,
-        )
-
-        # 写入文件
-        write_test_file(
-            project_path=self.project_path,
-            package_name=original_test_case.package_name,
-            test_code=full_code,
-            test_class_name=original_test_case.class_name,
-            merge=False,
-        )
-
-        # 修复：同步更新所有相关TestCase的full_code到数据库（与_rebuild_test_file_from_db保持一致）
-        # 重要：首先更新当前的 original_test_case（即使它不在数据库查询结果中）
-        update_count = 0
-
-        original_test_case.full_code = full_code
-        self.db.save_test_case(original_test_case)
-        update_count += 1
-
-        # 然后更新数据库中的其他相关 TestCase
-        for tc in all_test_cases:
-            # 跳过当前 original_test_case（已经更新过了）
-            if tc.id == original_test_case.id:
-                continue
-
-            tc.full_code = full_code
-            self.db.save_test_case(tc)
-            update_count += 1
-
-        logger.info(
-            f"已从数据库恢复测试文件: {original_test_case.class_name} (共 {len(all_methods)} 个方法，去重后)"
-        )
-        logger.info(f"已同步更新数据库中 {update_count} 个测试用例的 full_code")
 
     def _get_test_file_path(self, test_case) -> str:
         """
@@ -569,6 +478,437 @@ class AgentTools:
         else:
             logger.debug(f"测试文件不存在，无需删除: {test_file_path}")
 
+    def _generate_and_verify_in_sandbox(
+        self, class_name: str, method_name: str
+    ) -> Dict[str, Any]:
+        """
+        在独立沙箱中生成并验证测试（阶段1：验证阶段）
+
+        流程：
+        1. 创建验证沙箱
+        2. 在沙箱中生成测试代码
+        3. 在沙箱中验证和修复测试
+        4. 返回验证通过的 test_case 和沙箱路径
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+
+        Returns:
+            结果字典：
+            {
+                "success": bool,
+                "test_case": TestCase (如果成功),
+                "sandbox_path": str (如果成功),
+                "sandbox_id": str (如果成功),
+                "error": str (如果失败)
+            }
+        """
+        from ..utils.project_utils import find_java_file, write_test_file
+        from ..utils.code_utils import extract_class_from_file
+
+        sandbox_path = None
+        sandbox_id = None
+
+        try:
+            # 1. 创建验证沙箱
+            sandbox_path = self.sandbox_manager.create_validation_sandbox(
+                self.original_project_path or self.project_path,
+                validation_id=f"generate_{class_name}_{method_name}",
+            )
+            sandbox_id = Path(sandbox_path).name
+            logger.info(f"创建验证沙箱用于生成测试: {sandbox_id}")
+
+            # 2. 在沙箱中查找类文件
+            file_path = find_java_file(sandbox_path, class_name, db=self.db)
+            if not file_path:
+                return {
+                    "success": False,
+                    "error": f"未找到类文件: {class_name}",
+                    "sandbox_id": sandbox_id,
+                }
+
+            class_code = extract_class_from_file(str(file_path))
+
+            # 3. 获取方法签名
+            method_sig = None
+            if method_name:
+                methods = self.java_executor.get_public_methods(str(file_path))
+                if methods:
+                    for m in methods:
+                        if m.get("name") == method_name:
+                            method_sig = m.get("signature")
+                            break
+                if not method_sig:
+                    logger.warning(f"未找到方法 {method_name} 的签名，使用默认值")
+                    method_sig = f"public void {method_name}()"
+
+            # 4. 获取现有测试（从数据库，用于参考）
+            existing_tests = self.db.get_tests_by_target_class(class_name)
+
+            # 5. 生成测试
+            test_case = self.test_generator.generate_tests_for_method(
+                class_name=class_name,
+                method_signature=method_sig or f"public void {method_name}()",
+                class_code=class_code,
+                existing_tests=existing_tests,
+            )
+
+            if not test_case:
+                return {
+                    "success": False,
+                    "error": f"测试生成失败: {class_name}.{method_name}",
+                    "sandbox_id": sandbox_id,
+                }
+
+            # 6. 写入测试文件到沙箱
+            test_file = write_test_file(
+                project_path=sandbox_path,
+                package_name=test_case.package_name,
+                test_code=test_case.full_code,
+                test_class_name=test_case.class_name,
+                merge=False,  # 沙箱中不需要合并
+            )
+
+            if not test_file:
+                return {
+                    "success": False,
+                    "error": "写入测试文件到沙箱失败",
+                    "sandbox_id": sandbox_id,
+                }
+
+            # 7. 在沙箱中验证和修复测试（临时修改 project_path）
+            original_project_path = self.project_path
+            self.project_path = sandbox_path
+            try:
+                logger.info("在验证沙箱中验证和修复测试...")
+                test_case = self._verify_and_fix_tests(
+                    test_case=test_case,
+                    class_code=class_code,
+                    max_compile_retries=3,
+                    max_test_retries=3,
+                )
+            finally:
+                self.project_path = original_project_path
+
+            # 8. 静态校验
+            if test_case.compile_success:
+                from ..utils.code_utils import validate_test_methods, build_test_class
+
+                invalid_methods = validate_test_methods(test_case.methods, class_code)
+                if invalid_methods:
+                    logger.warning(
+                        f"静态校验发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除"
+                    )
+                    test_case.methods = [
+                        m
+                        for m in test_case.methods
+                        if m.method_name not in invalid_methods
+                    ]
+
+                    if not test_case.methods:
+                        return {
+                            "success": False,
+                            "error": "静态校验后所有测试方法都被移除",
+                            "sandbox_id": sandbox_id,
+                        }
+
+                    # 重新构建测试代码
+                    method_codes = [m.code for m in test_case.methods]
+                    test_case.full_code = build_test_class(
+                        test_class_name=test_case.class_name,
+                        target_class=test_case.target_class,
+                        package_name=test_case.package_name,
+                        imports=test_case.imports,
+                        test_methods=method_codes,
+                    )
+
+            # 9. 检查最终结果
+            if not test_case.compile_success:
+                return {
+                    "success": False,
+                    "error": f"测试编译失败: {test_case.compile_error}",
+                    "sandbox_id": sandbox_id,
+                }
+
+            # 10. 验证成功，返回结果
+            logger.info(
+                f"✓ 测试在验证沙箱中验证通过: {test_case.class_name} ({len(test_case.methods)} 个方法)"
+            )
+            return {
+                "success": True,
+                "test_case": test_case,
+                "sandbox_path": sandbox_path,
+                "sandbox_id": sandbox_id,
+            }
+
+        except Exception as e:
+            logger.error(f"在沙箱中生成测试失败: {e}", exc_info=True)
+            return {"success": False, "error": str(e), "sandbox_id": sandbox_id}
+
+    def _refine_and_verify_in_sandbox(
+        self, class_name: str, method_name: str
+    ) -> Dict[str, Any]:
+        """
+        在独立沙箱中完善并验证测试（阶段1：验证阶段）
+
+        流程：
+        1. 创建验证沙箱
+        2. 复制主空间的当前测试文件到沙箱
+        3. 在沙箱中完善测试代码
+        4. 在沙箱中验证和修复测试
+        5. 返回验证通过的 test_case 和沙箱路径
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+
+        Returns:
+            结果字典：
+            {
+                "success": bool,
+                "test_case": TestCase (如果成功),
+                "sandbox_path": str (如果成功),
+                "sandbox_id": str (如果成功),
+                "error": str (如果失败),
+                "original_test_case": TestCase (原始测试用例)
+            }
+        """
+        from ..utils.project_utils import find_java_file, write_test_file
+        from ..utils.code_utils import extract_class_from_file
+
+        sandbox_path = None
+        sandbox_id = None
+
+        try:
+            # 1. 获取现有测试
+            existing_tests = self.db.get_tests_by_target_method(class_name, method_name)
+            if not existing_tests:
+                return {
+                    "success": False,
+                    "error": f"没有找到 {class_name}.{method_name} 的现有测试，无法完善",
+                }
+
+            # 选择最新的测试用例
+            original_test_case = existing_tests[0]
+            logger.info(
+                f"将完善测试用例: {original_test_case.class_name} (共 {len(original_test_case.methods)} 个测试方法)"
+            )
+
+            # 2. 创建验证沙箱
+            sandbox_path = self.sandbox_manager.create_validation_sandbox(
+                self.original_project_path or self.project_path,
+                validation_id=f"refine_{class_name}_{method_name}",
+            )
+            sandbox_id = Path(sandbox_path).name
+            logger.info(f"创建验证沙箱用于完善测试: {sandbox_id}")
+
+            # 3. 查找类文件
+            file_path = find_java_file(sandbox_path, class_name, db=self.db)
+            if not file_path:
+                return {
+                    "success": False,
+                    "error": f"未找到类文件: {class_name}",
+                    "sandbox_id": sandbox_id,
+                    "original_test_case": original_test_case,
+                }
+
+            class_code = extract_class_from_file(str(file_path))
+
+            # 4. 将主空间的测试文件复制到沙箱（使用数据库中的测试代码）
+            write_test_file(
+                project_path=sandbox_path,
+                package_name=original_test_case.package_name,
+                test_code=original_test_case.full_code,
+                test_class_name=original_test_case.class_name,
+                merge=False,
+            )
+
+            # 5. 获取幸存变异体和覆盖缺口
+            all_mutants = self.db.get_all_mutants()
+            survived = (
+                self.metrics_collector.get_survived_mutants_for_method(
+                    class_name, method_name, all_mutants
+                )
+                if self.metrics_collector
+                else []
+            )
+
+            # 获取覆盖率信息
+            coverage = self.db.get_method_coverage(class_name, method_name)
+            if coverage:
+                gaps = {
+                    "coverage_rate": coverage.line_coverage_rate,
+                    "total_lines": coverage.total_lines,
+                    "covered_lines": len(coverage.covered_lines),
+                    "uncovered_lines": coverage.missed_lines,
+                }
+            else:
+                gaps = {}
+
+            # 构建评估反馈
+            evaluation_feedback = None
+            if self.metrics_collector and survived:
+                evaluation_feedback = f"当前有 {len(survived)} 个幸存变异体需要击杀"
+
+            # 6. 完善测试
+            refined_test_case = self.test_generator.refine_tests(
+                test_case=original_test_case,
+                class_code=class_code,
+                target_method=method_name,
+                survived_mutants=survived,
+                coverage_gaps=gaps,
+                evaluation_feedback=evaluation_feedback,
+            )
+
+            if not refined_test_case:
+                return {
+                    "success": False,
+                    "error": f"测试完善失败: {class_name}.{method_name}",
+                    "sandbox_id": sandbox_id,
+                    "original_test_case": original_test_case,
+                }
+
+            # 7. 写入完善后的测试文件到沙箱
+            test_file = write_test_file(
+                project_path=sandbox_path,
+                package_name=refined_test_case.package_name,
+                test_code=refined_test_case.full_code,
+                test_class_name=refined_test_case.class_name,
+                merge=False,
+            )
+
+            if not test_file:
+                return {
+                    "success": False,
+                    "error": "写入完善后的测试文件到沙箱失败",
+                    "sandbox_id": sandbox_id,
+                    "original_test_case": original_test_case,
+                }
+
+            # 8. 在沙箱中验证和修复测试（临时修改 project_path）
+            original_project_path_backup = self.project_path
+            self.project_path = sandbox_path
+            try:
+                logger.info("在验证沙箱中验证和修复完善后的测试...")
+                refined_test_case = self._verify_and_fix_tests(
+                    test_case=refined_test_case,
+                    class_code=class_code,
+                    max_compile_retries=3,
+                    max_test_retries=3,
+                )
+            finally:
+                self.project_path = original_project_path_backup
+
+            # 9. 静态校验
+            if refined_test_case.compile_success:
+                from ..utils.code_utils import validate_test_methods, build_test_class
+
+                invalid_methods = validate_test_methods(
+                    refined_test_case.methods, class_code
+                )
+                if invalid_methods:
+                    logger.warning(
+                        f"静态校验发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除"
+                    )
+                    refined_test_case.methods = [
+                        m
+                        for m in refined_test_case.methods
+                        if m.method_name not in invalid_methods
+                    ]
+
+                    if not refined_test_case.methods:
+                        return {
+                            "success": False,
+                            "error": "静态校验后所有测试方法都被移除",
+                            "sandbox_id": sandbox_id,
+                            "original_test_case": original_test_case,
+                        }
+
+                    # 重新构建测试代码
+                    method_codes = [m.code for m in refined_test_case.methods]
+                    refined_test_case.full_code = build_test_class(
+                        test_class_name=refined_test_case.class_name,
+                        target_class=refined_test_case.target_class,
+                        package_name=refined_test_case.package_name,
+                        imports=refined_test_case.imports,
+                        test_methods=method_codes,
+                    )
+
+            # 10. 检查最终结果
+            if not refined_test_case.compile_success:
+                return {
+                    "success": False,
+                    "error": f"测试编译失败: {refined_test_case.compile_error}",
+                    "sandbox_id": sandbox_id,
+                    "original_test_case": original_test_case,
+                }
+
+            # 11. 验证成功，返回结果
+            logger.info(
+                f"✓ 完善后的测试在验证沙箱中验证通过: {refined_test_case.class_name} "
+                f"({len(refined_test_case.methods)} 个方法)"
+            )
+            return {
+                "success": True,
+                "test_case": refined_test_case,
+                "sandbox_path": sandbox_path,
+                "sandbox_id": sandbox_id,
+                "original_test_case": original_test_case,
+            }
+
+        except Exception as e:
+            logger.error(f"在沙箱中完善测试失败: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "sandbox_id": sandbox_id,
+                "original_test_case": (
+                    original_test_case if "original_test_case" in locals() else None
+                ),
+            }
+
+    def _commit_test_to_workspace(self, test_case, sandbox_path: str) -> bool:
+        """
+        原子性提交测试到主工作空间（阶段2：提交阶段）
+
+        流程：
+        1. 从沙箱读取验证通过的测试文件
+        2. 写入主工作空间
+        3. 如果写入失败，立即返回错误（不修改数据库）
+
+        Args:
+            test_case: 验证通过的 TestCase 对象
+            sandbox_path: 沙箱路径
+
+        Returns:
+            是否成功提交到主工作空间
+        """
+        from ..utils.project_utils import write_test_file
+
+        try:
+            logger.info(f"提交测试到主工作空间: {test_case.class_name}")
+
+            # 写入主工作空间（使用 merge=True 保留其他测试方法）
+            test_file = write_test_file(
+                project_path=self.project_path,
+                package_name=test_case.package_name,
+                test_code=test_case.full_code,
+                test_class_name=test_case.class_name,
+                merge=True,  # 合并模式，保留其他测试方法
+            )
+
+            if not test_file:
+                logger.error("写入测试文件到主工作空间失败")
+                return False
+
+            logger.info(f"✓ 成功提交测试到主工作空间: {test_file}")
+            return True
+
+        except Exception as e:
+            logger.error(f"提交测试到主工作空间失败: {e}", exc_info=True)
+            return False
+
     def _verify_and_fix_tests(
         self,
         test_case,
@@ -686,7 +1026,7 @@ class AgentTools:
                 )
 
                 # 2. 然后从修复后的代码中提取当前 TestCase 的方法，同步回 test_case
-                #    这确保数据库中的 test_case.methods 和 test_case.full_code 保持一致
+                #    这确保 test_case.methods 和 test_case.full_code 保持一致
                 try:
                     fixed_test_case = self._sync_fixed_code_to_test_case(
                         original_test_case=test_case,
@@ -696,33 +1036,14 @@ class AgentTools:
                     logger.error(f"同步修复后的测试方法失败: {sync_error}")
                     test_case.compile_success = False
                     test_case.compile_error = str(sync_error)
+                    # 在沙箱环境中失败，不污染数据库，直接返回
                     return test_case
 
-                # 3. 修复：同步更新数据库中所有相关 TestCase 的 full_code
-                #    因为写入的是完整文件，需要确保所有 TestCase 的 full_code 都同步
-                all_test_cases = self.db.get_tests_by_target_class(
-                    test_case.target_class
-                )
-                update_count = 0
-
-                # 重要：首先更新当前的 fixed_test_case（即使它不在数据库查询结果中）
-                # 注意：fixed_test_case 是修复后的版本，需要赋值给 test_case
+                # 3. 更新当前 test_case 的内容（但不保存到数据库）
+                #    数据库保存将在验证完全通过后，由调用方负责
                 test_case.full_code = fixed_test_case.full_code
                 test_case.methods = fixed_test_case.methods
-                self.db.save_test_case(test_case)
-                update_count += 1
-
-                # 然后更新数据库中的其他相关 TestCase
-                for tc in all_test_cases:
-                    # 跳过当前 test_case（已经更新过了）
-                    if tc.id == test_case.id:
-                        continue
-
-                    tc.full_code = fixed_test_case.full_code
-                    self.db.save_test_case(tc)
-                    update_count += 1
-
-                logger.info(f"已同步更新数据库中 {update_count} 个测试用例的 full_code")
+                logger.debug(f"已同步修复后的测试方法到 test_case（未保存到数据库）")
             else:
                 # 普通情况：写入修复后的测试文件（使用合并模式，保留其他测试方法）
                 test_file = write_test_file(
@@ -1225,127 +1546,45 @@ class AgentTools:
         class_name: str,
         method_name: str,
     ) -> Dict[str, Any]:
-        """生成测试（数量由LLM自主决定）"""
+        """
+        生成测试（数量由LLM自主决定）
+
+        使用三阶段验证提交模型：
+        1. 验证阶段：在独立沙箱中生成并验证测试
+        2. 提交阶段：原子性提交到主工作空间
+        3. 持久化阶段：保存到数据库
+
+        主工作空间只有在验证完全通过后才会被修改
+        """
         if not all(
-            [self.project_path, self.test_generator, self.java_executor, self.db]
+            [
+                self.project_path,
+                self.test_generator,
+                self.java_executor,
+                self.db,
+                self.sandbox_manager,
+            ]
         ):
             logger.error("generate_tests: 缺少必要组件")
             return {"generated": 0}
 
-        from ..utils.project_utils import find_java_file, write_test_file
-        from ..utils.code_utils import extract_class_from_file
+        logger.info(f"开始生成测试: {class_name}.{method_name}")
 
-        # 查找类文件（支持同一文件中的多个类）
-        file_path = find_java_file(self.project_path, class_name, db=self.db)
+        # ===== 阶段1：在验证沙箱中生成并验证测试 =====
+        result = self._generate_and_verify_in_sandbox(class_name, method_name)
 
-        if not file_path:
-            logger.error(f"未找到类文件: {class_name}")
-            return {"generated": 0}
+        if not result["success"]:
+            # 验证失败，主空间完全不受影响
+            logger.error(
+                f"✗ 测试在验证沙箱中验证失败: {result.get('error', 'Unknown')}"
+            )
 
-        class_code = extract_class_from_file(str(file_path))
-
-        # 如果指定了方法名，使用 JavaExecutor 获取准确的方法签名
-        method_sig = None
-        if method_name:
-            methods = self.java_executor.get_public_methods(str(file_path))
-            if methods:
-                # 从方法列表中找到指定方法
-                for m in methods:
-                    if m.get("name") == method_name:
-                        method_sig = m.get("signature")
-                        break
-            if not method_sig:
-                # Fallback: 如果找不到，使用默认签名
-                logger.warning(f"未找到方法 {method_name} 的签名，使用默认值")
-                method_sig = f"public void {method_name}()"
-
-        # 获取现有测试（用于参考，避免重复生成）
-        existing_tests = self.db.get_tests_by_target_class(class_name)
-
-        # 生成测试
-        test_case = self.test_generator.generate_tests_for_method(
-            class_name=class_name,
-            method_signature=method_sig or f"public void {method_name}()",
-            class_code=class_code,
-            existing_tests=existing_tests,
-        )
-
-        if not test_case:
-            logger.warning(f"测试生成失败: {class_name}.{method_name}")
-            return {"generated": 0}
-
-        # 写入测试文件
-        test_file = write_test_file(
-            project_path=self.project_path,
-            package_name=test_case.package_name,
-            test_code=test_case.full_code,
-            test_class_name=test_case.class_name,
-        )
-
-        if not test_file:
-            logger.error("写入测试文件失败")
-            return {"generated": 0}
-
-        # 使用新的验证和修复流程（编译失败最多重试3次）
-        logger.info("开始验证和修复测试方法...")
-        test_case = self._verify_and_fix_tests(
-            test_case=test_case,
-            class_code=class_code,
-            max_compile_retries=3,
-            max_test_retries=3,
-        )
-
-        # 静态校验：检查测试方法代码中是否包含明显的错误模式
-        if test_case.compile_success:
-            from ..utils.code_utils import validate_test_methods, build_test_class
-
-            invalid_methods = validate_test_methods(test_case.methods, class_code)
-            if invalid_methods:
-                logger.warning(
-                    f"静态校验发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除"
-                )
-                test_case.methods = [
-                    m for m in test_case.methods if m.method_name not in invalid_methods
-                ]
-
-                if not test_case.methods:
-                    logger.error(
-                        f"静态校验后所有测试方法都被移除: {class_name}.{method_name}"
-                    )
-                    test_case.compile_success = False
-                    test_case.compile_error = (
-                        "All test methods removed by static validation"
-                    )
-                else:
-                    # 重新构建测试代码
-                    method_codes = [m.code for m in test_case.methods]
-                    test_case.full_code = build_test_class(
-                        test_class_name=test_case.class_name,
-                        target_class=test_case.target_class,
-                        package_name=test_case.package_name,
-                        imports=test_case.imports,
-                        test_methods=method_codes,
-                    )
-                    # 重新写入测试文件
-                    write_test_file(
-                        project_path=self.project_path,
-                        package_name=test_case.package_name,
-                        test_code=test_case.full_code,
-                        test_class_name=test_case.class_name,
-                    )
-                    logger.info(
-                        f"静态校验后保留 {len(test_case.methods)} 个有效测试方法"
-                    )
-
-        # 只有编译成功才保存
-        if not test_case.compile_success:
-            logger.error(f"✗ 测试用例编译失败（已重试3次），不保存到数据库")
-            logger.error(f"编译错误: {test_case.compile_error}")
-
-            # 如果已有其他测试用例，从数据库恢复测试文件
-            if existing_tests:
-                logger.info("从数据库恢复原有测试文件...")
-                self._restore_test_file_from_db(existing_tests[0])
+            # 清理沙箱
+            if result.get("sandbox_id"):
+                try:
+                    self.sandbox_manager.cleanup_sandbox(result["sandbox_id"])
+                except Exception as e:
+                    logger.warning(f"清理验证沙箱失败: {e}")
 
             # 将这个目标添加到失败黑名单
             if self.state:
@@ -1360,16 +1599,13 @@ class AgentTools:
                             "target": target_key,
                             "class_name": class_name,
                             "method_name": method_name,
-                            "reason": "测试生成后编译失败（已重试3次）",
-                            "error": (
-                                test_case.compile_error[:500]
-                                if test_case.compile_error
-                                else "Unknown"
-                            ),
+                            "reason": "测试生成/验证失败（已在沙箱中重试）",
+                            "error": result.get("error", "Unknown")[:500],
                             "timestamp": datetime.now().isoformat(),
                         }
                     )
                     logger.warning(f"已将 {target_key} 添加到失败黑名单")
+
                     # 如果当前目标是被加入黑名单的目标，清除当前目标选中
                     if self.state.current_target:
                         current_class = self.state.current_target.get("class_name")
@@ -1389,17 +1625,60 @@ class AgentTools:
 
             return {
                 "generated": 0,
-                "test_id": test_case.id,
                 "compile_success": False,
-                "error": test_case.compile_error,
-                "message": "测试编译失败（已重试3次），已加入黑名单",
+                "error": result.get("error", "Unknown"),
+                "message": "测试验证失败（主空间未受影响）",
             }
 
-        # 保存
-        logger.debug(
-            f"准备保存新生成的测试用例: ID={test_case.id}, version={test_case.version}"
+        # 从结果中提取信息
+        test_case = result["test_case"]
+        sandbox_path = result["sandbox_path"]
+        sandbox_id = result["sandbox_id"]
+
+        # ===== 阶段2：原子性提交到主工作空间 =====
+        logger.info(f"测试在沙箱中验证通过，准备提交到主工作空间...")
+        if not self._commit_test_to_workspace(test_case, sandbox_path):
+            # 提交失败，主空间仍保持原状
+            logger.error("✗ 提交测试到主工作空间失败")
+
+            # 清理沙箱
+            try:
+                self.sandbox_manager.cleanup_sandbox(sandbox_id)
+            except Exception as e:
+                logger.warning(f"清理验证沙箱失败: {e}")
+
+            return {
+                "generated": 0,
+                "compile_success": False,
+                "error": "Failed to commit to workspace",
+                "message": "提交到主工作空间失败（主空间未受影响）",
+            }
+
+        # ===== 阶段3：保存到数据库（只有前两步成功后才执行） =====
+        logger.info(f"测试已提交到主工作空间，保存到数据库...")
+        try:
+            logger.debug(
+                f"准备保存新生成的测试用例: ID={test_case.id}, version={test_case.version}"
+            )
+            self.db.save_test_case(test_case)
+            logger.info(f"✓ 测试用例已保存到数据库: {test_case.id}")
+        except Exception as e:
+            logger.error(f"保存测试用例到数据库失败: {e}")
+            # 注意：此时主空间已被修改，但数据库保存失败
+            # 这是一个不一致的状态，但比污染主空间要好
+            logger.warning("警告：测试文件已写入主工作空间，但数据库保存失败")
+
+        # ===== 阶段4：清理验证沙箱 =====
+        try:
+            self.sandbox_manager.cleanup_sandbox(sandbox_id)
+            logger.debug(f"已清理验证沙箱: {sandbox_id}")
+        except Exception as e:
+            logger.warning(f"清理验证沙箱失败: {e}")
+
+        logger.info(
+            f"✓ 测试生成完成: {class_name}.{method_name} "
+            f"({len(test_case.methods)} 个测试方法)"
         )
-        self.db.save_test_case(test_case)
 
         return {
             "generated": len(test_case.methods),
@@ -1412,170 +1691,45 @@ class AgentTools:
         class_name: str,
         method_name: str,
     ) -> Dict[str, Any]:
-        """完善现有测试（改进或补充）"""
+        """
+        完善现有测试（改进或补充）
+
+        使用三阶段验证提交模型：
+        1. 验证阶段：在独立沙箱中完善并验证测试
+        2. 提交阶段：原子性提交到主工作空间
+        3. 持久化阶段：保存到数据库
+
+        主工作空间只有在验证完全通过后才会被修改
+        """
         if not all(
-            [self.project_path, self.test_generator, self.java_executor, self.db]
+            [
+                self.project_path,
+                self.test_generator,
+                self.java_executor,
+                self.db,
+                self.sandbox_manager,
+            ]
         ):
             logger.error("refine_tests: 缺少必要组件")
             return {"refined": 0}
 
-        from ..utils.project_utils import find_java_file, write_test_file
-        from ..utils.code_utils import extract_class_from_file
+        logger.info(f"开始完善测试: {class_name}.{method_name}")
 
-        # 获取现有测试（按方法查询，确保针对的是当前目标方法）
-        existing_tests = self.db.get_tests_by_target_method(class_name, method_name)
-        if not existing_tests:
-            logger.warning(f"没有找到 {class_name}.{method_name} 的现有测试，无法完善")
-            logger.info(
-                f"提示：应该先使用 generate_tests 为 {class_name}.{method_name} 生成测试"
+        # ===== 阶段1：在验证沙箱中完善并验证测试 =====
+        result = self._refine_and_verify_in_sandbox(class_name, method_name)
+
+        if not result["success"]:
+            # 验证失败，主空间完全不受影响
+            logger.error(
+                f"✗ 测试在验证沙箱中验证失败: {result.get('error', 'Unknown')}"
             )
-            return {
-                "refined": 0,
-                "message": f"No existing tests found for {class_name}.{method_name}",
-            }
 
-        # 选择最新的测试用例
-        test_case = existing_tests[0]
-        logger.info(
-            f"将完善测试用例: {test_case.class_name} (共 {len(test_case.methods)} 个测试方法)"
-        )
-        logger.debug(f"选中的测试用例: ID={test_case.id}, version={test_case.version}")
-
-        # 查找类文件（支持同一文件中的多个类）
-        file_path = find_java_file(self.project_path, class_name, db=self.db)
-
-        if not file_path:
-            logger.error(f"未找到类文件: {class_name}")
-            return {"refined": 0}
-
-        class_code = extract_class_from_file(str(file_path))
-
-        # 获取幸存变异体和覆盖缺口
-        all_mutants = self.db.get_all_mutants()
-        survived = (
-            self.metrics_collector.get_survived_mutants_for_method(
-                class_name, method_name, all_mutants
-            )
-            if self.metrics_collector
-            else []
-        )
-
-        # 获取覆盖率信息
-        current_method_coverage = None
-        coverage = self.db.get_method_coverage(class_name, method_name)
-        if coverage:
-            gaps = {
-                "coverage_rate": coverage.line_coverage_rate,
-                "total_lines": coverage.total_lines,
-                "covered_lines": len(coverage.covered_lines),
-                "uncovered_lines": coverage.missed_lines,  # 现在是行号列表
-            }
-            current_method_coverage = coverage.line_coverage_rate
-            logger.info(
-                f"覆盖率信息: {class_name}.{method_name} - "
-                f"{coverage.line_coverage_rate:.1%} "
-                f"({len(coverage.covered_lines)}/{coverage.total_lines} 行)"
-            )
-            if coverage.missed_lines:
-                logger.debug(f"  未覆盖行: {coverage.missed_lines}")
-        else:
-            gaps = {}
-            logger.debug(f"没有找到 {class_name}.{method_name} 的覆盖率信息")
-
-        # 构建评估反馈
-        evaluation_feedback = None
-        if self.metrics_collector and survived:
-            evaluation_feedback = f"当前有 {len(survived)} 个幸存变异体需要击杀"
-
-        # 完善测试
-        refined_test_case = self.test_generator.refine_tests(
-            test_case=test_case,
-            class_code=class_code,
-            target_method=method_name,
-            survived_mutants=survived,
-            coverage_gaps=gaps,
-            evaluation_feedback=evaluation_feedback,
-        )
-
-        if not refined_test_case:
-            logger.warning(f"测试完善失败: {class_name}.{method_name}")
-            return {"refined": 0}
-
-        # 写入测试文件
-        test_file = write_test_file(
-            project_path=self.project_path,
-            package_name=refined_test_case.package_name,
-            test_code=refined_test_case.full_code,
-            test_class_name=refined_test_case.class_name,
-        )
-
-        if not test_file:
-            logger.error("写入测试文件失败")
-            return {"refined": 0}
-
-        # 使用新的验证和修复流程（编译失败最多重试3次）
-        logger.info("开始验证和修复完善后的测试方法...")
-        refined_test_case = self._verify_and_fix_tests(
-            test_case=refined_test_case,
-            class_code=class_code,
-            max_compile_retries=3,
-            max_test_retries=3,
-        )
-
-        # 静态校验：检查测试方法代码中是否包含明显的错误模式
-        if refined_test_case.compile_success:
-            from ..utils.code_utils import validate_test_methods, build_test_class
-
-            invalid_methods = validate_test_methods(
-                refined_test_case.methods, class_code
-            )
-            if invalid_methods:
-                logger.warning(
-                    f"静态校验发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除"
-                )
-                refined_test_case.methods = [
-                    m
-                    for m in refined_test_case.methods
-                    if m.method_name not in invalid_methods
-                ]
-
-                if not refined_test_case.methods:
-                    logger.error(
-                        f"静态校验后所有测试方法都被移除: {class_name}.{method_name}"
-                    )
-                    refined_test_case.compile_success = False
-                    refined_test_case.compile_error = (
-                        "All test methods removed by static validation"
-                    )
-                else:
-                    # 重新构建测试代码
-                    method_codes = [m.code for m in refined_test_case.methods]
-                    refined_test_case.full_code = build_test_class(
-                        test_class_name=refined_test_case.class_name,
-                        target_class=refined_test_case.target_class,
-                        package_name=refined_test_case.package_name,
-                        imports=refined_test_case.imports,
-                        test_methods=method_codes,
-                    )
-                    # 重新写入测试文件
-                    write_test_file(
-                        project_path=self.project_path,
-                        package_name=refined_test_case.package_name,
-                        test_code=refined_test_case.full_code,
-                        test_class_name=refined_test_case.class_name,
-                    )
-                    logger.info(
-                        f"静态校验后保留 {len(refined_test_case.methods)} 个有效测试方法"
-                    )
-
-        # 只有编译成功才保存
-        if not refined_test_case.compile_success:
-            logger.error(f"✗ 测试用例编译失败（已重试3次），不保存到数据库")
-            logger.error(f"编译错误: {refined_test_case.compile_error}")
-
-            # 恢复原始测试文件（从数据库中的原始数据）
-            logger.info("从数据库恢复原始测试文件...")
-            self._restore_test_file_from_db(test_case)
+            # 清理沙箱
+            if result.get("sandbox_id"):
+                try:
+                    self.sandbox_manager.cleanup_sandbox(result["sandbox_id"])
+                except Exception as e:
+                    logger.warning(f"清理验证沙箱失败: {e}")
 
             # 将这个目标添加到失败黑名单
             if self.state:
@@ -1590,16 +1744,13 @@ class AgentTools:
                             "target": target_key,
                             "class_name": class_name,
                             "method_name": method_name,
-                            "reason": "测试完善后编译失败（已重试3次）",
-                            "error": (
-                                refined_test_case.compile_error[:500]
-                                if refined_test_case.compile_error
-                                else "Unknown"
-                            ),
+                            "reason": "测试完善/验证失败（已在沙箱中重试）",
+                            "error": result.get("error", "Unknown")[:500],
                             "timestamp": datetime.now().isoformat(),
                         }
                     )
                     logger.warning(f"已将 {target_key} 添加到失败黑名单")
+
                     # 如果当前目标是被加入黑名单的目标，清除当前目标选中
                     if self.state.current_target:
                         current_class = self.state.current_target.get("class_name")
@@ -1619,23 +1770,75 @@ class AgentTools:
 
             return {
                 "refined": 0,
-                "test_id": refined_test_case.id,
                 "compile_success": False,
-                "error": refined_test_case.compile_error,
-                "message": "测试编译失败（已重试3次），已加入黑名单",
+                "error": result.get("error", "Unknown"),
+                "message": "测试验证失败（主空间未受影响）",
             }
 
-        # 保存
-        logger.debug(
-            f"准备保存完善后的测试用例: ID={refined_test_case.id}, version={refined_test_case.version}"
+        # 从结果中提取信息
+        refined_test_case = result["test_case"]
+        sandbox_path = result["sandbox_path"]
+        sandbox_id = result["sandbox_id"]
+        original_test_case = result.get("original_test_case")
+
+        # 获取覆盖率信息（用于返回结果）
+        current_method_coverage = None
+        coverage = self.db.get_method_coverage(class_name, method_name)
+        if coverage:
+            current_method_coverage = coverage.line_coverage_rate
+
+        # ===== 阶段2：原子性提交到主工作空间 =====
+        logger.info(f"测试在沙箱中验证通过，准备提交到主工作空间...")
+        if not self._commit_test_to_workspace(refined_test_case, sandbox_path):
+            # 提交失败，主空间仍保持原状
+            logger.error("✗ 提交测试到主工作空间失败")
+
+            # 清理沙箱
+            try:
+                self.sandbox_manager.cleanup_sandbox(sandbox_id)
+            except Exception as e:
+                logger.warning(f"清理验证沙箱失败: {e}")
+
+            return {
+                "refined": 0,
+                "compile_success": False,
+                "error": "Failed to commit to workspace",
+                "message": "提交到主工作空间失败（主空间未受影响）",
+            }
+
+        # ===== 阶段3：保存到数据库（只有前两步成功后才执行） =====
+        logger.info(f"测试已提交到主工作空间，保存到数据库...")
+        try:
+            logger.debug(
+                f"准备保存完善后的测试用例: ID={refined_test_case.id}, version={refined_test_case.version}"
+            )
+            self.db.save_test_case(refined_test_case)
+            logger.info(f"✓ 测试用例已保存到数据库: {refined_test_case.id}")
+        except Exception as e:
+            logger.error(f"保存测试用例到数据库失败: {e}")
+            # 注意：此时主空间已被修改，但数据库保存失败
+            # 这是一个不一致的状态，但比污染主空间要好
+            logger.warning("警告：测试文件已写入主工作空间，但数据库保存失败")
+
+        # ===== 阶段4：清理验证沙箱 =====
+        try:
+            self.sandbox_manager.cleanup_sandbox(sandbox_id)
+            logger.debug(f"已清理验证沙箱: {sandbox_id}")
+        except Exception as e:
+            logger.warning(f"清理验证沙箱失败: {e}")
+
+        logger.info(
+            f"✓ 测试完善完成: {class_name}.{method_name} "
+            f"({len(refined_test_case.methods)} 个测试方法)"
         )
-        self.db.save_test_case(refined_test_case)
 
         result = {
             "refined": len(refined_test_case.methods),
             "test_id": refined_test_case.id,
             "compile_success": refined_test_case.compile_success,
-            "previous_count": len(test_case.methods),
+            "previous_count": (
+                len(original_test_case.methods) if original_test_case else 0
+            ),
         }
 
         # 添加当前方法的覆盖率信息
