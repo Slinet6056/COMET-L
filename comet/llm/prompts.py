@@ -800,13 +800,9 @@ void testServiceWithMockedDependency() {
    - **支持的选择策略**（通过 criteria 参数指定）：
      * coverage（默认）: 优先选择覆盖率低的方法 - 适合提升整体覆盖率
      * killrate: 优先选择杀死率低的方法 - 适合改进测试质量（当有较多幸存变异体时）
-     * mutations: 优先选择变异体少的类 - 适合为缺少变异体的类生成测试
-     * priority: 综合评分策略 - 平衡覆盖率和变异体数量
-     * random: 随机选择 - 用于探索性测试
    - **策略选择建议**：
      * 项目初期或全局覆盖率低时：使用 coverage 策略
      * 有较多幸存变异体或全局变异分数低时：使用 killrate 策略
-     * 需要平衡各方面时：使用 priority 策略
      * 不指定策略时默认使用 coverage
    - **系统会自动处理**：选择新目标后，如果该目标没有测试/变异体，系统会自动依次执行 generate_tests → generate_mutants → run_evaluation
    - 你只需决策何时选择目标以及使用哪个策略，无需手动调用生成和评估
@@ -845,7 +841,7 @@ void testServiceWithMockedDependency() {
   * 停止决策必须基于**全局覆盖率**，不能因为单个方法达到100%就停止
 - **覆盖率数据的有效性**：只有在 run_evaluation 之后，覆盖率数据才是最新的；如果没有评估过，覆盖率可能为 0 或过时
 - 如果当前方法覆盖率已经很高但全局覆盖率仍然较低，说明需要 select_target 选择新目标为其他方法生成测试
-- select_target 支持多种策略：默认使用 coverage 策略优先选择低覆盖率的方法，也可以使用 killrate 策略优先选择测试质量需要改进的方法
+- select_target 支持两种策略：默认使用 coverage 策略优先选择低覆盖率的方法，也可以使用 killrate 策略优先选择测试质量需要改进的方法
 - refine_tests 工具会获得当前方法的行级覆盖率缺口信息，LLM 会针对性优化
 - 如果当前方法连续多次 refine_tests 后覆盖率没有显著提升，应该选择新目标
 

@@ -43,7 +43,7 @@ class TargetSelector:
         根据策略选择目标
 
         Args:
-            criteria: 选择策略（coverage/killrate/mutations/priority/random）
+            criteria: 选择策略（coverage/killrate）
             blacklist: 黑名单（格式为"ClassName.methodName"）
             processed_targets: 已处理目标列表（格式为"ClassName.methodName"）
 
