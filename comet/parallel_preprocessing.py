@@ -1041,6 +1041,56 @@ class ParallelPreprocessor:
 
         failed = []
 
+
+        # 修复：检测方法间冲突的情况（两侧都通过，但合并后失败）
+        if left_valid and right_valid:
+            # 两侧单独都通过，说明存在方法间冲突
+            logger.warning(
+                f"检测到方法间冲突: 左侧{len(left_methods)}个方法和右侧{len(right_methods)}个方法单独都通过，但合并后失败"
+            )
+            # 检查是否有重名方法
+            left_names = {m.method_name for m in left_methods}
+            right_names = {m.method_name for m in right_methods}
+            duplicates = left_names & right_names
+            if duplicates:
+                logger.error(f"发现重名方法: {duplicates}，这些方法会导致编译失败")
+                # 返回所有重名方法（每个重名方法在两侧都出现）
+                return list(duplicates)
+
+            # 没有重名方法，但合并后仍失败
+            # 策略：如果方法数量较少（≤3），逐个测试找出冲突方法
+            total_methods = len(left_methods) + len(right_methods)
+            if total_methods <= 3:
+                logger.info(f"方法数量较少({total_methods}个)，逐个测试识别冲突方法")
+                failed_in_individual = []
+                for method in methods:
+                    is_valid = self._validate_methods_in_sandbox(
+                        [method], test_class_name, target_class, package_name, imports
+                    )
+                    if not is_valid:
+                        failed_in_individual.append(method.method_name)
+                        logger.warning(f"单独测试失败: {method.method_name}")
+
+                if failed_in_individual:
+                    return failed_in_individual
+                else:
+                    # 所有方法单独都通过，说明是组合问题，保守删除所有
+                    logger.error(f"所有方法单独都通过但合并失败，删除所有方法")
+                    return [m.method_name for m in methods]
+            else:
+                # 方法较多，继续递归二分（每侧再细分）
+                logger.info(f"继续细分查找冲突方法（{total_methods}个）")
+                # 对左侧和右侧分别再进行二分查找
+                left_failed = self._binary_search_failed_methods(
+                    left_methods, test_class_name, target_class, package_name, imports
+                ) if len(left_methods) > 1 else [left_methods[0].method_name]
+                right_failed = self._binary_search_failed_methods(
+                    right_methods, test_class_name, target_class, package_name, imports
+                ) if len(right_methods) > 1 else [right_methods[0].method_name]
+
+                # 返回两侧递归找到的失败方法
+                return left_failed + right_failed
+
         # 递归处理失败的部分
         if not left_valid:
             logger.info(f"左侧 {len(left_methods)} 个方法验证失败，继续递归查找")
@@ -1324,7 +1374,6 @@ class ParallelPreprocessor:
                             break
 
                 method_ranges[method_name] = (start_line, end_line)
-                logger.debug(f"方法 {method_name}: 行 {start_line}-{end_line}")
 
         except javalang.parser.JavaSyntaxError as e:
             logger.warning(

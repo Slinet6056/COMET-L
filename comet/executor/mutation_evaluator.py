@@ -49,8 +49,12 @@ class MutationEvaluator:
         Returns:
             测试结果字典 {test_id: passed}
         """
-        # 创建沙箱
-        sandbox_id = f"mutant_{mutant.id}"
+        # 创建沙箱 - 修复：添加时间戳和线程ID确保唯一性，避免并发冲突
+        import time
+        import threading
+        thread_id = threading.get_ident()
+        timestamp_ns = time.time_ns()
+        sandbox_id = f"mutant_{mutant.id}_{timestamp_ns}_{thread_id}"
 
         # 修复：检查沙箱是否已存在且正在被使用，避免并发冲突
         try:
@@ -66,16 +70,6 @@ class MutationEvaluator:
             import json
             import time
             import os
-
-            patch_json = json.dumps(
-                {
-                    "file_path": mutant.patch.file_path,
-                    "line_start": mutant.patch.line_start,
-                    "line_end": mutant.patch.line_end,
-                    "original": mutant.patch.original_code,
-                    "mutated": mutant.patch.mutated_code,
-                }
-            )
 
             # 确定源文件路径
             original_file_path = mutant.patch.file_path
@@ -100,6 +94,17 @@ class MutationEvaluator:
 
             # 沙箱中的源文件和目标文件路径（同一个文件，原地修改）
             sandbox_file = str(Path(sandbox_path) / rel_path)
+
+            # 修复：patch_json 应该使用沙箱中的文件路径，而不是原始项目路径
+            patch_json = json.dumps(
+                {
+                    "file_path": sandbox_file,  # 使用沙箱路径而非原始路径
+                    "line_start": mutant.patch.line_start,
+                    "line_end": mutant.patch.line_end,
+                    "original": mutant.patch.original_code,
+                    "mutated": mutant.patch.mutated_code,
+                }
+            )
 
             # 修复：验证沙箱文件是否存在，避免NoSuchFileException
             if not os.path.exists(sandbox_file):
