@@ -29,6 +29,7 @@ evolution:
   excellent_mutation_score: 0.95      # 变异分数阈值（默认 95%）
   excellent_line_coverage: 0.90       # 行覆盖率阈值（默认 90%）
   excellent_branch_coverage: 0.85     # 分支覆盖率阈值（默认 85%）
+  min_method_lines: 5                 # 目标方法的最小行数，小于此值的方法将被跳过
 
 knowledge:
   enable_dynamic_update: true

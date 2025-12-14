@@ -19,6 +19,7 @@ class TargetSelector:
         project_path: str,
         java_executor: JavaExecutor,
         database: Database,
+        min_method_lines: int = 5,
     ):
         """
         初始化目标选择器
@@ -27,10 +28,12 @@ class TargetSelector:
             project_path: 项目路径
             java_executor: Java 执行器
             database: 数据库
+            min_method_lines: 目标方法的最小行数，默认为5
         """
         self.project_path = project_path
         self.java_executor = java_executor
         self.db = database
+        self.min_method_lines = min_method_lines
         self._class_cache: Optional[List[str]] = None
 
     def select(
@@ -624,7 +627,7 @@ class TargetSelector:
             class_name: 类名
 
         Returns:
-            方法名列表（只返回属于指定类的方法）
+            方法名列表（只返回属于指定类的方法，且满足最小行数要求）
         """
         from ..utils.project_utils import find_java_file
 
@@ -639,18 +642,41 @@ class TargetSelector:
         try:
             all_methods = self.java_executor.get_public_methods(str(file_path))
             if all_methods:
-                # 过滤出属于指定类的方法
+                # 过滤出属于指定类的方法，并检查行数要求
                 class_methods = []
+                skipped_count = 0
+
                 for method in all_methods:
                     if isinstance(method, dict):
                         # 新格式：包含 className 字段
                         if method.get("className") == class_name:
+                            # 检查方法行数是否满足最小行数要求
+                            method_range = method.get("range")
+                            if method_range and isinstance(method_range, dict):
+                                begin_line = method_range.get("begin", 0)
+                                end_line = method_range.get("end", 0)
+                                method_lines = end_line - begin_line + 1
+
+                                if method_lines < self.min_method_lines:
+                                    logger.debug(
+                                        f"跳过方法 {class_name}.{method.get('name')}：行数 {method_lines} 小于最小值 {self.min_method_lines}"
+                                    )
+                                    skipped_count += 1
+                                    continue
+
                             class_methods.append(method)
                     else:
-                        # 旧格式：字符串，无法区分类，保留所有方法（向后兼容）
+                        # 旧格式：字符串，无法区分类和行数，保留所有方法（向后兼容）
                         class_methods.append(method)
 
-                logger.debug(f"类 {class_name} 有 {len(class_methods)} 个 public 方法")
+                if skipped_count > 0:
+                    logger.debug(
+                        f"类 {class_name}：根据最小行数配置跳过了 {skipped_count} 个方法"
+                    )
+
+                logger.debug(
+                    f"类 {class_name} 有 {len(class_methods)} 个符合条件的 public 方法"
+                )
                 return class_methods
         except Exception as e:
             logger.error(f"获取 public 方法失败: {e}")
