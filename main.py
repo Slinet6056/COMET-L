@@ -129,6 +129,8 @@ def initialize_system(config: Settings):
         max_retries=config.execution.max_retries,
         supports_json_mode=config.llm.supports_json_mode,
         timeout=config.llm.timeout,
+        reasoning_effort=config.llm.reasoning_effort,
+        verbosity=config.llm.verbosity,
     )
     logger.info(f"LLM 客户端初始化: {config.llm.model} (timeout={config.llm.timeout}s)")
 

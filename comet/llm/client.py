@@ -24,6 +24,8 @@ class LLMClient:
         max_retries: int = 3,
         supports_json_mode: bool = True,
         timeout: float = 600.0,
+        reasoning_effort: Optional[str] = None,
+        verbosity: Optional[str] = None,
     ):
         """
         初始化 LLM 客户端
@@ -37,6 +39,8 @@ class LLMClient:
             max_retries: 最大重试次数
             supports_json_mode: 是否支持 JSON 模式
             timeout: 请求超时时间（秒），默认 600 秒
+            reasoning_effort: 推理努力程度，可选值: 'none', 'low', 'medium', 'high'
+            verbosity: 响应详细程度，可选值: 'low', 'medium', 'high'
         """
         # 使用简单的超时配置
         # OpenAI SDK 会自动处理超时，我们在每次请求时传入
@@ -51,6 +55,8 @@ class LLMClient:
         self.max_retries = max_retries
         self.supports_json_mode = supports_json_mode
         self.timeout = timeout
+        self.reasoning_effort = reasoning_effort
+        self.verbosity = verbosity
 
         # 统计信息
         self.total_calls = 0
@@ -92,6 +98,14 @@ class LLMClient:
 
                 if response_format and self.supports_json_mode:
                     kwargs["response_format"] = response_format
+
+                # 添加 reasoning effort 配置（Chat Completions API 使用顶级参数）
+                if self.reasoning_effort is not None:
+                    kwargs["reasoning_effort"] = self.reasoning_effort
+
+                # 添加 verbosity 配置（如果模型支持）
+                if self.verbosity is not None:
+                    kwargs["verbosity"] = self.verbosity
 
                 logger.debug(
                     f"LLM 调用参数: model={self.model}, max_tokens={max_tok}, temperature={temp}, timeout={self.timeout}s"
