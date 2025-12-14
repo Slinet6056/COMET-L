@@ -549,7 +549,6 @@ class ParallelPreprocessor:
             mutants = self.mutant_generator.generate_mutants(
                 class_name=class_name,
                 class_code=class_code,
-                num_mutations=5,
                 target_method=method_name,
             )
 

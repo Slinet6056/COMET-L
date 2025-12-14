@@ -138,11 +138,10 @@ class AgentTools:
             func=self.refine_mutants,
             metadata=ToolMetadata(
                 name="refine_mutants",
-                description="基于现有测试生成更有针对性的变异体（分析测试弱点）",
+                description="基于现有测试生成更有针对性的变异体（分析测试弱点，数量由 LLM 自主决定）",
                 params={
                     "class_name": "类名",
                     "method_name": "方法名",
-                    "num_mutations": "变异体数量（默认5）",
                 },
                 when_to_use="根据项目复杂度和测试质量自主判断（可选工具）",
                 notes=["简单项目高杀死率是正常的，不必强制使用此工具"],
@@ -1483,15 +1482,14 @@ class AgentTools:
         return target
 
     def generate_mutants(
-        self, class_name: str, method_name: Optional[str] = None, num_mutations: int = 5
+        self, class_name: str, method_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        生成变异体
+        生成变异体（数量由 LLM 自主决定）
 
         Args:
             class_name: 类名
             method_name: 目标方法名（可选，如果指定则只生成该方法的变异体）
-            num_mutations: 变异体数量
         """
         if not all(
             [self.project_path, self.mutant_generator, self.static_guard, self.db]
@@ -1522,8 +1520,7 @@ class AgentTools:
         mutants = self.mutant_generator.generate_mutants(
             class_name=class_name,
             class_code=class_code,
-            num_mutations=num_mutations,
-            target_method=method_name,  # 传递目标方法
+            target_method=method_name,
         )
 
         if not mutants:
@@ -2057,7 +2054,7 @@ class AgentTools:
                 pattern = self.pattern_extractor.extract_from_surviving_mutant(
                     mutant_code=mutant.patch.mutated_code,
                     original_code=mutant.patch.original_code,
-                    semantic_intent=mutant.semantic_intent,
+                    semantic_intent="",  # 已弃用字段，传递空字符串
                 )
 
                 if pattern:
@@ -2079,15 +2076,13 @@ class AgentTools:
         self,
         class_name: str,
         method_name: str,
-        num_mutations: int = 5,
     ) -> Dict[str, Any]:
         """
-        基于现有测试生成更具针对性的变异体
+        基于现有测试生成更具针对性的变异体（数量由 LLM 自主决定）
 
         Args:
             class_name: 类名
             method_name: 方法名
-            num_mutations: 变异体数量
 
         Returns:
             结果字典
@@ -2146,7 +2141,6 @@ class AgentTools:
             test_cases=test_cases,
             kill_rate=kill_rate,
             target_method=method_name,
-            num_mutations=num_mutations,
         )
 
         if not mutants:

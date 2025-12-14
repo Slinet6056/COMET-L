@@ -52,6 +52,7 @@ class MutationEvaluator:
         # 创建沙箱 - 修复：添加时间戳和线程ID确保唯一性，避免并发冲突
         import time
         import threading
+
         thread_id = threading.get_ident()
         timestamp_ns = time.time_ns()
         sandbox_id = f"mutant_{mutant.id}_{timestamp_ns}_{thread_id}"
@@ -60,7 +61,9 @@ class MutationEvaluator:
         try:
             sandbox_path = self.sandbox_manager.create_sandbox(project_path, sandbox_id)
         except Exception as e:
-            logger.warning(f"创建沙箱失败（可能已被其他线程使用）: {mutant.id}, 错误: {e}")
+            logger.warning(
+                f"创建沙箱失败（可能已被其他线程使用）: {mutant.id}, 错误: {e}"
+            )
             # 跳过此变异体，避免并发冲突
             return {}
 
@@ -122,7 +125,6 @@ class MutationEvaluator:
 
             if not mutation_result.get("success", False):
                 logger.error(f"应用变异失败: {mutant.id}")
-                logger.error(f"  变异意图: {mutant.semantic_intent}")
                 logger.error(
                     f"  行范围: {mutant.patch.line_start}-{mutant.patch.line_end}"
                 )

@@ -162,7 +162,6 @@ class StaticGuard:
             else:
                 invalid_count += 1
                 logger.debug(f"过滤掉不合法的变异体: {mutant.id}")
-                logger.debug(f"  语义意图: {mutant.semantic_intent}")
                 if mutant.compile_error:
                     logger.debug(f"  编译错误: {mutant.compile_error}")
 

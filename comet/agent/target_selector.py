@@ -236,36 +236,38 @@ class TargetSelector:
             logger.warning("未找到任何 Java 类")
             return {"class_name": None, "method_name": None}
 
-        # 选择第一个类的第一个方法
-        selected_class = all_classes[0]
-        methods = self._get_public_methods(selected_class)
-        selected_method_info = None
-        method_name = None
-        method_signature = None
+        # 遍历类，选择第一个有可用方法的类
+        for selected_class in all_classes:
+            methods = self._get_public_methods(selected_class)
+            if methods and len(methods) > 0:
+                selected_method_info = methods[0]
+                method_name = (
+                    selected_method_info.get("name")
+                    if isinstance(selected_method_info, dict)
+                    else selected_method_info
+                )
+                method_signature = (
+                    selected_method_info.get("signature")
+                    if isinstance(selected_method_info, dict)
+                    else None
+                )
 
-        if methods and len(methods) > 0:
-            selected_method_info = methods[0]
-            method_name = (
-                selected_method_info.get("name")
-                if isinstance(selected_method_info, dict)
-                else selected_method_info
-            )
-            method_signature = (
-                selected_method_info.get("signature")
-                if isinstance(selected_method_info, dict)
-                else None
-            )
+                logger.info(f"选择目标（默认）: {selected_class}.{method_name}")
+                return {
+                    "class_name": selected_class,
+                    "method_name": method_name,
+                    "method_signature": method_signature,
+                    "method_info": (
+                        selected_method_info
+                        if isinstance(selected_method_info, dict)
+                        else None
+                    ),
+                    "strategy": "coverage",
+                }
 
-        logger.info(f"选择目标（默认）: {selected_class}.{method_name}")
-        return {
-            "class_name": selected_class,
-            "method_name": method_name,
-            "method_signature": method_signature,
-            "method_info": (
-                selected_method_info if isinstance(selected_method_info, dict) else None
-            ),
-            "strategy": "coverage",
-        }
+        # 如果所有类都没有可用方法，返回 None
+        logger.warning("所有类都没有符合条件的方法（可能都被最小行数配置过滤掉了）")
+        return {"class_name": None, "method_name": None}
 
     def select_by_mutations(
         self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None

@@ -45,8 +45,6 @@ class Database:
                 class_name TEXT NOT NULL,
                 method_name TEXT,
                 patch TEXT NOT NULL,
-                semantic_intent TEXT NOT NULL,
-                pattern_id TEXT,
                 status TEXT DEFAULT 'pending',
                 killed_by TEXT,
                 survived INTEGER DEFAULT 0,
@@ -66,7 +64,6 @@ class Database:
                 method_name TEXT NOT NULL,
                 code TEXT NOT NULL,
                 target_method TEXT NOT NULL,
-                description TEXT,
                 created_at TEXT,
                 updated_at TEXT,
                 PRIMARY KEY (test_case_id, method_name)
@@ -204,15 +201,13 @@ class Database:
             cursor = self.conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO mutants VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO mutants VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     mutant.id,
                     mutant.class_name,
                     mutant.method_name,
                     mutant.patch.model_dump_json(),
-                    mutant.semantic_intent,
-                    mutant.pattern_id,
                     mutant.status,
                     json.dumps(mutant.killed_by),
                     1 if mutant.survived else 0,
@@ -397,6 +392,9 @@ class Database:
         保存测试用例
 
         每次保存会覆盖已有的测试方法，只保留最新版本
+
+        注意：此方法会删除数据库中存在但不在 test_case.methods 列表中的旧方法，
+        这样可以处理方法名变更的情况（LLM 返回的新方法名可能与旧方法名不同）
         """
         cursor = self.conn.cursor()
 
@@ -406,6 +404,27 @@ class Database:
 
         if case_exists:
             logger.debug(f"测试用例 {test_case.id} 已存在，将更新测试方法")
+
+            # 获取数据库中已有的方法名列表
+            cursor.execute(
+                "SELECT method_name FROM test_methods WHERE test_case_id = ?",
+                (test_case.id,),
+            )
+            existing_method_names = {row[0] for row in cursor.fetchall()}
+
+            # 获取当前要保存的方法名列表
+            current_method_names = {method.method_name for method in test_case.methods}
+
+            # 找出需要删除的方法（在数据库中存在但不在当前列表中）
+            methods_to_delete = existing_method_names - current_method_names
+
+            if methods_to_delete:
+                logger.info(f"删除已不存在的旧测试方法: {methods_to_delete}")
+                for method_name in methods_to_delete:
+                    cursor.execute(
+                        "DELETE FROM test_methods WHERE test_case_id = ? AND method_name = ?",
+                        (test_case.id, method_name),
+                    )
         else:
             logger.debug(f"创建新测试用例: {test_case.id}")
 
@@ -417,8 +436,8 @@ class Database:
             cursor.execute(
                 """
                 INSERT OR REPLACE INTO test_methods
-                (test_case_id, method_name, code, target_method, description, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?,
+                (test_case_id, method_name, code, target_method, created_at, updated_at)
+                VALUES (?, ?, ?, ?,
                         COALESCE((SELECT created_at FROM test_methods WHERE test_case_id = ? AND method_name = ?), ?),
                         ?)
             """,
@@ -427,7 +446,6 @@ class Database:
                     method.method_name,
                     method.code,
                     method.target_method,
-                    method.description,
                     test_case.id,
                     method.method_name,
                     method.created_at.isoformat() if method.created_at else None,
@@ -807,8 +825,6 @@ class Database:
             class_name=row["class_name"],
             method_name=row["method_name"],
             patch=MutationPatch.model_validate_json(row["patch"]),
-            semantic_intent=row["semantic_intent"],
-            pattern_id=row["pattern_id"],
             status=row["status"],
             killed_by=json.loads(row["killed_by"]) if row["killed_by"] else [],
             survived=bool(row["survived"]),
@@ -851,7 +867,6 @@ class Database:
                 method_name=method_row["method_name"],
                 code=method_row["code"],
                 target_method=method_row["target_method"],
-                description=method_row["description"],
                 created_at=(
                     datetime.fromisoformat(method_row["created_at"])
                     if method_row["created_at"]

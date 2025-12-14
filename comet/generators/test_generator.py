@@ -1,6 +1,5 @@
 """测试生成器"""
 
-import json
 import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -11,41 +10,14 @@ from ..models import TestCase, TestMethod, Contract, Mutant
 from ..knowledge.knowledge_base import KnowledgeBase
 from ..utils.hash_utils import generate_id
 from ..utils.code_utils import build_test_class, extract_imports, parse_java_class
-from ..utils.json_utils import extract_json_from_response
+from ..utils.parsers import (
+    parse_test_method_response,
+    parse_test_class_response,
+    extract_test_method_name,
+    normalize_code,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_code(code: str) -> str:
-    """
-    规范化代码字符串，将字面的转义字符转换为实际的字符
-
-    Args:
-        code: 可能包含字面转义字符的代码字符串
-
-    Returns:
-        规范化后的代码字符串
-    """
-    if not code:
-        return code
-
-    # 如果代码中包含字面的 \n（反斜杠+n），但没有实际的换行符，进行转换
-    # 这种情况发生在 JSON 中存储了字面的 "\\n" 字符串
-    if "\\n" in code:
-        # 检查是否包含实际的换行符（排除字面的 \n）
-        has_actual_newline = "\n" in code.replace("\\n", "")
-        if not has_actual_newline:
-            # 使用 Python 的字符串转义处理
-            try:
-                code = code.encode().decode("unicode_escape")
-            except (UnicodeDecodeError, UnicodeEncodeError):
-                # 如果 unicode_escape 失败，直接替换
-                code = code.replace("\\n", "\n")
-        else:
-            # 如果既有字面的 \n 又有实际的换行符，只替换字面的 \n
-            code = code.replace("\\n", "\n")
-
-    return code
 
 
 class TestGenerator:
@@ -105,85 +77,43 @@ class TestGenerator:
                 existing_tests=existing_tests or [],
             )
 
-            # 调用 LLM
+            # 调用 LLM（不再使用 json_object 格式）
             response = self.llm.chat_with_system(
                 system_prompt=system,
                 user_prompt=user,
                 temperature=0.7,
-                response_format={"type": "json_object"},
             )
 
             # DEBUG: 记录原始响应
             logger.debug(f"LLM 原始响应: {response[:500]}...")
 
-            # 解析响应
-            try:
-                # 先清理响应，去除可能的代码块标记
-                cleaned_response = extract_json_from_response(response)
-                data = json.loads(cleaned_response)
-                logger.debug(f"解析后的数据结构: {list(data.keys())}")
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON 解析失败: {e}")
-                logger.error(f"响应内容: {response}")
+            # 使用新的解析器解析响应
+            test_code = parse_test_method_response(response)
+
+            if not test_code:
+                logger.warning(f"未能解析测试方法: {class_name}.{method_name}")
                 return None
 
-            # 尝试多种 JSON 格式
-            tests_data = data.get("tests", [])
+            # 处理代码规范化
+            test_code = normalize_code(test_code)
 
-            # 如果没有 "tests" 键，尝试其他可能的格式
-            if not tests_data:
-                # 检查是否直接返回了测试方法（单个对象）
-                if "method_name" in data and "code" in data:
-                    tests_data = [data]
-                    logger.debug("检测到单个测试对象格式，已转换为列表")
-                # 检查是否有 "test_methods" 键
-                elif "test_methods" in data:
-                    tests_data = data.get("test_methods", [])
-
-            logger.debug(
-                f"提取到 {len(tests_data) if isinstance(tests_data, list) else 1} 个测试数据"
-            )
-            if not isinstance(tests_data, list):
-                tests_data = [tests_data]
+            # 提取方法名
+            test_method_name = extract_test_method_name(test_code)
+            if not test_method_name:
+                # 如果无法提取方法名，使用默认名称
+                test_method_name = f"test_{method_name}"
+                logger.warning(f"无法提取测试方法名，使用默认名称: {test_method_name}")
 
             # 创建 TestMethod 对象
-            test_methods = []
-            for idx, test_data in enumerate(tests_data):
-                logger.debug(
-                    f"处理测试 #{idx+1}: {test_data.get('method_name', 'Unknown')}"
-                )
-
-                # 验证必需字段
-                if not test_data.get("code"):
-                    logger.warning(f"跳过测试 #{idx+1}: 缺少 code 字段")
-                    logger.debug(f"测试数据: {test_data}")
-                    continue
-
-                # 处理转义字符：将字面的 \n 转换为实际的换行符
-                code = test_data.get("code", "")
-                # 如果代码中包含字面的 \n（而不是实际的换行符），进行转换
-                if "\\n" in code and "\n" not in code.replace("\\n", ""):
-                    # 使用 Python 的字符串转义处理
-                    code = code.encode().decode("unicode_escape")
-                elif "\\n" in code:
-                    # 如果既有字面的 \n 又有实际的换行符，只替换字面的 \n
-                    code = code.replace("\\n", "\n")
-
-                test_method = TestMethod(
-                    method_name=test_data.get("method_name", f"test_{method_name}"),
-                    code=code,
-                    target_method=method_name,
-                    description=test_data.get("description"),
-                    created_at=datetime.now(),
-                    updated_at=datetime.now(),
-                )
-                test_methods.append(test_method)
-                logger.debug(f"成功创建测试 #{idx+1}")
-
-            if not test_methods:
-                logger.warning(f"未生成测试方法: {class_name}.{method_name}")
-                logger.debug(f"原始数据包含 {len(tests_data)} 个测试，但都无效")
-                return None
+            test_method = TestMethod(
+                method_name=test_method_name,
+                code=test_code,
+                target_method=method_name,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+            test_methods = [test_method]
+            logger.debug(f"成功创建测试方法: {test_method_name}")
 
             # 解析类信息
             class_info = parse_java_class(class_code)
@@ -240,7 +170,7 @@ class TestGenerator:
         evaluation_feedback: Optional[str] = None,
     ) -> Optional[TestCase]:
         """
-        完善现有测试（改进、扩展或修正）
+        完善现有测试（改进、扩展或修正）- 针对单个测试方法优化
 
         Args:
             test_case: 现有测试用例
@@ -258,6 +188,22 @@ class TestGenerator:
             logger.info(f"目标方法: {target_method}")
 
         try:
+            # 找到需要优化的测试方法
+            method_to_refine = None
+            for method in test_case.methods:
+                if target_method and method.target_method == target_method:
+                    method_to_refine = method.code
+                    break
+
+            if not method_to_refine and test_case.methods:
+                # 如果没有指定目标方法或找不到，使用第一个方法
+                method_to_refine = test_case.methods[0].code
+                logger.warning("未找到目标方法的测试，使用第一个测试方法")
+
+            if not method_to_refine:
+                logger.error("没有找到可以优化的测试方法")
+                return None
+
             # 渲染提示词
             system_prompt, user_prompt = self.prompt_manager.render_refine_test(
                 test_case=test_case,
@@ -266,54 +212,94 @@ class TestGenerator:
                 survived_mutants=survived_mutants or [],
                 coverage_gaps=coverage_gaps or {},
                 evaluation_feedback=evaluation_feedback,
+                method_to_refine=method_to_refine,
             )
 
-            # 调用 LLM
+            # 调用 LLM（不再使用 json_object 格式）
             response = self.llm.chat_with_system(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.6,
-                response_format={"type": "json_object"},
             )
 
-            # 解析响应
-            cleaned_response = extract_json_from_response(response)
-            data = json.loads(cleaned_response)
+            # DEBUG: 记录原始响应
+            logger.debug(f"LLM 原始响应: {response[:500]}...")
 
-            # 支持两种返回格式
-            if "tests" in data:
-                tests_data = data["tests"]
-            elif "refined_tests" in data:
-                tests_data = data["refined_tests"]
-            else:
-                logger.error("响应中未找到测试数据")
+            # 使用新的解析器解析响应
+            refined_code = parse_test_method_response(response)
+
+            if not refined_code:
+                logger.warning("未能解析优化后的测试方法")
                 return None
 
-            if not isinstance(tests_data, list):
-                tests_data = [tests_data]
+            # 处理代码规范化
+            refined_code = normalize_code(refined_code)
 
-            # 创建 TestMethod 对象
-            test_methods = []
-            for test_data in tests_data:
-                if not test_data.get("code"):
-                    continue
-
-                # 处理转义字符：将字面的 \n 转换为实际的换行符
-                code = _normalize_code(test_data.get("code", ""))
-
-                test_method = TestMethod(
-                    method_name=test_data.get("method_name", "test_method"),
-                    code=code,
-                    target_method=test_data.get("target_method", ""),
-                    description=test_data.get("description"),
-                    created_at=datetime.now(),
-                    updated_at=datetime.now(),
+            # 提取方法名
+            refined_method_name = extract_test_method_name(refined_code)
+            if not refined_method_name:
+                # 如果无法提取方法名，使用原方法名
+                refined_method_name = (
+                    test_case.methods[0].method_name
+                    if test_case.methods
+                    else "test_method"
                 )
-                test_methods.append(test_method)
+                logger.warning(f"无法提取优化后的方法名，使用: {refined_method_name}")
 
-            if not test_methods:
-                logger.warning("未生成有效的测试方法")
-                return None
+            # 查找被替换的旧方法（通过 target_method 匹配）
+            # 这样即使方法名改变了，也能正确找到要替换的方法
+            old_method_to_replace = None
+            for method in test_case.methods:
+                if target_method and method.target_method == target_method:
+                    old_method_to_replace = method
+                    break
+
+            # 如果没找到匹配的 target_method，但新方法名与某个旧方法名相同，
+            # 则认为是在更新那个方法
+            if not old_method_to_replace:
+                for method in test_case.methods:
+                    if method.method_name == refined_method_name:
+                        old_method_to_replace = method
+                        break
+
+            # 创建优化后的 TestMethod 对象
+            # 如果找到了被替换的旧方法，保留其 created_at
+            refined_method = TestMethod(
+                method_name=refined_method_name,
+                code=refined_code,
+                target_method=target_method
+                or (test_case.methods[0].target_method if test_case.methods else ""),
+                created_at=(
+                    old_method_to_replace.created_at
+                    if old_method_to_replace
+                    else datetime.now()
+                ),
+                updated_at=datetime.now(),
+            )
+
+            # 更新测试方法列表（替换或添加）
+            test_methods = []
+            replaced = False
+            for method in test_case.methods:
+                # 如果这是被替换的旧方法，用新方法替换它
+                if (
+                    old_method_to_replace
+                    and method.method_name == old_method_to_replace.method_name
+                ):
+                    if not replaced:  # 确保只替换一次
+                        test_methods.append(refined_method)
+                        replaced = True
+                        if method.method_name != refined_method_name:
+                            logger.info(
+                                f"方法名已更改: {method.method_name} -> {refined_method_name}"
+                            )
+                else:
+                    test_methods.append(method)
+
+            # 如果没有替换任何方法，说明这是新增的方法
+            if not replaced:
+                test_methods.append(refined_method)
+                logger.info(f"添加新测试方法: {refined_method_name}")
 
             # 构建完整测试类
             method_codes = [m.code for m in test_methods]
@@ -370,28 +356,27 @@ class TestGenerator:
                     class_code=class_code,
                 )
 
-                # 调用 LLM 修复
+                # 调用 LLM 修复（不再使用 json_object 格式）
                 response = self.llm.chat_with_system(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     temperature=0.3,  # 较低温度以获得更确定的修复
-                    response_format={"type": "json_object"},
                 )
 
-                # 解析响应
-                cleaned_response = extract_json_from_response(response)
-                data = json.loads(cleaned_response)
-                fixed_code = data.get("fixed_code")
-                changes = data.get("changes", "未说明")
+                # DEBUG: 记录原始响应
+                logger.debug(f"LLM 原始响应: {response[:500]}...")
+
+                # 使用新的解析器解析响应
+                fixed_code = parse_test_class_response(response)
 
                 if not fixed_code:
                     logger.warning(f"修复尝试 {attempt + 1} 失败: 未返回修复代码")
                     continue
 
-                # 处理转义字符：将字面的 \n 转换为实际的换行符
-                fixed_code = _normalize_code(fixed_code)
+                # 处理代码规范化
+                fixed_code = normalize_code(fixed_code)
 
-                logger.info(f"修复说明: {changes}")
+                logger.info(f"修复尝试 {attempt + 1} 成功")
 
                 # 更新测试用例
                 test_case.full_code = fixed_code
@@ -442,28 +427,27 @@ class TestGenerator:
                     )
                 )
 
-                # 调用 LLM
+                # 调用 LLM（不再使用 json_object 格式）
                 response = self.llm.chat_with_system(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     temperature=0.3,
-                    response_format={"type": "json_object"},
                 )
 
-                # 解析响应
-                cleaned_response = extract_json_from_response(response)
-                data = json.loads(cleaned_response)
-                fixed_code = data.get("fixed_method_code")
-                changes = data.get("changes", "未说明")
+                # DEBUG: 记录原始响应
+                logger.debug(f"LLM 原始响应: {response[:500]}...")
+
+                # 使用新的解析器解析响应
+                fixed_code = parse_test_method_response(response)
 
                 if not fixed_code:
                     logger.warning(f"修复尝试 {attempt + 1} 失败: 未返回修复代码")
                     continue
 
-                # 处理转义字符：将字面的 \n 转换为实际的换行符
-                fixed_code = _normalize_code(fixed_code)
+                # 处理代码规范化
+                fixed_code = normalize_code(fixed_code)
 
-                logger.info(f"修复说明: {changes}")
+                logger.info(f"修复尝试 {attempt + 1} 成功")
                 return fixed_code
 
             except Exception as e:

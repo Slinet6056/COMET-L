@@ -84,6 +84,7 @@ Bug 描述：
     GENERATE_MUTATION_SYSTEM = """你是一个代码变异专家，专门生成语义变异来暴露测试的不足。
 
 你的任务是分析给定的 Java 类，基于提供的缺陷模式（Patterns）和契约（Contracts），生成有意义的变异体。
+**你可以根据代码复杂度和缺陷模式自主决定生成多少个变异体**，不受数量限制。
 
 **Java 8 语法要求**：
 - **必须使用 Java 8 语法**，不能使用更高版本的特性
@@ -104,36 +105,36 @@ Bug 描述：
 4. 有明确的测试目标
 5. **严格遵守 Java 8 语法规范**
 
-**重要**：必须返回 JSON 对象格式，包含 "mutations" 键，其值为变异数组。
+**输出格式**：使用以下格式输出每个变异体，用 `===MUTANT===` 分隔：
 
-返回格式示例：
-{
-  "mutations": [
-    {
-      "line_start": 18,
-      "line_end": 18,
-      "original": "return a + b;",
-      "mutated": "return a - b;",
-      "intent": "将加法改为减法，检测测试是否验证了加法的正确性",
-      "pattern_id": "arithmetic_operator"
+===MUTANT===
+LINES: 18-20
+ORIGINAL:
+    if (value == null) {
+        throw new IllegalArgumentException();
     }
-  ]
-}
+MUTATED:
+    if (value == null) {
+        return null;
+    }
 
-每个变异对象必须包含：
-- line_start: 起始行号（整数）
-- line_end: 结束行号（整数）
-- original: 原始代码片段（字符串，不要包含行号）
-- mutated: 变异后代码（字符串，不要包含行号）
-- intent: 语义意图（字符串，说明这个变异试图暴露什么问题）
-- pattern_id: 使用的缺陷模式 ID（字符串，可选）
+===MUTANT===
+LINES: 25-25
+ORIGINAL:
+    return result + 1;
+MUTATED:
+    return result - 1;
 
-**关键注意事项**：
-1. original 和 mutated 必须是**完整**的代码块，包含所有必要的花括号 {}
-2. 如果修改跨多行的方法，必须包含方法的完整定义（从签名到最后的闭合花括号）
-3. 确保代码缩进与原代码完全一致
-4. line_start 和 line_end 必须完全覆盖要替换的代码范围
-5. 不要在 original 或 mutated 中包含行号标记（如 "1 |"）"""
+**格式说明**：
+1. 每个变异体以 `===MUTANT===` 开始
+2. `LINES: start-end` 指定行号范围（如果只修改一行，start 和 end 相同）
+3. `ORIGINAL:` 后面是原始代码（保持原有缩进）
+4. `MUTATED:` 后面是变异后的代码（保持原有缩进）
+5. ORIGINAL 和 MUTATED 必须是完整的代码块，包含所有必要的花括号
+6. 不要在代码中包含行号标记（如 "1 |"）
+7. 确保代码缩进与原代码完全一致
+
+**重要**：只返回变异体列表，不要返回任何说明文字或其他额外内容。"""
 
     GENERATE_MUTATION_USER = Template(
         """请为以下 Java 类生成变异体：
@@ -168,23 +169,25 @@ Bug 描述：
 {% endif %}
 
 **变异要求**：
-1. line_start 和 line_end 必须是源代码中实际存在的行号
-2. original 必须是这些行的完整代码（可以跨多行）
-3. mutated 必须是完整的替换代码（保持缩进和格式一致）
-4. 不要改变类名、方法签名、访问修饰符
-5. 确保变异后的代码语法正确、能够编译
-6. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
+1. 根据代码复杂度和可用的缺陷模式，自主决定生成多少个变异体（简单方法 3-5 个，复杂方法 8-15 个）
+2. LINES 中的行号必须是源代码中实际存在的行号
+3. ORIGINAL 必须是这些行的完整代码（可以跨多行）
+4. MUTATED 必须是完整的替换代码（保持缩进和格式一致）
+5. 不要改变类名、方法签名、访问修饰符
+6. 确保变异后的代码语法正确、能够编译
+7. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
 {% if target_method %}
-7. **只针对 `{{ target_method }}` 方法生成变异体**
+8. **只针对 `{{ target_method }}` 方法生成变异体**
 {% endif %}
 
-请生成 {{ num_mutations }} 个有意义的变异体。"""
+请生成有意义的变异体。"""
     )
 
     # 变异完善提示词
     REFINE_MUTATION_SYSTEM = """你是一个高级代码变异专家，专门基于现有测试的弱点生成更具针对性的变异体。
 
 你的任务是分析现有的变异体、测试代码和击杀率，生成新的、更难被测试检测的变异体。
+**你可以根据测试的覆盖情况和弱点自主决定生成多少个变异体**，不受数量限制。
 
 **Java 8 语法要求**：
 - **必须使用 Java 8 语法**，不能使用更高版本的特性
@@ -210,29 +213,36 @@ Bug 描述：
 4. 代表真实可能出现的缺陷
 5. **严格遵守 Java 8 语法规范**
 
-**重要**：必须返回 JSON 对象格式，包含 "mutations" 键，其值为变异数组。
+**输出格式**：使用以下格式输出每个变异体，用 `===MUTANT===` 分隔：
 
-返回格式与 GENERATE_MUTATION 相同：
-{
-  "mutations": [
-    {
-      "line_start": 行号,
-      "line_end": 行号,
-      "original": "原始代码",
-      "mutated": "变异代码",
-      "intent": "针对测试的哪个弱点（说明测试为什么检测不到这个变异）",
-      "pattern_id": "模式ID（可选）"
+===MUTANT===
+LINES: 18-20
+ORIGINAL:
+    if (value == null) {
+        throw new IllegalArgumentException();
     }
-  ]
-}
+MUTATED:
+    if (value == null) {
+        return null;
+    }
 
-每个变异对象必须包含：
-- line_start: 起始行号（整数）
-- line_end: 结束行号（整数）
-- original: 原始代码片段（字符串，不要包含行号）
-- mutated: 变异后代码（字符串，不要包含行号）
-- intent: 语义意图（字符串，说明为什么这个变异能利用测试的弱点）
-- pattern_id: 使用的缺陷模式 ID（字符串，可选）"""
+===MUTANT===
+LINES: 25-25
+ORIGINAL:
+    return result + 1;
+MUTATED:
+    return result - 1;
+
+**格式说明**：
+1. 每个变异体以 `===MUTANT===` 开始
+2. `LINES: start-end` 指定行号范围
+3. `ORIGINAL:` 后面是原始代码（保持原有缩进）
+4. `MUTATED:` 后面是变异后的代码（保持原有缩进）
+5. ORIGINAL 和 MUTATED 必须是完整的代码块，包含所有必要的花括号
+6. 不要在代码中包含行号标记
+7. 确保代码缩进与原代码完全一致
+
+**重要**：只返回变异体列表，不要返回任何说明文字或其他额外内容。"""
 
     REFINE_MUTATION_USER = Template(
         """请基于现有测试生成更具针对性的变异体：
@@ -265,8 +275,7 @@ Bug 描述：
 {% if existing_mutants %}
 现有变异体（参考，避免重复）：
 {% for mutant in existing_mutants[:10] %}
-- {{ mutant.semantic_intent }}
-  状态：{{ '被击杀' if not mutant.survived else '幸存' }}
+- 状态：{{ '被击杀' if not mutant.survived else '幸存' }}
 {% endfor %}
 {% endif %}
 
@@ -292,25 +301,27 @@ Bug 描述：
 **任务**：
 1. 仔细分析测试代码的断言和验证逻辑
 2. 找出测试的盲区（未测试的边界值、异常情况、特殊输入组合）
-3. 生成 {{ num_mutations }} 个针对这些盲区的变异体
-4. 每个变异的 intent 应明确说明它利用了测试的哪个弱点
+3. 根据测试覆盖情况自主决定生成适量的变异体（测试盲区多则多生成，少则少生成）
+4. 生成的变异体应该针对测试的弱点，更难被现有测试检测
 
 **变异要求**：
-1. line_start 和 line_end 必须是源代码中实际存在的行号
-2. original 必须是这些行的完整代码
-3. mutated 必须是完整的替换代码（保持缩进和格式一致）
+1. LINES 中的行号必须是源代码中实际存在的行号
+2. ORIGINAL 必须是这些行的完整代码
+3. MUTATED 必须是完整的替换代码（保持缩进和格式一致）
 4. 不要改变类名、方法签名、访问修饰符
 5. 确保变异后的代码语法正确、能够编译
 6. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
 {% if target_method %}
 7. **只针对 `{{ target_method }}` 方法生成变异体**
-{% endif %}"""
+{% endif %}
+
+请生成针对性的变异体。"""
     )
 
     # 测试生成提示词
     GENERATE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门为 Java 代码生成高质量的测试用例。
 
-你的任务是为给定的方法生成测试方法。**你可以自主决定生成多少个测试方法**，根据方法的复杂度和需要覆盖的场景来判断。
+你的任务是为给定的方法生成一个测试方法，该方法应该在内部包含多个断言来覆盖不同的测试场景。
 
 **Java 8 语法要求**：
 - **必须使用 Java 8 语法**，不能使用更高版本的特性
@@ -327,18 +338,11 @@ Bug 描述：
 测试应该：
 1. 使用 JUnit 5 语法（@Test 注解）
 2. 包含断言验证行为（直接使用 assertEquals 等，不要加 Assertions. 前缀）
-3. 覆盖正常情况和边界情况（正数、负数、零、边界值等）
+3. 在一个测试方法内覆盖正常情况、边界情况和异常情况（通过多个断言或子测试）
 4. 测试异常处理（使用 assertThrows 等）
-5. 只生成测试方法代码，不要生成完整的类定义
-6. 如果提供了现有测试，应避免重复，补充缺失的测试场景
-7. **当被测类有依赖项时，使用 Mockito 创建 mock 对象**
-8. **每个测试方法必须在方法内部创建被测对象的实例**（不要依赖共享的类字段或 @BeforeEach 初始化）
-9. **严格遵守 Java 8 语法规范**
-
-**生成数量指导**：
-- 简单方法（如 getter/setter）：1-2 个测试
-- 中等复杂度（如计算、验证）：3-5 个测试
-- 复杂方法（多分支、多异常）：5-10 个测试
+5. **当被测类有依赖项时，使用 Mockito 创建 mock 对象**
+6. **测试方法必须在方法内部创建被测对象的实例**（不要依赖共享的类字段或 @BeforeEach 初始化）
+7. **严格遵守 Java 8 语法规范**
 
 **断言方法使用规范**：
 - ✔ 正确：直接使用 `assertEquals(expected, actual)`
@@ -361,49 +365,29 @@ Bug 描述：
 - 需要测试特定的异常场景（通过 mock 抛出异常）
 - 需要验证方法调用次数或参数
 
-**Mockito 示例**：
+**测试方法示例**：
 ```java
 @Test
-void testUserServiceWithMock() {
-    // 创建 mock 对象
-    UserRepository mockRepo = mock(UserRepository.class);
-    UserService service = new UserService(mockRepo);
+void testCalculatorAdd() {
+    Calculator calc = new Calculator();
 
-    // 设置 mock 行为
-    User mockUser = new User("test", "test@example.com");
-    when(mockRepo.findById(1L)).thenReturn(mockUser);
+    // 测试正常情况
+    assertEquals(5, calc.add(2, 3));
+    assertEquals(0, calc.add(0, 0));
 
-    // 执行测试
-    User result = service.getUserById(1L);
+    // 测试边界情况
+    assertEquals(Integer.MAX_VALUE, calc.add(Integer.MAX_VALUE, 0));
+    assertEquals(-1, calc.add(Integer.MAX_VALUE, Integer.MIN_VALUE));
 
-    // 验证结果
-    assertEquals("test", result.getName());
-
-    // 验证调用
-    verify(mockRepo).findById(1L);
+    // 测试异常情况（如果有）
+    assertThrows(IllegalArgumentException.class, () -> calc.add(null, 5));
 }
 ```
 
-**重要**：必须返回 JSON 对象格式，包含 "tests" 键，其值为测试方法数组。
-
-返回格式示例：
-{
-  "tests": [
-    {
-      "method_name": "testAddPositiveNumbers",
-      "code": "@Test\nvoid testAddPositiveNumbers() {\n    Calculator calc = new Calculator();\n    int result = calc.add(2, 3);\n    assertEquals(5, result);\n}",
-      "description": "验证两个正数相加返回正确结果"
-    }
-  ]
-}
-
-每个测试对象必须包含：
-- method_name: 测试方法名（字符串，符合 JUnit 命名规范，如 testAddPositiveNumbers）
-- code: 测试方法完整代码（字符串，包含 @Test 注解和方法体，使用 \n 表示换行。注意：在 JSON 中直接使用 \n，JSON 解析器会自动将其转换为换行符）
-- description: 测试描述（字符串，说明这个测试验证什么）"""
+**重要**：只返回一个完整的测试方法代码，包含 @Test 注解和方法体。不要返回任何 JSON、说明文字、类定义或其他额外内容。"""
 
     GENERATE_TEST_USER = Template(
-        """请为以下方法生成测试：
+        """请为以下方法生成一个测试方法：
 
 类名：{{ class_name }}
 方法签名：{{ method_signature }}
@@ -425,7 +409,7 @@ void testUserServiceWithMock() {
 {% for test in existing_tests %}
 - {{ test.class_name }}: {{ test.methods|length }} 个测试方法
 {% for method in test.methods %}
-  * {{ method.method_name }}: {{ method.description or '无描述' }}
+  * {{ method.method_name }}
 {% endfor %}
 {% endfor %}
 {% endif %}
@@ -433,8 +417,7 @@ void testUserServiceWithMock() {
 {% if survived_mutants %}
 以下变异体幸存（未被现有测试击杀），请特别关注：
 {% for mutant in survived_mutants %}
-- {{ mutant.semantic_intent }}
-  变异: {{ mutant.patch.mutated_code }}
+- 变异: {{ mutant.patch.mutated_code }}
 {% endfor %}
 {% endif %}
 
@@ -451,58 +434,28 @@ void testUserServiceWithMock() {
 {% endif %}
 
 **测试要求**：
-1. **断言方法**：直接使用 assertEquals、assertTrue、assertThrows 等，不要添加 Assertions. 前缀
-2. 测试方法必须以 @Test 注解开头
-3. 测试方法名应清晰描述测试场景（如 testAddWithPositiveNumbers）
-4. 包含边界情况测试（如 Integer.MAX_VALUE, Integer.MIN_VALUE, 0）
-5. 如果方法可能抛出异常，使用 assertThrows 验证
-6. 根据方法复杂度自主决定生成多少个测试（简单方法 1-2 个，复杂方法 5-10 个）
+1. 生成一个测试方法，在方法内包含多个断言覆盖不同场景（正常、边界、异常）
+2. **断言方法**：直接使用 assertEquals、assertTrue、assertThrows 等，不要添加 Assertions. 前缀
+3. 测试方法必须以 @Test 注解开头
+4. 测试方法名应清晰描述测试目标（如 testAdd 或 testAddMethod）
+5. 包含边界情况测试（如 Integer.MAX_VALUE, Integer.MIN_VALUE, 0）
+6. 如果方法可能抛出异常，使用 assertThrows 验证
 7. **如果被测类有依赖项，使用 Mockito 创建 mock 对象**（直接使用 mock()、when()、verify() 等，不要加 Mockito. 前缀）
-8. **每个测试方法必须在方法内部创建被测对象的实例**，不要使用类字段或假设存在 @BeforeEach 初始化
+8. **测试方法必须在方法内部创建被测对象的实例**，不要使用类字段或假设存在 @BeforeEach 初始化
 9. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
+10. **只返回测试方法的代码，不要返回任何说明、注释或其他内容**
 
-**示例（正确的断言写法）**：
-```java
-@Test
-void testAddPositiveNumbers() {
-    Calculator calc = new Calculator();
-    int result = calc.add(2, 3);
-    assertEquals(5, result);  // ✔ 正确：直接使用 assertEquals
-    // 错误示例：Assertions.assertEquals(5, result);  ✖ 不要这样写
-}
-```
-
-**示例（使用 Mockito）**：
-```java
-@Test
-void testServiceWithMockedDependency() {
-    // ✔ 正确：直接使用 mock()
-    DataRepository mockRepo = mock(DataRepository.class);
-    DataService service = new DataService(mockRepo);
-
-    // ✔ 正确：直接使用 when()
-    when(mockRepo.getData()).thenReturn("test data");
-
-    String result = service.processData();
-    assertEquals("processed: test data", result);
-
-    // ✔ 正确：直接使用 verify()
-    verify(mockRepo).getData();
-}
-```
-
-请生成适量的测试方法。"""
+请直接返回测试方法代码。"""
     )
 
     # 测试完善提示词
     REFINE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门完善和改进现有的测试用例。
 
-你的任务是根据评估反馈（如幸存的变异体、覆盖缺口等）来完善现有测试。你可以：
+你的任务是根据评估反馈（如幸存的变异体、覆盖缺口等）来优化一个测试方法。你可以：
 1. **改进现有测试**：增强断言、添加边界检查、修复逻辑错误
-2. **补充新测试**：添加缺失的测试场景
-3. **删除冗余测试**：移除重复或无效的测试
-4. **重构测试**：提高测试质量和可维护性
-5. **使用 Mockito 增强隔离性**：对有依赖的场景使用 mock 对象
+2. **补充测试场景**：在测试方法内添加更多断言覆盖缺失场景
+3. **重构测试**：提高测试质量和可维护性
+4. **使用 Mockito 增强隔离性**：对有依赖的场景使用 mock 对象
 
 **Java 8 语法要求**：
 - **必须使用 Java 8 语法**，不能使用更高版本的特性
@@ -518,7 +471,7 @@ void testServiceWithMockedDependency() {
 
 **策略选择**：
 - 如果现有测试覆盖了基本场景但不够细致：改进现有测试
-- 如果存在明显的测试缺口：补充新测试
+- 如果存在明显的测试缺口：在方法内补充断言
 - 如果现有测试有明显问题：修正或重写
 - 优先考虑击杀幸存变异体的测试
 - 如果测试依赖外部资源：引入 Mockito 进行隔离
@@ -538,57 +491,30 @@ void testServiceWithMockedDependency() {
 - 原因：测试类会使用静态导入 `import static org.mockito.Mockito.*`
 
 **对象实例化规范**：
-- **每个测试方法必须在方法内部创建被测对象的实例**
+- **测试方法必须在方法内部创建被测对象的实例**
 - ✖ 错误：不要使用类字段（如 `private Calculator target;`）
 - ✖ 错误：不要依赖 `@BeforeEach` 初始化
-- ✔ 正确：在每个测试方法内部使用 `ClassName obj = new ClassName();` 创建实例
+- ✔ 正确：在测试方法内部使用 `ClassName obj = new ClassName();` 创建实例
 
-**重要**：必须返回 JSON 对象格式，包含 "tests" 或 "refined_tests" 键。
-
-返回格式示例：
-{
-  "refined_tests": [
-    {
-      "method_name": "testAddPositiveNumbers",
-      "code": "@Test\nvoid testAddPositiveNumbers() {\n    Calculator calc = new Calculator();\n    int result = calc.add(2, 3);\n    assertEquals(5, result);\n}",
-      "description": "验证两个正数相加返回正确结果",
-      "target_method": "add"
-    }
-  ],
-  "refinement_summary": "改进了 2 个测试，新增了 3 个测试，删除了 1 个冗余测试"
-}
-
-每个测试对象必须包含：
-- method_name: 测试方法名
-- code: 完整测试代码（包含 @Test 注解）
-- description: 测试描述
-- target_method: 目标方法名（可选）"""
+**重要**：只返回优化后的完整测试方法代码，包含 @Test 注解和方法体。不要返回任何 JSON、说明文字或其他额外内容。"""
 
     REFINE_TEST_USER = Template(
-        """请完善以下测试用例：
+        """请优化以下测试方法：
 
 目标类：{{ test_case.target_class }}
 {% if target_method %}
 目标方法：{{ target_method }}（请重点针对此方法进行测试优化）
 {% endif %}
-测试类：{{ test_case.class_name }}
 
 被测类完整代码：
 ```java
 {{ class_code }}
 ```
 
-当前测试方法（共 {{ test_case.methods|length }} 个）：
-{% for method in test_case.methods %}
-### {{ method.method_name }}
+待优化的测试方法：
 ```java
-{{ method.code }}
+{{ method_to_refine }}
 ```
-{% if method.description %}
-描述: {{ method.description }}
-{% endif %}
-
-{% endfor %}
 
 {% if survived_mutants %}
 **幸存变异体（需要击杀）**：
@@ -596,8 +522,7 @@ void testServiceWithMockedDependency() {
 以下变异体来自目标方法 {{ target_method }}，需要重点击杀：
 {% endif %}
 {% for mutant in survived_mutants %}
-- {{ mutant.semantic_intent }}
-  变异代码:
+- 变异代码:
 ```java
 {{ mutant.patch.mutated_code }}
 ```
@@ -619,19 +544,19 @@ void testServiceWithMockedDependency() {
 {% endif %}
 
 **完善要求**：
-1. 分析现有测试的不足之处
+1. 分析当前测试方法的不足之处
 {% if target_method %}
 2. **重点关注目标方法 {{ target_method }}**，优先击杀其幸存的变异体
 {% else %}
 2. 重点关注如何击杀幸存的变异体
 {% endif %}
 3. 补充缺失的测试场景（边界值、异常情况等）
-4. 改进现有测试的断言和验证逻辑
-5. 返回完整的测试方法列表（包括保留的、修改的和新增的）
-6. **每个测试方法必须在方法内部创建被测对象实例**，不要使用类字段或依赖 @BeforeEach 初始化
-7. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
+4. 改进测试的断言和验证逻辑
+5. **测试方法必须在方法内部创建被测对象实例**，不要使用类字段或依赖 @BeforeEach 初始化
+6. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
+7. **只返回优化后的测试方法代码，不要返回任何说明、注释或其他内容**
 
-请完善这些测试。"""
+请直接返回优化后的测试方法代码。"""
     )
 
     # 测试修复提示词
@@ -678,13 +603,7 @@ void testServiceWithMockedDependency() {
 - 不要修改 setUp()、tearDown() 等辅助方法
 - 只修改测试方法的方法体内部代码
 
-**重要**：必须返回 JSON 对象格式，包含 "fixed_code" 键。
-
-返回格式示例：
-{
-  "fixed_code": "完整修复后的测试类代码",
-  "changes": "修复了什么问题的说明"
-}"""
+**重要**：只返回修复后的完整测试类代码。不要返回任何 JSON、说明文字或其他额外内容。"""
 
     FIX_TEST_USER = Template(
         """请修复以下测试代码的错误：
@@ -716,10 +635,10 @@ void testServiceWithMockedDependency() {
 5. **只修改出错的测试方法内部代码**，不要修改方法名
 6. **保持 import 语句、类声明、其他方法完全不变**
 7. 如果是静态导入问题，修改方法内调用方式，不要改 import
-8. 返回完整的测试类代码（包括未修改的部分）
-9. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
+8. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
+9. **只返回完整的测试类代码，不要返回任何说明、注释或其他内容**
 
-请提供修复后的完整测试类代码。"""
+请直接返回修复后的完整测试类代码。"""
     )
 
     # 单个测试方法修复提示词
@@ -756,15 +675,7 @@ void testServiceWithMockedDependency() {
 4. 不要添加 Assertions. 前缀（使用静态导入）
 5. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
 
-**重要**：必须返回 JSON 对象格式。
-
-返回格式示例：
-{
-  "fixed_method_code": "@Test\nvoid testAddPositiveNumbers() {\n    Calculator calc = new Calculator();\n    int result = calc.add(2, 3);\n    assertEquals(5, result);\n}",
-  "changes": "修复了断言的期望值，将错误的 6 改为正确的 5"
-}
-
-注意：code 和 fixed_method_code 字段中，在 JSON 中直接使用 \n 表示换行，JSON 解析器会自动将其转换为换行符。"""
+**重要**：只返回修复后的完整测试方法代码，包含 @Test 注解和方法体。不要返回任何 JSON、说明文字或其他额外内容。"""
 
     FIX_SINGLE_METHOD_USER = Template(
         """请修复以下失败的测试方法：
@@ -784,7 +695,7 @@ void testServiceWithMockedDependency() {
 {{ error_message }}
 ```
 
-请分析错误原因，修复这个测试方法，并返回修复后的完整方法代码（包含 @Test 注解）。"""
+请分析错误原因，修复这个测试方法。**只返回修复后的完整方法代码（包含 @Test 注解），不要返回任何说明、注释或其他内容**。"""
     )
 
     # Agent 调度提示词（使用 Template 支持动态工具描述）
@@ -998,7 +909,6 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         source_code_with_lines: str,
         contracts: Optional[List[Any]] = None,
         patterns: Optional[List[Any]] = None,
-        num_mutations: int = 5,
         target_method: Optional[str] = None,
     ) -> tuple[str, str]:
         """渲染变异生成提示词"""
@@ -1008,8 +918,7 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
             source_code_with_lines=source_code_with_lines,
             contracts=contracts or [],
             patterns=patterns or [],
-            num_mutations=num_mutations,
-            target_method=target_method,  # 传递目标方法
+            target_method=target_method,
         )
         return system, user
 
@@ -1024,7 +933,6 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         contracts: Optional[List[Any]] = None,
         patterns: Optional[List[Any]] = None,
         target_method: Optional[str] = None,
-        num_mutations: int = 5,
     ) -> tuple[str, str]:
         """渲染变异完善提示词"""
         system = cls.REFINE_MUTATION_SYSTEM
@@ -1037,7 +945,6 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
             contracts=contracts or [],
             patterns=patterns or [],
             target_method=target_method,
-            num_mutations=num_mutations,
         )
         return system, user
 
@@ -1074,6 +981,7 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         survived_mutants: Optional[List[Any]] = None,
         coverage_gaps: Optional[Dict[str, Any]] = None,
         evaluation_feedback: Optional[str] = None,
+        method_to_refine: Optional[str] = None,
     ) -> tuple[str, str]:
         """渲染测试完善提示词"""
         system = cls.REFINE_TEST_SYSTEM
@@ -1084,6 +992,7 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
             survived_mutants=survived_mutants or [],
             coverage_gaps=coverage_gaps or {},
             evaluation_feedback=evaluation_feedback,
+            method_to_refine=method_to_refine,
         )
         return system, user
 
