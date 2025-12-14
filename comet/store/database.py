@@ -58,19 +58,18 @@ class Database:
         """
         )
 
-        # 测试方法表（支持方法级别的版本控制）
+        # 测试方法表
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS test_methods (
                 test_case_id TEXT NOT NULL,
                 method_name TEXT NOT NULL,
-                version INTEGER NOT NULL DEFAULT 1,
                 code TEXT NOT NULL,
                 target_method TEXT NOT NULL,
                 description TEXT,
                 created_at TEXT,
                 updated_at TEXT,
-                PRIMARY KEY (test_case_id, method_name, version)
+                PRIMARY KEY (test_case_id, method_name)
             )
         """
         )
@@ -91,7 +90,6 @@ class Database:
                 kills TEXT,
                 coverage_lines TEXT,
                 coverage_branches TEXT,
-                version INTEGER NOT NULL DEFAULT 1,
                 code_hash TEXT,
                 created_at TEXT,
                 updated_at TEXT
@@ -396,11 +394,9 @@ class Database:
 
     def save_test_case(self, test_case: TestCase) -> None:
         """
-        保存测试用例（支持方法级别的版本控制）
+        保存测试用例
 
-        对于每个测试方法：
-        - 如果是新方法，版本号为1
-        - 如果是现有方法，比较代码是否变化，如果变化则版本号+1
+        每次保存会覆盖已有的测试方法，只保留最新版本
         """
         cursor = self.conn.cursor()
 
@@ -415,68 +411,35 @@ class Database:
 
         # 处理每个测试方法
         for method in test_case.methods:
-            # 获取该方法的当前版本（如果存在）
-            cursor.execute(
-                """
-                SELECT version, code FROM test_methods
-                WHERE test_case_id = ? AND method_name = ?
-                ORDER BY version DESC LIMIT 1
-            """,
-                (test_case.id, method.method_name),
-            )
+            method.updated_at = datetime.now()
 
-            existing = cursor.fetchone()
-
-            if existing:
-                current_version = existing[0]
-                existing_code = existing[1]
-
-                # 检查代码是否有变化
-                if existing_code.strip() != method.code.strip():
-                    # 代码有变化，增加版本号
-                    method.version = current_version + 1
-                    method.updated_at = datetime.now()
-                    logger.debug(
-                        f"  方法 {method.method_name}: v{current_version} -> v{method.version} (代码已更新)"
-                    )
-                else:
-                    # 代码没变化，保持版本号
-                    method.version = current_version
-                    logger.debug(
-                        f"  方法 {method.method_name}: v{current_version} (无变化)"
-                    )
-                    continue  # 跳过保存，避免重复
-            else:
-                # 新方法，版本号为1
-                method.version = 1
-                method.created_at = datetime.now()
-                method.updated_at = datetime.now()
-                logger.debug(f"  新方法 {method.method_name}: v1")
-
-            # 保存方法到数据库
+            # 保存方法到数据库，使用 COALESCE 保留原有的 created_at
             cursor.execute(
                 """
                 INSERT OR REPLACE INTO test_methods
-                (test_case_id, method_name, version, code, target_method, description, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (test_case_id, method_name, code, target_method, description, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?,
+                        COALESCE((SELECT created_at FROM test_methods WHERE test_case_id = ? AND method_name = ?), ?),
+                        ?)
             """,
                 (
                     test_case.id,
                     method.method_name,
-                    method.version,
                     method.code,
                     method.target_method,
                     method.description,
+                    test_case.id,
+                    method.method_name,
                     method.created_at.isoformat() if method.created_at else None,
                     method.updated_at.isoformat() if method.updated_at else None,
                 ),
             )
 
-        # 更新测试用例主表（不再需要版本号，因为版本控制在方法级别）
+        # 更新测试用例主表
         test_case.updated_at = datetime.now()
         cursor.execute(
             """
-            INSERT OR REPLACE INTO test_cases VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO test_cases VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 test_case.id,
@@ -491,7 +454,6 @@ class Database:
                 json.dumps(test_case.kills),
                 json.dumps(test_case.coverage_lines),
                 json.dumps(test_case.coverage_branches),
-                test_case.version,
                 None,  # code_hash
                 test_case.created_at.isoformat() if test_case.created_at else None,
                 test_case.updated_at.isoformat() if test_case.updated_at else None,
@@ -607,7 +569,7 @@ class Database:
 
     def delete_test_method(self, test_case_id: str, method_name: str) -> bool:
         """
-        删除指定测试用例中的指定测试方法（所有版本），并更新相关变异体的击杀信息
+        删除指定测试用例中的指定测试方法，并更新相关变异体的击杀信息
 
         Args:
             test_case_id: 测试用例 ID
@@ -628,7 +590,7 @@ class Database:
                         f"删除测试方法前，已更新 {updated_mutants} 个变异体的击杀信息"
                     )
 
-                # 删除所有版本的该方法
+                # 删除该方法
                 cursor.execute(
                     """
                     DELETE FROM test_methods
@@ -640,9 +602,7 @@ class Database:
                 self.conn.commit()
 
                 if deleted_count > 0:
-                    logger.debug(
-                        f"已删除测试方法: {test_case_id}.{method_name} ({deleted_count} 个版本)"
-                    )
+                    logger.debug(f"已删除测试方法: {test_case_id}.{method_name}")
                     return True
                 return False
             except Exception as e:
@@ -866,27 +826,19 @@ class Database:
         )
 
     def _row_to_test_case(self, row: sqlite3.Row) -> TestCase:
-        """将数据库行转换为 TestCase 对象，从 test_methods 表加载最新版本的方法
+        """将数据库行转换为 TestCase 对象，从 test_methods 表加载方法
 
         注意：此方法假设调用者已经获取了锁，因为它会创建新的 cursor
         """
         test_case_id = row["id"]
 
-        # 从 test_methods 表中加载该测试用例的所有最新版本的方法
+        # 从 test_methods 表中加载该测试用例的所有方法
         # 注意：这里创建新的 cursor，所以调用者必须已经获取了锁
         cursor = self.conn.cursor()
         cursor.execute(
             """
-            SELECT tm.* FROM test_methods tm
-            INNER JOIN (
-                SELECT test_case_id, method_name, MAX(version) as max_version
-                FROM test_methods
-                WHERE test_case_id = ?
-                GROUP BY test_case_id, method_name
-            ) latest
-            ON tm.test_case_id = latest.test_case_id
-            AND tm.method_name = latest.method_name
-            AND tm.version = latest.max_version
+            SELECT * FROM test_methods
+            WHERE test_case_id = ?
         """,
             (test_case_id,),
         )
@@ -900,7 +852,6 @@ class Database:
                 code=method_row["code"],
                 target_method=method_row["target_method"],
                 description=method_row["description"],
-                version=method_row["version"],
                 created_at=(
                     datetime.fromisoformat(method_row["created_at"])
                     if method_row["created_at"]
@@ -931,7 +882,6 @@ class Database:
             coverage_branches=(
                 json.loads(row["coverage_branches"]) if row["coverage_branches"] else []
             ),
-            version=row["version"],
             created_at=(
                 datetime.fromisoformat(row["created_at"])
                 if row["created_at"]
@@ -943,83 +893,6 @@ class Database:
                 else datetime.now()
             ),
         )
-
-    def get_test_method_versions(
-        self, test_case_id: str, method_name: str
-    ) -> List[TestMethod]:
-        """获取测试方法的所有历史版本"""
-        with self._lock:
-            cursor = self.conn.cursor()
-            cursor.execute(
-                """
-                SELECT * FROM test_methods
-                WHERE test_case_id = ? AND method_name = ?
-                ORDER BY version DESC
-            """,
-                (test_case_id, method_name),
-            )
-
-            methods = []
-            for row in cursor.fetchall():
-                method = TestMethod(
-                    method_name=row["method_name"],
-                    code=row["code"],
-                    target_method=row["target_method"],
-                    description=row["description"],
-                    version=row["version"],
-                    created_at=(
-                        datetime.fromisoformat(row["created_at"])
-                        if row["created_at"]
-                        else datetime.now()
-                    ),
-                    updated_at=(
-                        datetime.fromisoformat(row["updated_at"])
-                        if row["updated_at"]
-                        else datetime.now()
-                    ),
-                )
-                methods.append(method)
-
-            return methods
-
-    def get_all_test_methods(self, test_case_id: str) -> Dict[str, List[TestMethod]]:
-        """获取测试用例的所有方法及其历史版本"""
-        with self._lock:
-            cursor = self.conn.cursor()
-            cursor.execute(
-                """
-                SELECT * FROM test_methods
-                WHERE test_case_id = ?
-                ORDER BY method_name, version DESC
-            """,
-                (test_case_id,),
-            )
-
-            methods_by_name: Dict[str, List[TestMethod]] = {}
-            for row in cursor.fetchall():
-                method_name = row["method_name"]
-                method = TestMethod(
-                    method_name=method_name,
-                    code=row["code"],
-                    target_method=row["target_method"],
-                    description=row["description"],
-                    version=row["version"],
-                    created_at=(
-                        datetime.fromisoformat(row["created_at"])
-                        if row["created_at"]
-                        else datetime.now()
-                    ),
-                    updated_at=(
-                        datetime.fromisoformat(row["updated_at"])
-                        if row["updated_at"]
-                        else datetime.now()
-                    ),
-                )
-                if method_name not in methods_by_name:
-                    methods_by_name[method_name] = []
-                methods_by_name[method_name].append(method)
-
-            return methods_by_name
 
     def save_method_coverage(self, coverage, iteration: int) -> None:
         """

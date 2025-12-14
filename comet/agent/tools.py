@@ -1660,9 +1660,7 @@ class AgentTools:
         # ===== 阶段3：保存到数据库（只有前两步成功后才执行） =====
         logger.info(f"测试已提交到主工作空间，保存到数据库...")
         try:
-            logger.debug(
-                f"准备保存新生成的测试用例: ID={test_case.id}, version={test_case.version}"
-            )
+            logger.debug(f"准备保存新生成的测试用例: ID={test_case.id}")
             self.db.save_test_case(test_case)
             logger.info(f"✓ 测试用例已保存到数据库: {test_case.id}")
         except Exception as e:
@@ -1812,9 +1810,7 @@ class AgentTools:
         # ===== 阶段3：保存到数据库（只有前两步成功后才执行） =====
         logger.info(f"测试已提交到主工作空间，保存到数据库...")
         try:
-            logger.debug(
-                f"准备保存完善后的测试用例: ID={refined_test_case.id}, version={refined_test_case.version}"
-            )
+            logger.debug(f"准备保存完善后的测试用例: ID={refined_test_case.id}")
             self.db.save_test_case(refined_test_case)
             logger.info(f"✓ 测试用例已保存到数据库: {refined_test_case.id}")
         except Exception as e:
@@ -1852,7 +1848,12 @@ class AgentTools:
         return result
 
     def run_evaluation(self) -> Dict[str, Any]:
-        """运行评估并构建击杀矩阵（只评估当前目标方法的变异体）"""
+        """
+        运行评估并构建击杀矩阵（只评估当前目标方法的变异体）
+
+        注意：此方法假设所有测试用例都已在 generate_tests/refine_tests 阶段验证通过。
+        如果测试失败，说明项目源代码可能被修改，需要用户检查。
+        """
         if not all(
             [self.project_path, self.mutation_evaluator, self.java_executor, self.db]
         ):
@@ -1891,309 +1892,33 @@ class AgentTools:
 
         logger.info(f"开始评估 {len(mutants)} 个变异体 和 {len(test_cases)} 个测试")
 
-        # ===== 步骤1: 预验证测试用例 =====
-        logger.info("步骤1: 预验证测试用例...")
-
-        # 首先检查编译是否成功
-        logger.debug("检查测试编译...")
-        compile_result = self.java_executor.compile_tests(self.project_path)
-        if not compile_result.get("success"):
-            compile_error = compile_result.get("error", "Unknown error")
-            logger.error(f"✗ 测试编译失败，无法进行评估")
-            logger.error(f"编译错误: {compile_error}")
-
-            # 删除整个类的所有测试用例
-            if current_target and current_target.get("class_name"):
-                target_class = current_target["class_name"]
-                logger.warning(f"删除 {target_class} 类的所有测试用例...")
-
-                # 获取该类的所有测试用例
-                class_tests = self.db.get_tests_by_target_class(target_class)
-                deleted_count = 0
-                for test_case in class_tests:
-                    # 同时删除磁盘上的测试文件
-                    self._delete_test_file(test_case)
-                    self.db.delete_test_case(test_case.id)
-                    deleted_count += 1
-
-                logger.warning(f"已删除 {deleted_count} 个测试用例")
-
-                # 将目标添加到黑名单
-                if self.state:
-                    method_name = current_target.get("method_name", "")
-                    target_key = (
-                        f"{target_class}.{method_name}" if method_name else target_class
-                    )
-                    if not any(
-                        ft.get("target") == target_key
-                        for ft in self.state.failed_targets
-                    ):
-                        self.state.failed_targets.append(
-                            {
-                                "target": target_key,
-                                "class_name": target_class,
-                                "method_name": method_name,
-                                "reason": "评估时编译失败，已删除所有测试",
-                                "error": compile_error[:500],
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-                        logger.warning(f"已将 {target_key} 添加到失败黑名单")
-                        # 如果当前目标是被加入黑名单的目标，清除当前目标选中
-                        if self.state.current_target:
-                            current_class = self.state.current_target.get("class_name")
-                            current_method = self.state.current_target.get(
-                                "method_name", ""
-                            )
-                            current_target_key = (
-                                f"{current_class}.{current_method}"
-                                if current_method and current_class
-                                else (current_class if current_class else None)
-                            )
-                            if current_target_key == target_key:
-                                logger.info(
-                                    f"当前目标 {target_key} 已被加入黑名单，清除目标选中"
-                                )
-                                self.state.update_target(None)
-
-            return {
-                "evaluated": len(mutants),
-                "killed": 0,
-                "mutation_score": 0.0,
-                "error": "Compilation failed, tests deleted",
-            }
+        # ===== 步骤1: 快速验证测试用例 =====
+        # 所有测试都应该在 generate_tests/refine_tests 中验证过
+        # 这里只做一次快速检查，确保项目没有被外部修改
+        logger.info("步骤1: 快速验证测试用例（确认项目状态）...")
 
         test_result = self.java_executor.run_tests(self.project_path)
 
-        # 检查是否超时或失败（匹配 "Timeout after X seconds" 格式）
-        if test_result.get("error", "").startswith("Timeout"):
-            logger.error("测试运行超时，开始逐个测试方法以识别超时方法...")
+        if not test_result.get("success"):
+            error_msg = test_result.get("error", "Unknown error")
+            logger.error(
+                f"✗ 测试运行失败！这不应该发生，因为所有测试都应该在生成时验证过。\n"
+                f"可能原因：\n"
+                f"  1. 项目源代码被外部修改\n"
+                f"  2. 依赖环境发生变化\n"
+                f"  3. 并发问题或资源冲突\n"
+                f"错误信息: {error_msg}"
+            )
 
-            # 超时时不应该解析 Surefire 报告，因为测试没有完成，报告可能不存在或不完整
-            # 应该逐个运行测试方法来识别哪些方法导致超时
-            all_timeout_methods = set()
+            return {
+                "evaluated": 0,
+                "killed": 0,
+                "mutation_score": 0.0,
+                "error": f"测试验证失败（项目可能被修改）: {error_msg[:200]}",
+                "warning": "建议重新生成测试或检查项目状态",
+            }
 
-            for test_case in list(test_cases):
-                # 逐个测试这个测试用例中的方法
-                timeout_methods = self._identify_timeout_methods(test_case)
-
-                if timeout_methods:
-                    logger.warning(
-                        f"测试用例 {test_case.class_name} 中有 {len(timeout_methods)} 个超时方法"
-                    )
-
-                    # 构建完整方法名并添加到全局集合
-                    for method_name in timeout_methods:
-                        if test_case.package_name:
-                            full_name = f"{test_case.package_name}.{test_case.class_name}.{method_name}"
-                        else:
-                            full_name = f"{test_case.class_name}.{method_name}"
-                        all_timeout_methods.add(full_name)
-
-                    # 从测试用例中移除超时的方法
-                    methods_to_remove = [
-                        m for m in test_case.methods if m.method_name in timeout_methods
-                    ]
-                    for method in methods_to_remove:
-                        test_case.methods.remove(method)
-                        logger.warning(
-                            f"删除超时的测试方法: {test_case.class_name}.{method.method_name}"
-                        )
-
-                    # 如果测试用例没有方法了，从列表中移除
-                    if not test_case.methods:
-                        logger.warning(
-                            f"测试用例 {test_case.class_name} 的所有方法都超时，删除整个测试用例"
-                        )
-                        test_cases.remove(test_case)
-                        self._delete_test_file(test_case)
-                        self.db.delete_test_case(test_case.id)
-                    else:
-                        # 更新测试用例的代码
-                        from comet.utils import build_test_class, write_test_file
-
-                        method_codes = [m.code for m in test_case.methods]
-                        test_case.full_code = build_test_class(
-                            test_class_name=test_case.class_name,
-                            target_class=test_case.target_class,
-                            package_name=test_case.package_name,
-                            imports=test_case.imports,
-                            test_methods=method_codes,
-                        )
-                        # 写入更新后的测试文件（不合并，完全替换）
-                        write_test_file(
-                            project_path=self.project_path,
-                            package_name=test_case.package_name,
-                            test_code=test_case.full_code,
-                            test_class_name=test_case.class_name,
-                            merge=False,
-                        )
-
-                        # 更新数据库（稍后会统一验证）
-                        self.db.save_test_case(test_case)
-
-            if all_timeout_methods:
-                logger.info(
-                    f"总共识别并删除了 {len(all_timeout_methods)} 个超时的测试方法"
-                )
-
-                # 重新检查是否还有测试用例
-                if not test_cases:
-                    logger.error("所有测试用例都因超时被删除")
-                    return {
-                        "evaluated": len(mutants),
-                        "killed": 0,
-                        "mutation_score": 0.0,
-                    }
-
-                # 统一验证所有过滤后的测试用例
-                logger.info("重新编译和验证所有过滤后的测试用例...")
-                compile_result = self.java_executor.compile_tests(self.project_path)
-                if not compile_result.get("success"):
-                    logger.error("过滤后的测试用例编译失败")
-                    return {
-                        "evaluated": len(mutants),
-                        "killed": 0,
-                        "mutation_score": 0.0,
-                    }
-
-                verify_result = self.java_executor.run_tests(self.project_path)
-                if verify_result.get("error") == "Timeout":
-                    logger.error("过滤后的测试用例仍然超时，放弃评估")
-                    return {
-                        "evaluated": len(mutants),
-                        "killed": 0,
-                        "mutation_score": 0.0,
-                    }
-                elif not verify_result.get("success"):
-                    logger.warning("过滤后的测试用例仍有失败，继续处理失败的测试方法")
-                    # 直接处理失败的测试方法（不能依赖 elif，因为已经在 if 块中）
-                    test_result = verify_result
-                    # 继续到下面的失败处理逻辑
-                else:
-                    logger.info("✓ 所有过滤后的测试用例验证通过")
-                    # 验证通过，跳过失败处理
-                    test_result = verify_result
-            else:
-                # 测试整体超时，但逐个测试无法识别具体超时方法
-                # 这可能是测试间依赖或资源竞争导致的，无法处理
-                logger.error(
-                    "✗ 测试整体超时，但无法识别具体的超时方法（可能是测试间依赖或资源问题）"
-                )
-
-                # 删除整个类的所有测试用例
-                if current_target and current_target.get("class_name"):
-                    target_class = current_target["class_name"]
-                    logger.warning(f"删除 {target_class} 类的所有测试用例...")
-
-                    # 获取该类的所有测试用例
-                    class_tests = self.db.get_tests_by_target_class(target_class)
-                    deleted_count = 0
-                    for test_case in class_tests:
-                        self._delete_test_file(test_case)
-                        self.db.delete_test_case(test_case.id)
-                        deleted_count += 1
-
-                    logger.warning(f"已删除 {deleted_count} 个测试用例")
-
-                    # 将目标添加到黑名单
-                    if self.state:
-                        method_name = current_target.get("method_name", "")
-                        target_key = (
-                            f"{target_class}.{method_name}"
-                            if method_name
-                            else target_class
-                        )
-                        if not any(
-                            ft.get("target") == target_key
-                            for ft in self.state.failed_targets
-                        ):
-                            self.state.failed_targets.append(
-                                {
-                                    "target": target_key,
-                                    "class_name": target_class,
-                                    "method_name": method_name,
-                                    "reason": "测试整体超时但无法识别具体方法（可能测试间依赖）",
-                                    "error": "Timeout without identifiable method",
-                                    "timestamp": datetime.now().isoformat(),
-                                }
-                            )
-                            logger.warning(f"已将 {target_key} 添加到失败黑名单")
-                            # 如果当前目标是被加入黑名单的目标，清除当前目标选中
-                            if self.state.current_target:
-                                current_class = self.state.current_target.get(
-                                    "class_name"
-                                )
-                                current_method = self.state.current_target.get(
-                                    "method_name", ""
-                                )
-                                current_target_key = (
-                                    f"{current_class}.{current_method}"
-                                    if current_method and current_class
-                                    else (current_class if current_class else None)
-                                )
-                                if current_target_key == target_key:
-                                    logger.info(
-                                        f"当前目标 {target_key} 已被加入黑名单，清除目标选中"
-                                    )
-                                    self.state.update_target(None)
-
-                return {
-                    "evaluated": len(mutants),
-                    "killed": 0,
-                    "mutation_score": 0.0,
-                    "error": "Timeout without identifiable method",
-                }
-
-        # 处理测试失败（可能来自初始运行，也可能来自超时过滤后的验证）
-        if not test_result.get("success") and test_result.get("error") != "Timeout":
-            logger.warning("部分测试失败，识别有问题的测试方法...")
-            from ..executor.surefire_parser import SurefireParser
-
-            surefire_parser = SurefireParser()
-            reports_dir = os.path.join(self.project_path, "target", "surefire-reports")
-            failed_test_names = surefire_parser.get_failed_test_names(reports_dir)
-
-            if failed_test_names:
-                logger.warning(f"发现 {len(failed_test_names)} 个失败的测试")
-                # 从数据库中删除失败的测试方法
-                for test_case in list(test_cases):
-                    methods_to_remove = []
-                    for method in test_case.methods:
-                        # 构建完整的测试名称
-                        if test_case.package_name:
-                            full_name = f"{test_case.package_name}.{test_case.class_name}.{method.method_name}"
-                        else:
-                            full_name = f"{test_case.class_name}.{method.method_name}"
-
-                        if full_name in failed_test_names:
-                            logger.warning(f"删除失败的测试方法: {full_name}")
-                            methods_to_remove.append(method)
-
-                    # 从测试用例中移除失败的方法
-                    for method in methods_to_remove:
-                        test_case.methods.remove(method)
-
-                    # 如果测试用例没有方法了，从列表中移除
-                    if not test_case.methods:
-                        logger.warning(
-                            f"测试用例 {test_case.class_name} 的所有方法都失败，删除整个测试用例"
-                        )
-                        test_cases.remove(test_case)
-                        self._delete_test_file(test_case)
-                        self.db.delete_test_case(test_case.id)
-                    else:
-                        # 更新数据库中的测试用例
-                        self.db.save_test_case(test_case)
-        else:
-            logger.info("所有测试通过验证")
-
-        # 重新检查是否还有可用的测试用例
-        if not test_cases:
-            logger.error("预验证后没有可用的测试用例")
-            return {"evaluated": len(mutants), "killed": 0, "mutation_score": 0.0}
-
-        logger.info(f"预验证完成，剩余 {len(test_cases)} 个测试用例")
+        logger.info("✓ 所有测试通过验证")
 
         # ===== 步骤2: 收集覆盖率信息 =====
         logger.info("步骤2: 收集覆盖率信息...")
