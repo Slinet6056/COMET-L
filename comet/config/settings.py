@@ -65,6 +65,11 @@ class EvolutionConfig(BaseModel):
         default=0.85, ge=0.0, le=1.0, description="优秀分支覆盖率阈值"
     )
 
+    # 目标方法选择策略
+    min_method_lines: int = Field(
+        default=1, ge=1, description="目标方法的最小行数，小于此值的方法将被跳过"
+    )
+
 
 class KnowledgeConfig(BaseModel):
     """知识库配置"""

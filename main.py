@@ -184,6 +184,12 @@ def initialize_system(config: Settings):
     tools.pattern_extractor = pattern_extractor
     tools.sandbox_manager = sandbox_manager
 
+    # 注入配置参数
+    try:
+        tools.min_method_lines = config.evolution.min_method_lines
+    except AttributeError:
+        tools.min_method_lines = 5  # 默认值
+
     logger.info("Agent 工具集依赖注入完成")
 
     max_iterations = config.evolution.max_iterations

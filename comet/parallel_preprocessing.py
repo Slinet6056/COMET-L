@@ -57,6 +57,12 @@ class ParallelPreprocessor:
             self.max_workers = None
             self.timeout_per_method = 300
 
+        # 获取目标方法选择配置
+        try:
+            self.min_method_lines = config.evolution.min_method_lines
+        except AttributeError:
+            self.min_method_lines = 5
+
         # 如果未指定max_workers，使用默认值
         if self.max_workers is None:
             import multiprocessing
@@ -146,6 +152,7 @@ class ParallelPreprocessor:
         from .utils.project_utils import get_all_java_classes, find_java_file
 
         all_methods = []
+        skipped_count = 0
 
         # 获取所有Java类（传入数据库以获取所有类，包括同一文件中的多个类）
         all_classes = get_all_java_classes(self.workspace_sandbox, db=self.db)
@@ -168,15 +175,34 @@ class ParallelPreprocessor:
                             if method_class == class_name:
                                 method_name = method.get("name")
                                 if method_name:
+                                    # 检查方法行数是否满足最小行数要求
+                                    method_range = method.get("range")
+                                    if method_range and isinstance(method_range, dict):
+                                        begin_line = method_range.get("begin", 0)
+                                        end_line = method_range.get("end", 0)
+                                        method_lines = end_line - begin_line + 1
+
+                                        if method_lines < self.min_method_lines:
+                                            logger.debug(
+                                                f"跳过方法 {class_name}.{method_name}：行数 {method_lines} 小于最小值 {self.min_method_lines}"
+                                            )
+                                            skipped_count += 1
+                                            continue
+
                                     all_methods.append(
                                         (class_name, method_name, method)
                                     )
                         else:
-                            # 如果是字符串（旧格式），直接使用
+                            # 如果是字符串（旧格式），直接使用（无法过滤）
                             all_methods.append((class_name, method, {}))
             except Exception as e:
                 logger.warning(f"获取类 {class_name} 的公共方法失败: {e}")
                 continue
+
+        if skipped_count > 0:
+            logger.info(
+                f"根据最小行数配置 ({self.min_method_lines} 行)，跳过了 {skipped_count} 个方法"
+            )
 
         return all_methods
 

@@ -43,6 +43,7 @@ class AgentTools:
         self.pattern_extractor: Any = None
         self.sandbox_manager: Any = None
         self.state: Any = None
+        self.min_method_lines: int = 5  # 目标方法的最小行数
 
         self._register_default_tools()
 
@@ -1416,7 +1417,9 @@ class AgentTools:
 
         from .target_selector import TargetSelector
 
-        selector = TargetSelector(self.project_path, self.java_executor, self.db)
+        selector = TargetSelector(
+            self.project_path, self.java_executor, self.db, self.min_method_lines
+        )
 
         # 获取黑名单
         blacklist = set()
