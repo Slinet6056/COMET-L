@@ -174,7 +174,6 @@ class TestGenerator:
                     code=code,
                     target_method=method_name,
                     description=test_data.get("description"),
-                    version=1,  # 新生成的方法，版本号为1
                     created_at=datetime.now(),
                     updated_at=datetime.now(),
                 )
@@ -307,7 +306,6 @@ class TestGenerator:
                     code=code,
                     target_method=test_data.get("target_method", ""),
                     description=test_data.get("description"),
-                    version=1,  # 版本号将在保存时根据是否已存在自动更新
                     created_at=datetime.now(),
                     updated_at=datetime.now(),
                 )
@@ -333,9 +331,7 @@ class TestGenerator:
             test_case.updated_at = datetime.now()
 
             logger.info(f"成功完善测试，现有 {len(test_methods)} 个测试方法")
-            logger.debug(
-                f"返回的测试用例: ID={test_case.id}, version={test_case.version} (未更新版本号)"
-            )
+            logger.debug(f"返回的测试用例: ID={test_case.id}")
             return test_case
 
         except Exception as e:

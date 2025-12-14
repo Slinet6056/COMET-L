@@ -681,19 +681,13 @@ class ParallelPreprocessor:
                             existing_method, existing_updated = unique_methods[
                                 method.method_name
                             ]
-                            # 比较更新时间，保留更新的
+                            # 比较更新时间，保留更新的；如果时间相同或无法比较，保留后来的
                             method_updated = method.updated_at or method.created_at
                             if (
                                 method_updated
                                 and existing_updated
-                                and method_updated > existing_updated
+                                and method_updated >= existing_updated
                             ):
-                                unique_methods[method.method_name] = (
-                                    method,
-                                    method_updated,
-                                )
-                            # 如果时间相同，比较版本号
-                            elif method.version > existing_method.version:
                                 unique_methods[method.method_name] = (
                                     method,
                                     method_updated,
