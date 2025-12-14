@@ -7,7 +7,7 @@ llm:
   supports_json_mode: true # 如果使用本地模型不支持 JSON 模式，请设置为 false
   timeout: 120  # API 请求超时时间（秒）
   reasoning_effort: null  # 推理努力程度，可能的可选值: 'none', 'minimal', 'low', 'medium', 'high'，null 表示使用默认值
-  verbosity: null  # 响应详细程度，可能的可选值: 'none', 'low', 'medium', 'high'，null 表示使用默认值
+  verbosity: null  # 响应详细程度，可能的可选值: 'low', 'medium', 'high'，null 表示使用默认值
 
 execution:
   timeout: 300  # 秒

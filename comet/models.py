@@ -68,8 +68,6 @@ class Mutant(BaseModel):
     class_name: str = Field(description="类名")
     method_name: Optional[str] = Field(default=None, description="方法名")
     patch: MutationPatch = Field(description="变异补丁")
-    semantic_intent: str = Field(description="语义意图（这个变异试图暴露什么问题）")
-    pattern_id: Optional[str] = Field(default=None, description="关联的缺陷模式 ID")
     status: str = Field(
         default="pending",
         description="状态（pending、valid、invalid、killed、survived）",
@@ -90,7 +88,6 @@ class TestMethod(BaseModel):
     method_name: str = Field(description="测试方法名")
     code: str = Field(description="测试方法代码")
     target_method: str = Field(description="目标被测方法")
-    description: Optional[str] = Field(default=None, description="测试描述")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 
