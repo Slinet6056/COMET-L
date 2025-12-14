@@ -319,6 +319,10 @@ def run_evolution(
                 except KeyboardInterrupt:
                     # 中断信号会传播到外层处理
                     raise
+                except RuntimeError as e:
+                    # 初始覆盖率测试失败是关键错误，必须终止程序
+                    logger.error(f"关键错误: {e}", exc_info=True)
+                    raise
                 except Exception as e:
                     logger.error(f"并行预处理失败: {e}", exc_info=True)
                     logger.warning("将跳过预处理，继续正常流程")
