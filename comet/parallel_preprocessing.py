@@ -927,69 +927,46 @@ class ParallelPreprocessor:
             compile_result = java_executor.compile_tests(project_path)
 
             if not compile_result.get("success"):
-                # 编译失败，分析错误并排除有问题的方法
-                error_output = compile_result.get("output", "")
-                failed_methods = self._identify_failed_methods_from_compile_error(
-                    error_output, test_file_path, valid_methods
-                )
+                # 编译失败，直接使用二分查找排除有问题的方法
+                if len(valid_methods) > 1:
+                    logger.warning(
+                        f"编译失败，启动二分查找排除问题方法 ({len(valid_methods)} 个方法)"
+                    )
+                    failed_methods = self._binary_search_failed_methods(
+                        valid_methods,
+                        test_class_name,
+                        target_class,
+                        package_name,
+                        imports,
+                    )
 
-                if not failed_methods:
-                    # 无法识别具体哪个方法失败，使用二分查找（并行递归）
-                    if len(valid_methods) > 1:
-                        logger.warning(
-                            f"无法从编译错误识别失败方法，启动二分查找 ({len(valid_methods)} 个方法)"
-                        )
-                        failed_methods_from_binary = self._binary_search_failed_methods(
-                            valid_methods,
-                            test_class_name,
-                            target_class,
-                            package_name,
-                            imports,
-                        )
-
-                        if failed_methods_from_binary:
-                            logger.info(
-                                f"二分查找识别到 {len(failed_methods_from_binary)} 个失败方法"
-                            )
-                            for method_name in failed_methods_from_binary:
-                                valid_methods = [
-                                    m
-                                    for m in valid_methods
-                                    if m.method_name != method_name
-                                ]
-                                self._delete_test_method_from_db(
-                                    target_class, method_name
-                                )
-                        else:
-                            # 二分查找也没找到，这不应该发生
-                            logger.error("二分查找未能识别失败方法，删除所有方法")
-                            for m in valid_methods:
-                                self._delete_test_method_from_db(
-                                    target_class, m.method_name
-                                )
-                            valid_methods = []
-                            break
-                    elif valid_methods:
-                        # 只剩一个方法，删除它
-                        removed = valid_methods.pop()
-                        logger.warning(
-                            f"只剩一个方法且编译失败，删除: {removed.method_name}"
-                        )
-                        self._delete_test_method_from_db(
-                            target_class, removed.method_name
-                        )
+                    if failed_methods:
+                        logger.info(f"二分查找识别到 {len(failed_methods)} 个失败方法")
+                        for method_name in failed_methods:
+                            valid_methods = [
+                                m for m in valid_methods if m.method_name != method_name
+                            ]
+                            self._delete_test_method_from_db(target_class, method_name)
                     else:
-                        # 没有方法了，退出
-                        logger.error("所有方法都编译失败")
+                        # 二分查找也没找到，这不应该发生
+                        logger.error("二分查找未能识别失败方法，删除所有方法")
+                        for m in valid_methods:
+                            self._delete_test_method_from_db(
+                                target_class, m.method_name
+                            )
+                        valid_methods = []
                         break
+                elif valid_methods:
+                    # 只剩一个方法，删除它
+                    removed = valid_methods.pop()
+                    logger.warning(
+                        f"只剩一个方法且编译失败，删除: {removed.method_name}"
+                    )
+                    self._delete_test_method_from_db(target_class, removed.method_name)
                 else:
-                    # 删除识别出的失败方法
-                    for method_name in failed_methods:
-                        valid_methods = [
-                            m for m in valid_methods if m.method_name != method_name
-                        ]
-                        logger.warning(f"删除编译失败的方法: {method_name}")
-                        self._delete_test_method_from_db(target_class, method_name)
+                    # 没有方法了，退出
+                    logger.error("所有方法都编译失败")
+                    break
 
                 # 继续下一次迭代
                 continue
