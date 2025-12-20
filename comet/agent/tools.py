@@ -1889,6 +1889,71 @@ class AgentTools:
 
         logger.info(f"开始评估 {len(mutants)} 个变异体 和 {len(test_cases)} 个测试")
 
+        # ===== 步骤0: 确保所有测试文件已同步到 project_path =====
+        # 关键修复：从数据库重建所有测试文件到 workspace
+        logger.info("步骤0: 同步测试文件到 workspace...")
+
+        # 按测试类分组（可能有多个 TestCase 对象对应同一个测试类）
+        from collections import defaultdict
+
+        tests_by_class = defaultdict(list)
+        for tc in test_cases:
+            # 只同步compile_success=True的测试
+            if tc.compile_success:
+                tests_by_class[tc.class_name].append(tc)
+            else:
+                logger.warning(f"跳过未通过编译的测试: {tc.class_name} (ID: {tc.id})")
+
+        logger.info(f"需要同步 {len(tests_by_class)} 个测试类")
+
+        for class_name, test_case_list in tests_by_class.items():
+            # 使用第一个 TestCase 的元数据（package, imports等）
+            first_tc = test_case_list[0]
+
+            # 收集所有测试方法
+            all_methods = []
+            for tc in test_case_list:
+                if tc.methods:
+                    all_methods.extend(tc.methods)
+
+            if not all_methods:
+                logger.warning(f"测试类 {class_name} 没有测试方法，跳过")
+                continue
+
+            # 重建测试文件
+            try:
+                from ..utils.code_utils import build_test_class
+                from ..utils.project_utils import write_test_file
+
+                method_codes = [m.code for m in all_methods]
+                full_code = build_test_class(
+                    test_class_name=class_name,
+                    target_class=first_tc.target_class,
+                    package_name=first_tc.package_name,
+                    imports=first_tc.imports or [],
+                    test_methods=method_codes,
+                )
+
+                result = write_test_file(
+                    project_path=self.project_path,
+                    package_name=first_tc.package_name,
+                    test_code=full_code,
+                    test_class_name=class_name,
+                    merge=False,  # 完全覆盖，确保和数据库一致
+                )
+
+                if result:
+                    logger.debug(
+                        f"✓ 同步测试类: {class_name} ({len(all_methods)} 个方法)"
+                    )
+                else:
+                    logger.error(f"✗ 同步测试类失败: {class_name}")
+
+            except Exception as e:
+                logger.error(f"同步测试类 {class_name} 时出错: {e}", exc_info=True)
+
+        logger.info("✓ 测试文件同步完成")
+
         # ===== 步骤1: 快速验证测试用例 =====
         # 所有测试都应该在 generate_tests/refine_tests 中验证过
         # 这里只做一次快速检查，确保项目没有被外部修改
@@ -1897,13 +1962,26 @@ class AgentTools:
         test_result = self.java_executor.run_tests(self.project_path)
 
         if not test_result.get("success"):
-            error_msg = test_result.get("error", "Unknown error")
+            # 从多个可能的字段中提取错误信息
+            error_msg = (
+                test_result.get("error")
+                or test_result.get("stderr")
+                or test_result.get("stdout")
+                or test_result.get("output")
+                or "Unknown error"
+            )
+
+            # 如果错误消息为空字符串，使用默认消息
+            if not error_msg or not error_msg.strip():
+                error_msg = "Unknown error"
+
             logger.error(
                 f"✗ 测试运行失败！这不应该发生，因为所有测试都应该在生成时验证过。\n"
                 f"可能原因：\n"
-                f"  1. 项目源代码被外部修改\n"
-                f"  2. 依赖环境发生变化\n"
-                f"  3. 并发问题或资源冲突\n"
+                f"  1. 测试文件同步到 workspace 失败\n"
+                f"  2. 项目源代码被外部修改\n"
+                f"  3. 依赖环境发生变化\n"
+                f"  4. 并发问题或资源冲突\n"
                 f"错误信息: {error_msg}"
             )
 
@@ -1911,8 +1989,8 @@ class AgentTools:
                 "evaluated": 0,
                 "killed": 0,
                 "mutation_score": 0.0,
-                "error": f"测试验证失败（项目可能被修改）: {error_msg[:200]}",
-                "warning": "建议重新生成测试或检查项目状态",
+                "error": f"测试验证失败: {error_msg[:200]}",
+                "warning": "建议检查日志并重新生成测试",
             }
 
         logger.info("✓ 所有测试通过验证")
