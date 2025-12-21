@@ -669,43 +669,25 @@ class ParallelPreprocessor:
 
         for target_class, test_cases in tests_by_class.items():
             try:
-                # 使用字典去重：{method_name: (TestMethod, updated_at)}
-                # 保留更新时间最新的方法（同名方法只保留一个）
-                unique_methods = {}
+                latest_tc = max(test_cases, key=lambda tc: tc.updated_at)
 
-                for tc in test_cases:
-                    for method in tc.methods:
-                        # 检查是否已存在同名方法
-                        if method.method_name in unique_methods:
-                            existing_method, existing_updated = unique_methods[
-                                method.method_name
-                            ]
-                            # 比较更新时间，保留更新的；如果时间相同或无法比较，保留后来的
-                            method_updated = method.updated_at or method.created_at
-                            if (
-                                method_updated
-                                and existing_updated
-                                and method_updated >= existing_updated
-                            ):
-                                unique_methods[method.method_name] = (
-                                    method,
-                                    method_updated,
-                                )
-                        else:
-                            method_updated = method.updated_at or method.created_at
-                            unique_methods[method.method_name] = (
-                                method,
-                                method_updated,
-                            )
-
-                if not unique_methods:
+                # 检查full_code是否存在
+                if not latest_tc.full_code:
+                    logger.warning(
+                        f"目标类 {target_class} 的最新TestCase没有full_code，跳过"
+                    )
                     continue
 
-                # 提取去重后的方法列表
-                all_methods = [m for m, _ in unique_methods.values()]
+                # 检查是否有methods（用于统计）
+                if not latest_tc.methods:
+                    logger.warning(
+                        f"目标类 {target_class} 的最新TestCase没有methods，跳过"
+                    )
+                    continue
 
-                # 使用第一个测试用例的元数据
-                first_tc = test_cases[0]
+                # 使用最新TestCase的所有信息
+                first_tc = latest_tc
+                all_methods = latest_tc.methods
 
                 # 在验证沙箱中构建和验证测试文件
                 valid_methods = self._build_and_validate_in_sandbox(
@@ -749,15 +731,23 @@ class ParallelPreprocessor:
             test_cases,
         ) in validated_tests.items():
             try:
-                # 构建合并后的完整代码
-                method_codes = [m.code for m in valid_methods]
-                merged_full_code = build_test_class(
-                    test_class_name=first_tc.class_name,
-                    target_class=first_tc.target_class,
-                    package_name=first_tc.package_name,
-                    imports=first_tc.imports,
-                    test_methods=method_codes,
-                )
+                # 如果first_tc有full_code，直接使用；否则才从methods重建
+                # 验证通过的测试应该已经有完整的full_code
+                if first_tc.full_code:
+                    merged_full_code = first_tc.full_code
+                else:
+                    # 回退方案：从methods重建（不应该走到这里）
+                    logger.warning(
+                        f"TestCase {first_tc.class_name} 没有full_code，从methods重建"
+                    )
+                    method_codes = [m.code for m in valid_methods]
+                    merged_full_code = build_test_class(
+                        test_class_name=first_tc.class_name,
+                        target_class=first_tc.target_class,
+                        package_name=first_tc.package_name,
+                        imports=first_tc.imports,
+                        test_methods=method_codes,
+                    )
 
                 # 写入workspace
                 write_test_file(

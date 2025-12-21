@@ -1053,14 +1053,14 @@ class AgentTools:
                     test_class_name=fixed_test_case.class_name,
                     merge=True,
                 )
+                # 普通情况下，直接使用 fixed_test_case
+                test_case = fixed_test_case
 
             if not test_file:
                 logger.error("写入修复后的测试文件失败")
                 test_case.compile_success = False
                 test_case.compile_error = "写入测试文件失败"
                 return test_case
-
-            test_case = fixed_test_case
 
         # ===== 步骤2: 运行测试 =====
         logger.info("运行测试验证...")
@@ -1907,45 +1907,34 @@ class AgentTools:
         logger.info(f"需要同步 {len(tests_by_class)} 个测试类")
 
         for class_name, test_case_list in tests_by_class.items():
-            # 使用第一个 TestCase 的元数据（package, imports等）
-            first_tc = test_case_list[0]
+            # 使用最新更新的TestCase对象
+            # 按updated_at排序，取最新的TestCase
+            latest_tc = max(test_case_list, key=lambda tc: tc.updated_at)
 
-            # 收集所有测试方法
-            all_methods = []
-            for tc in test_case_list:
-                if tc.methods:
-                    all_methods.extend(tc.methods)
-
-            if not all_methods:
-                logger.warning(f"测试类 {class_name} 没有测试方法，跳过")
+            # 检查full_code是否存在
+            if not latest_tc.full_code:
+                logger.warning(f"测试类 {class_name} 的最新TestCase没有full_code，跳过")
                 continue
 
             # 重建测试文件
             try:
-                from ..utils.code_utils import build_test_class
                 from ..utils.project_utils import write_test_file
 
-                method_codes = [m.code for m in all_methods]
-                full_code = build_test_class(
-                    test_class_name=class_name,
-                    target_class=first_tc.target_class,
-                    package_name=first_tc.package_name,
-                    imports=first_tc.imports or [],
-                    test_methods=method_codes,
-                )
+                # 直接使用最新TestCase的full_code，而不是从methods重建
+                full_code = latest_tc.full_code
 
                 result = write_test_file(
                     project_path=self.project_path,
-                    package_name=first_tc.package_name,
+                    package_name=latest_tc.package_name,
                     test_code=full_code,
                     test_class_name=class_name,
                     merge=False,  # 完全覆盖，确保和数据库一致
                 )
 
                 if result:
-                    logger.debug(
-                        f"✓ 同步测试类: {class_name} ({len(all_methods)} 个方法)"
-                    )
+                    # 统计方法数量（从full_code中提取，或使用methods长度作为估算）
+                    method_count = len(latest_tc.methods) if latest_tc.methods else 0
+                    logger.debug(f"✓ 同步测试类: {class_name} ({method_count} 个方法)")
                 else:
                     logger.error(f"✗ 同步测试类失败: {class_name}")
 
