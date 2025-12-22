@@ -748,6 +748,287 @@ class ParallelPreprocessor:
             except Exception as e:
                 logger.error(f"写入测试文件失败 {class_name}: {e}", exc_info=True)
 
+        # 5. 整体验证：确保所有测试类组合在一起可以正常工作
+        logger.info("步骤 5: 对 workspace 进行整体验证...")
+        self._validate_and_fix_workspace_tests()
+
+    def _validate_and_fix_workspace_tests(self) -> None:
+        """
+        对 workspace 中的所有测试进行整体验证，如果失败则定位并删除有问题的测试类/方法
+
+        处理两种失败情况：
+        1. 编译失败：通过二分查找定位有问题的测试类
+        2. 测试失败：通过Surefire报告定位失败的测试方法
+        """
+        max_iterations = 10  # 防止无限循环
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+            logger.info(f"整体验证迭代 #{iteration}...")
+
+            # 步骤1: 编译测试
+            compile_result = self.java_executor.compile_tests(self.workspace_sandbox)
+
+            if not compile_result.get("success"):
+                logger.warning("整体编译失败，开始定位有问题的测试类...")
+                removed = self._handle_workspace_compile_failure(compile_result)
+
+                if not removed:
+                    logger.error("无法定位编译失败的测试类，放弃修复")
+                    break
+
+                logger.info(f"已删除 {removed} 个有问题的测试类，重新验证...")
+                continue
+
+            logger.info("✓ 整体编译成功")
+
+            # 步骤2: 运行测试
+            test_result = self.java_executor.run_tests(self.workspace_sandbox)
+
+            if test_result.get("success"):
+                logger.info("✓ 整体测试通过，所有测试方法都正常工作")
+                return
+
+            logger.warning("整体测试失败，开始定位失败的测试方法...")
+            removed = self._handle_workspace_test_failure()
+
+            if not removed:
+                logger.error("无法定位失败的测试方法，放弃修复")
+                break
+
+            logger.info(f"已删除 {removed} 个失败的测试方法，重新验证...")
+
+        if iteration >= max_iterations:
+            logger.error(f"整体验证达到最大迭代次数 {max_iterations}，停止修复")
+
+    def _handle_workspace_compile_failure(self, compile_result: Dict[str, Any]) -> int:
+        """
+        处理 workspace 整体编译失败的情况
+
+        策略：使用二分查找定位有问题的测试类
+
+        Args:
+            compile_result: 编译结果
+
+        Returns:
+            删除的测试类数量
+        """
+        # 获取所有测试用例
+        all_test_cases = self.db.get_all_test_cases()
+        if not all_test_cases:
+            return 0
+
+        # 使用二分查找定位有问题的测试类
+        logger.info("使用二分查找定位编译失败的测试类...")
+        failed_classes = self._binary_search_failed_test_classes(all_test_cases)
+
+        if failed_classes:
+            logger.info(f"二分查找识别到 {len(failed_classes)} 个有问题的测试类")
+            for test_class_name in failed_classes:
+                # 从数据库删除
+                test_cases = [
+                    tc for tc in all_test_cases if tc.class_name == test_class_name
+                ]
+                for tc in test_cases:
+                    logger.warning(f"删除编译失败的测试类: {tc.class_name}")
+                    self.db.delete_test_case(tc.id)
+
+            # 重新构建测试目录
+            self._rebuild_workspace_tests()
+            return len(failed_classes)
+
+        return 0
+
+    def _handle_workspace_test_failure(self) -> int:
+        """
+        处理 workspace 整体测试失败的情况
+
+        策略：
+        1. 从Surefire报告中识别失败的测试方法
+        2. 从数据库中删除这些测试方法
+        3. 重新构建测试文件
+
+        Returns:
+            删除的测试方法数量
+        """
+        from .utils.project_utils import clear_test_directory
+
+        # 获取所有测试用例
+        all_test_cases = self.db.get_all_test_cases()
+        if not all_test_cases:
+            return 0
+
+        # 从Surefire报告中识别所有失败的测试方法
+        failed_methods_by_class = defaultdict(set)
+
+        for test_case in all_test_cases:
+            failed_methods = self._identify_failed_test_methods(
+                test_case.class_name, self.workspace_sandbox
+            )
+            if failed_methods:
+                failed_methods_by_class[test_case.class_name] = failed_methods
+
+        if not failed_methods_by_class:
+            logger.warning("无法从Surefire报告中识别失败的测试方法")
+            return 0
+
+        # 删除失败的测试方法
+        total_removed = 0
+        for test_case in all_test_cases:
+            if test_case.class_name in failed_methods_by_class:
+                failed_methods = failed_methods_by_class[test_case.class_name]
+                for method_name in failed_methods:
+                    logger.warning(
+                        f"删除失败的测试方法: {test_case.class_name}.{method_name}"
+                    )
+                    self._delete_test_method_from_db(
+                        test_case.target_class, method_name
+                    )
+                    total_removed += 1
+
+        # 重新构建测试目录
+        if total_removed > 0:
+            self._rebuild_workspace_tests()
+
+        return total_removed
+
+    def _binary_search_failed_test_classes(self, test_cases: List) -> List[str]:
+        """
+        使用二分查找定位编译失败的测试类
+
+        Args:
+            test_cases: 测试用例列表
+
+        Returns:
+            失败的测试类名列表
+        """
+        if len(test_cases) == 1:
+            return [test_cases[0].class_name]
+
+        if not test_cases:
+            return []
+
+        # 分成两部分
+        mid = len(test_cases) // 2
+        left_cases = test_cases[:mid]
+        right_cases = test_cases[mid:]
+
+        logger.info(
+            f"二分查找测试类: 将 {len(test_cases)} 个类分为两部分 ({len(left_cases)} + {len(right_cases)})"
+        )
+
+        # 在两个独立沙箱中并行验证
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            left_future = executor.submit(
+                self._validate_test_classes_in_sandbox, left_cases
+            )
+            right_future = executor.submit(
+                self._validate_test_classes_in_sandbox, right_cases
+            )
+
+            left_valid = left_future.result()
+            right_valid = right_future.result()
+
+        failed = []
+
+        # 递归处理失败的部分
+        if not left_valid:
+            logger.info(f"左侧 {len(left_cases)} 个测试类验证失败，继续递归查找")
+            if len(left_cases) == 1:
+                failed.append(left_cases[0].class_name)
+            else:
+                failed.extend(self._binary_search_failed_test_classes(left_cases))
+
+        if not right_valid:
+            logger.info(f"右侧 {len(right_cases)} 个测试类验证失败，继续递归查找")
+            if len(right_cases) == 1:
+                failed.append(right_cases[0].class_name)
+            else:
+                failed.extend(self._binary_search_failed_test_classes(right_cases))
+
+        return failed
+
+    def _validate_test_classes_in_sandbox(self, test_cases: List) -> bool:
+        """
+        在独立沙箱中验证一组测试类是否可以编译
+
+        Args:
+            test_cases: 测试用例列表
+
+        Returns:
+            是否验证通过（编译成功）
+        """
+        from .utils.project_utils import write_test_file
+
+        if not test_cases:
+            return True
+
+        # 创建验证沙箱
+        validation_sandbox = self.sandbox_manager.create_validation_sandbox(
+            self.project_path
+        )
+        sandbox_id = Path(validation_sandbox).name
+
+        try:
+            # 写入所有测试类
+            for test_case in test_cases:
+                write_test_file(
+                    project_path=validation_sandbox,
+                    package_name=test_case.package_name,
+                    test_code=test_case.full_code,
+                    test_class_name=test_case.class_name,
+                )
+
+            # 编译测试
+            compile_result = self.java_executor.compile_tests(validation_sandbox)
+            success = compile_result.get("success", False)
+
+            if success:
+                logger.debug(
+                    f"验证沙箱 {sandbox_id}: 编译通过 ({len(test_cases)} 个测试类)"
+                )
+            else:
+                logger.debug(
+                    f"验证沙箱 {sandbox_id}: 编译失败 ({len(test_cases)} 个测试类)"
+                )
+
+            return success
+
+        except Exception as e:
+            logger.error(f"验证沙箱 {sandbox_id} 异常: {e}")
+            return False
+        finally:
+            # 清理沙箱
+            try:
+                self.sandbox_manager.cleanup_sandbox(sandbox_id)
+            except Exception as e:
+                logger.warning(f"清理验证沙箱失败 {sandbox_id}: {e}")
+
+    def _rebuild_workspace_tests(self) -> None:
+        """
+        从数据库重新构建 workspace 中的所有测试文件
+        """
+        from .utils.project_utils import write_test_file, clear_test_directory
+
+        # 清空测试目录
+        clear_test_directory(self.workspace_sandbox)
+
+        # 从数据库获取所有测试用例
+        all_test_cases = self.db.get_all_test_cases()
+
+        logger.info(f"重新构建 workspace 测试文件，共 {len(all_test_cases)} 个测试类")
+
+        for test_case in all_test_cases:
+            if test_case.full_code and test_case.methods:
+                write_test_file(
+                    project_path=self.workspace_sandbox,
+                    package_name=test_case.package_name,
+                    test_code=test_case.full_code,
+                    test_class_name=test_case.class_name,
+                )
+                logger.debug(f"重新写入测试类: {test_case.class_name}")
+
     def _build_and_validate_in_sandbox(
         self,
         test_class_name: str,
