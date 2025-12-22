@@ -306,24 +306,72 @@ def run_evolution(
                     logger.info(f"总变异体数: {preprocess_stats['total_mutants']}")
                     logger.info("=" * 60)
 
-                    # 运行初始覆盖率测试以生成JaCoCo报告
-                    logger.info("运行初始覆盖率测试以生成JaCoCo报告...")
+                    # 清理所有目标沙箱，释放资源
+                    logger.info("清理并行预处理产生的临时沙箱...")
                     try:
-                        java_executor = components["java_executor"]
-                        coverage_result = java_executor.run_tests_with_coverage(
-                            workspace_sandbox
-                        )
-                        if coverage_result.get("success"):
-                            logger.info("初始覆盖率测试成功")
-                        else:
-                            error_msg = (
-                                f"初始覆盖率测试失败: {coverage_result.get('error')}"
-                            )
-                            logger.error(error_msg)
-                            raise RuntimeError(error_msg)
+                        sandbox_manager.cleanup_target_sandboxes()
+                        sandbox_manager.cleanup_validation_sandboxes()
+                        logger.info("临时沙箱清理完成")
                     except Exception as e:
-                        logger.error(f"运行初始覆盖率测试失败: {e}")
-                        raise
+                        logger.warning(f"清理临时沙箱失败（非致命错误）: {e}")
+
+                    # 等待一小段时间，让系统回收文件描述符和进程资源
+                    import time
+
+                    logger.info("等待系统回收资源...")
+                    time.sleep(3)
+
+                    # 运行初始覆盖率测试以生成JaCoCo报告（带重试）
+                    logger.info("运行初始覆盖率测试以生成JaCoCo报告...")
+                    java_executor = components["java_executor"]
+                    max_retries = 3
+                    coverage_result = None
+
+                    for attempt in range(1, max_retries + 1):
+                        try:
+                            logger.info(
+                                f"尝试运行覆盖率测试 ({attempt}/{max_retries})..."
+                            )
+                            coverage_result = java_executor.run_tests_with_coverage(
+                                workspace_sandbox
+                            )
+
+                            if coverage_result.get("success"):
+                                logger.info("初始覆盖率测试成功")
+                                break
+                            else:
+                                # 提取详细错误信息
+                                error_detail = (
+                                    coverage_result.get("error")
+                                    or coverage_result.get("output")
+                                    or coverage_result.get("stderr")
+                                    or coverage_result.get("stdout")
+                                    or "Unknown error"
+                                )
+                                logger.error(
+                                    f"初始覆盖率测试失败 (尝试 {attempt}/{max_retries}): {error_detail[:500]}"
+                                )
+
+                                if attempt < max_retries:
+                                    logger.info(f"等待 5 秒后重试...")
+                                    time.sleep(5)
+                                else:
+                                    error_msg = f"初始覆盖率测试失败（已重试 {max_retries} 次）: {error_detail[:500]}"
+                                    raise RuntimeError(error_msg)
+
+                        except RuntimeError:
+                            raise  # 重新抛出 RuntimeError（最后一次重试失败）
+                        except Exception as e:
+                            logger.error(
+                                f"运行初始覆盖率测试异常 (尝试 {attempt}/{max_retries}): {e}"
+                            )
+                            if attempt < max_retries:
+                                logger.info(f"等待 5 秒后重试...")
+                                time.sleep(5)
+                            else:
+                                raise RuntimeError(
+                                    f"初始覆盖率测试异常（已重试 {max_retries} 次）: {e}"
+                                )
                 except KeyboardInterrupt:
                     # 中断信号会传播到外层处理
                     raise

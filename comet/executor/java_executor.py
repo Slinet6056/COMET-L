@@ -111,6 +111,37 @@ class JavaExecutor:
                 "error": str(e),
             }
 
+    def _try_parse_json_stdout(
+        self, result: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        尝试从 _run_java_command 的 stdout 解析 JSON。
+
+        说明：
+        - Java 侧有些命令（例如 MavenExecutor）会在失败时也把 JSON 打到 stdout，
+          但进程 exit code 会是非 0，导致 _run_java_command 的 success 为 False。
+        - 为了让上层拿到更有意义的 error/output 字段，这里尝试解析 stdout。
+        """
+        stdout = (result.get("stdout") or "").strip()
+        if not stdout:
+            return None
+
+        # 快速过滤，避免把大量非 JSON 输出交给 json.loads
+        if not (stdout.startswith("{") and stdout.endswith("}")):
+            return None
+
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            return None
+
+        # 合并 python 侧的过程信息，便于排障
+        if isinstance(parsed, dict):
+            parsed.setdefault("returncode", result.get("returncode"))
+            parsed.setdefault("stdout", result.get("stdout", ""))
+            parsed.setdefault("stderr", result.get("stderr", ""))
+        return parsed if isinstance(parsed, dict) else None
+
     def _kill_process_tree(self, process: subprocess.Popen) -> None:
         """
         杀死进程及其所有子进程
@@ -253,6 +284,9 @@ class JavaExecutor:
             ["compile", project_path],
         )
 
+        parsed = self._try_parse_json_stdout(result)
+        if parsed is not None:
+            return parsed
         if result.get("success"):
             try:
                 return json.loads(result["stdout"])
@@ -274,6 +308,10 @@ class JavaExecutor:
             "com.comet.executor.MavenExecutor",
             ["compileTests", project_path],
         )
+
+        parsed = self._try_parse_json_stdout(result)
+        if parsed is not None:
+            return parsed
 
         if result.get("success"):
             try:
@@ -347,6 +385,10 @@ class JavaExecutor:
             timeout=self.test_timeout,  # 使用配置的超时时间
         )
 
+        parsed = self._try_parse_json_stdout(result)
+        if parsed is not None:
+            return parsed
+
         if result.get("success"):
             try:
                 return json.loads(result["stdout"])
@@ -373,6 +415,10 @@ class JavaExecutor:
             ["testWithCoverage", project_path],
             timeout=self.coverage_timeout,  # 使用覆盖率专用的超时时间（更长）
         )
+
+        parsed = self._try_parse_json_stdout(result)
+        if parsed is not None:
+            return parsed
 
         if result.get("success"):
             try:

@@ -405,6 +405,7 @@ class PlannerAgent:
                 else:
                     from pathlib import Path
                     from ..executor.coverage_parser import CoverageParser
+                    import time
 
                     parser = CoverageParser()
 
@@ -415,7 +416,22 @@ class PlannerAgent:
                         / "jacoco"
                         / "jacoco.xml"
                     )
-                    if jacoco_path.exists():
+
+                    # 等待 JaCoCo 报告文件生成（带重试）
+                    # Maven 命令返回成功后，文件可能还在缓冲区/正在写入磁盘
+                    file_found = False
+                    max_wait_attempts = 5
+                    for attempt in range(max_wait_attempts):
+                        if jacoco_path.exists():
+                            file_found = True
+                            break
+                        if attempt < max_wait_attempts - 1:
+                            logger.debug(
+                                f"等待 JaCoCo 报告生成... (尝试 {attempt + 1}/{max_wait_attempts})"
+                            )
+                            time.sleep(0.5)  # 每次等待 0.5 秒
+
+                    if file_found:
                         # 直接从 XML 文件读取全局覆盖率（最准确的方式）
                         global_coverage = parser.aggregate_global_coverage_from_xml(
                             str(jacoco_path)
@@ -572,7 +588,11 @@ class PlannerAgent:
                 if result.get("compile_success") is False:
                     is_success = False
                     error_msg = result.get("error", "编译失败")
-                elif "error" in result and result.get("refined", 0) == 0 and result.get("generated", 0) == 0:
+                elif (
+                    "error" in result
+                    and result.get("refined", 0) == 0
+                    and result.get("generated", 0) == 0
+                ):
                     # refine_tests 或 generate_tests 返回了错误且没有生成任何测试
                     is_success = False
                     error_msg = result.get("error", "Unknown error")
@@ -612,7 +632,7 @@ class PlannerAgent:
                     action=action,
                     params=params,
                     success=False,
-                    result=error_msg or str(result)
+                    result=error_msg or str(result),
                 )
 
                 return None
