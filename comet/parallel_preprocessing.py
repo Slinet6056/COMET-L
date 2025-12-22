@@ -655,64 +655,46 @@ class ParallelPreprocessor:
             logger.info("没有测试用例需要重建")
             return
 
-        # 2. 按目标类分组
-        tests_by_class = defaultdict(list)
+        # 2. 验证每个测试类（每个测试类对应一个 TestCase 对象）
+        logger.info(f"步骤 2: 在验证沙箱中构建和验证 {len(all_test_cases)} 个测试类...")
+
+        # 为每个测试类在验证沙箱中构建和验证测试文件
+        validated_tests = {}  # {class_name: (valid_methods, test_case)}
+
         for test_case in all_test_cases:
-            tests_by_class[test_case.target_class].append(test_case)
-
-        logger.info(
-            f"步骤 2: 在验证沙箱中构建和验证 {len(tests_by_class)} 个类的测试文件..."
-        )
-
-        # 为每个目标类在验证沙箱中构建和验证测试文件
-        validated_tests = {}  # {target_class: (valid_methods, first_tc, test_cases)}
-
-        for target_class, test_cases in tests_by_class.items():
             try:
-                latest_tc = max(test_cases, key=lambda tc: tc.updated_at)
+                class_name = test_case.class_name
 
                 # 检查full_code是否存在
-                if not latest_tc.full_code:
-                    logger.warning(
-                        f"目标类 {target_class} 的最新TestCase没有full_code，跳过"
-                    )
+                if not test_case.full_code:
+                    logger.warning(f"测试类 {class_name} 没有full_code，跳过")
                     continue
 
-                # 检查是否有methods（用于统计）
-                if not latest_tc.methods:
-                    logger.warning(
-                        f"目标类 {target_class} 的最新TestCase没有methods，跳过"
-                    )
+                # 检查是否有methods
+                if not test_case.methods:
+                    logger.warning(f"测试类 {class_name} 没有methods，跳过")
                     continue
-
-                # 使用最新TestCase的所有信息
-                first_tc = latest_tc
-                all_methods = latest_tc.methods
 
                 # 在验证沙箱中构建和验证测试文件
                 valid_methods = self._build_and_validate_in_sandbox(
-                    test_class_name=first_tc.class_name,
-                    target_class=first_tc.target_class,
-                    package_name=first_tc.package_name,
-                    imports=first_tc.imports,
-                    all_methods=all_methods,
+                    test_class_name=test_case.class_name,
+                    target_class=test_case.target_class,
+                    package_name=test_case.package_name,
+                    imports=test_case.imports,
+                    all_methods=test_case.methods,
                 )
 
                 if valid_methods:
                     logger.debug(
-                        f"验证沙箱中验证通过: {first_tc.class_name} ({len(valid_methods)} 个方法)"
+                        f"验证沙箱中验证通过: {class_name} ({len(valid_methods)} 个方法)"
                     )
                     # 保存验证通过的测试信息
-                    validated_tests[target_class] = (
-                        valid_methods,
-                        first_tc,
-                        test_cases,
-                    )
+                    validated_tests[class_name] = (valid_methods, test_case)
                 else:
-                    logger.warning(f"验证沙箱中验证失败: {first_tc.class_name}")
+                    logger.warning(f"验证沙箱中验证失败: {class_name}")
 
             except Exception as e:
-                logger.error(f"在验证沙箱中验证测试文件失败 {target_class}: {e}")
+                logger.error(f"在验证沙箱中验证测试文件失败 {class_name}: {e}")
 
         # 3. 清空workspace测试目录
         logger.info("步骤 3: 清空workspace测试目录...")
@@ -725,69 +707,46 @@ class ParallelPreprocessor:
             f"步骤 4: 将 {len(validated_tests)} 个验证通过的测试写入workspace..."
         )
 
-        for target_class, (
-            valid_methods,
-            first_tc,
-            test_cases,
-        ) in validated_tests.items():
+        for class_name, (valid_methods, test_case) in validated_tests.items():
             try:
-                # 如果first_tc有full_code，直接使用；否则才从methods重建
-                # 验证通过的测试应该已经有完整的full_code
-                if first_tc.full_code:
-                    merged_full_code = first_tc.full_code
+                # 如果有 full_code，直接使用；否则从 methods 重建
+                if test_case.full_code:
+                    final_full_code = test_case.full_code
                 else:
-                    # 回退方案：从methods重建（不应该走到这里）
+                    # 回退方案：从methods重建
                     logger.warning(
-                        f"TestCase {first_tc.class_name} 没有full_code，从methods重建"
+                        f"TestCase {class_name} 没有full_code，从methods重建"
                     )
                     method_codes = [m.code for m in valid_methods]
-                    merged_full_code = build_test_class(
-                        test_class_name=first_tc.class_name,
-                        target_class=first_tc.target_class,
-                        package_name=first_tc.package_name,
-                        imports=first_tc.imports,
+                    final_full_code = build_test_class(
+                        test_class_name=test_case.class_name,
+                        target_class=test_case.target_class,
+                        package_name=test_case.package_name,
+                        imports=test_case.imports,
                         test_methods=method_codes,
                     )
 
                 # 写入workspace
                 write_test_file(
                     project_path=self.workspace_sandbox,
-                    package_name=first_tc.package_name,
-                    test_code=merged_full_code,
-                    test_class_name=first_tc.class_name,
+                    package_name=test_case.package_name,
+                    test_code=final_full_code,
+                    test_class_name=test_case.class_name,
                 )
 
                 logger.info(
-                    f"已写入workspace: {first_tc.class_name} ({len(valid_methods)} 个方法)"
+                    f"已写入workspace: {class_name} ({len(valid_methods)} 个方法)"
                 )
 
-                # 更新所有相关测试用例的 full_code
-                for tc in test_cases:
-                    tc.full_code = merged_full_code
-                    tc.compile_success = True
-                    tc.compile_error = None
-                    # 更新方法列表为验证通过的方法
-                    # 只保留属于当前测试用例的方法
-                    original_method_names = {m.method_name for m in tc.methods}
-                    tc.methods = [
-                        m
-                        for m in valid_methods
-                        if m.method_name in original_method_names
-                    ]
-
-                    # 修复：如果测试用例的所有方法都被过滤掉了，不保存
-                    if not tc.methods:
-                        logger.warning(
-                            f"测试用例 {tc.id} 的所有方法都未通过验证，不保存"
-                        )
-                        continue
-
-                    self.db.save_test_case(tc)
-
-                logger.info(f"已更新数据库中 {len(test_cases)} 个测试用例的 full_code")
+                # 更新测试用例
+                test_case.full_code = final_full_code
+                test_case.methods = valid_methods
+                test_case.compile_success = True
+                test_case.compile_error = None
+                self.db.save_test_case(test_case)
 
             except Exception as e:
-                logger.error(f"写入workspace失败 {target_class}: {e}")
+                logger.error(f"写入测试文件失败 {class_name}: {e}", exc_info=True)
 
     def _build_and_validate_in_sandbox(
         self,
