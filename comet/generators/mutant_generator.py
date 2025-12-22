@@ -10,7 +10,7 @@ from ..models import Mutant, MutationPatch, Contract, Pattern, TestCase
 from ..knowledge.knowledge_base import KnowledgeBase
 from ..utils.hash_utils import generate_id
 from ..utils.code_utils import add_line_numbers
-from ..utils.parsers import parse_mutation_response, normalize_code
+from ..utils.parsers import parse_mutation_response
 
 logger = logging.getLogger(__name__)
 
@@ -126,16 +126,12 @@ class MutantGenerator:
                 try:
                     logger.debug(f"处理变异 #{idx+1}")
 
-                    # 处理代码规范化
-                    original_code = normalize_code(mut_data["original"])
-                    mutated_code = normalize_code(mut_data["mutated"])
-
                     patch = MutationPatch(
                         file_path="",  # 将由调用者设置
                         line_start=mut_data["line_start"],
                         line_end=mut_data["line_end"],
-                        original_code=original_code,
-                        mutated_code=mutated_code,
+                        original_code=mut_data["original"],
+                        mutated_code=mut_data["mutated"],
                     )
 
                     mutant = Mutant(
@@ -278,16 +274,12 @@ class MutantGenerator:
                 try:
                     logger.debug(f"处理变异 #{idx+1}")
 
-                    # 处理代码规范化
-                    original_code = normalize_code(mut_data["original"])
-                    mutated_code = normalize_code(mut_data["mutated"])
-
                     patch = MutationPatch(
                         file_path="",  # 将由调用者设置
                         line_start=mut_data["line_start"],
                         line_end=mut_data["line_end"],
-                        original_code=original_code,
-                        mutated_code=mutated_code,
+                        original_code=mut_data["original"],
+                        mutated_code=mut_data["mutated"],
                     )
 
                     mutant = Mutant(
