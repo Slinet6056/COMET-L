@@ -755,7 +755,6 @@ class ParallelPreprocessor:
                     package_name=first_tc.package_name,
                     test_code=merged_full_code,
                     test_class_name=first_tc.class_name,
-                    merge=False,
                 )
 
                 logger.info(
@@ -923,13 +922,12 @@ class ParallelPreprocessor:
                 test_methods=method_codes,
             )
 
-            # 写入沙箱（可能是验证沙箱或workspace沙箱）
+            # 写入沙箱
             write_test_file(
                 project_path=project_path,
                 package_name=package_name,
                 test_code=full_code,
                 test_class_name=test_class_name,
-                merge=False,
             )
 
             # 步骤1: 验证编译
@@ -1261,7 +1259,6 @@ class ParallelPreprocessor:
                 package_name=package_name,
                 test_code=full_code,
                 test_class_name=test_class_name,
-                merge=False,
             )
 
             # 编译测试

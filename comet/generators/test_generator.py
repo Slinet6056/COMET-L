@@ -12,6 +12,7 @@ from ..utils.hash_utils import generate_id
 from ..utils.code_utils import build_test_class, extract_imports, parse_java_class
 from ..utils.parsers import (
     parse_test_method_response,
+    parse_test_methods_response,
     parse_test_class_response,
     extract_test_method_name,
 )
@@ -86,29 +87,33 @@ class TestGenerator:
             # DEBUG: 记录原始响应
             logger.debug(f"LLM 原始响应: {response[:500]}...")
 
-            # 使用新的解析器解析响应
-            test_code = parse_test_method_response(response)
+            # 使用新的多方法解析器解析响应
+            test_method_codes = parse_test_methods_response(response)
 
-            if not test_code:
+            if not test_method_codes:
                 logger.warning(f"未能解析测试方法: {class_name}.{method_name}")
                 return None
 
-            # 提取方法名
-            test_method_name = extract_test_method_name(test_code)
-            if not test_method_name:
-                # 如果无法提取方法名，使用默认名称
-                test_method_name = f"test_{method_name}"
-                logger.warning(f"无法提取测试方法名，使用默认名称: {test_method_name}")
+            # 创建 TestMethod 对象列表
+            test_methods = []
+            for idx, test_code in enumerate(test_method_codes):
+                # 提取方法名
+                test_method_name = extract_test_method_name(test_code)
+                if not test_method_name:
+                    # 如果无法提取方法名，使用默认名称
+                    test_method_name = f"test_{method_name}_{idx + 1}"
+                    logger.warning(
+                        f"无法提取测试方法名，使用默认名称: {test_method_name}"
+                    )
 
-            # 创建 TestMethod 对象
-            test_method = TestMethod(
-                method_name=test_method_name,
-                code=test_code,
-                target_method=method_name,
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-            )
-            test_methods = [test_method]
+                test_method = TestMethod(
+                    method_name=test_method_name,
+                    code=test_code,
+                    target_method=method_name,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                )
+                test_methods.append(test_method)
             logger.debug(f"成功创建测试方法: {test_method_name}")
 
             # 解析类信息
@@ -120,9 +125,10 @@ class TestGenerator:
 
             # 构建完整测试类
             # 处理内部类：将 $ 替换为下划线，使测试类名合法
-            # 例如：ShippingService$ShippingInfo -> ShippingService_ShippingInfoTest
+            # 命名规则：{class}_{method}Test
+            # 例如：Calculator.add -> Calculator_addTest
             clean_class_name = class_name.replace("$", "_")
-            test_class_name = f"{clean_class_name}Test"
+            test_class_name = f"{clean_class_name}_{method_name}Test"
             method_codes = [m.code for m in test_methods]
 
             full_code = build_test_class(
@@ -184,23 +190,12 @@ class TestGenerator:
             logger.info(f"目标方法: {target_method}")
 
         try:
-            # 找到需要优化的测试方法
-            method_to_refine = None
-            for method in test_case.methods:
-                if target_method and method.target_method == target_method:
-                    method_to_refine = method.code
-                    break
-
-            if not method_to_refine and test_case.methods:
-                # 如果没有指定目标方法或找不到，使用第一个方法
-                method_to_refine = test_case.methods[0].code
-                logger.warning("未找到目标方法的测试，使用第一个测试方法")
-
-            if not method_to_refine:
-                logger.error("没有找到可以优化的测试方法")
+            # 检查测试用例是否有方法
+            if not test_case.methods:
+                logger.error("测试用例没有方法，无法优化")
                 return None
 
-            # 渲染提示词
+            # 渲染提示词（传入所有测试方法）
             system_prompt, user_prompt = self.prompt_manager.render_refine_test(
                 test_case=test_case,
                 class_code=class_code,
@@ -208,7 +203,6 @@ class TestGenerator:
                 survived_mutants=survived_mutants or [],
                 coverage_gaps=coverage_gaps or {},
                 evaluation_feedback=evaluation_feedback,
-                method_to_refine=method_to_refine,
             )
 
             # 调用 LLM（不再使用 json_object 格式）
@@ -221,78 +215,39 @@ class TestGenerator:
             # DEBUG: 记录原始响应
             logger.debug(f"LLM 原始响应: {response[:500]}...")
 
-            # 使用新的解析器解析响应
-            refined_code = parse_test_method_response(response)
+            # 使用新的多方法解析器解析响应
+            refined_method_codes = parse_test_methods_response(response)
 
-            if not refined_code:
+            if not refined_method_codes:
                 logger.warning("未能解析优化后的测试方法")
                 return None
 
-            # 提取方法名
-            refined_method_name = extract_test_method_name(refined_code)
-            if not refined_method_name:
-                # 如果无法提取方法名，使用原方法名
-                refined_method_name = (
-                    test_case.methods[0].method_name
-                    if test_case.methods
-                    else "test_method"
-                )
-                logger.warning(f"无法提取优化后的方法名，使用: {refined_method_name}")
-
-            # 查找被替换的旧方法（通过 target_method 匹配）
-            # 这样即使方法名改变了，也能正确找到要替换的方法
-            old_method_to_replace = None
-            for method in test_case.methods:
-                if target_method and method.target_method == target_method:
-                    old_method_to_replace = method
-                    break
-
-            # 如果没找到匹配的 target_method，但新方法名与某个旧方法名相同，
-            # 则认为是在更新那个方法
-            if not old_method_to_replace:
-                for method in test_case.methods:
-                    if method.method_name == refined_method_name:
-                        old_method_to_replace = method
-                        break
-
-            # 创建优化后的 TestMethod 对象
-            # 如果找到了被替换的旧方法，保留其 created_at
-            refined_method = TestMethod(
-                method_name=refined_method_name,
-                code=refined_code,
-                target_method=target_method
-                or (test_case.methods[0].target_method if test_case.methods else ""),
-                created_at=(
-                    old_method_to_replace.created_at
-                    if old_method_to_replace
-                    else datetime.now()
-                ),
-                updated_at=datetime.now(),
-            )
-
-            # 更新测试方法列表（替换或添加）
+            # 创建新的 TestMethod 列表（完全替换）
             test_methods = []
-            replaced = False
-            for method in test_case.methods:
-                # 如果这是被替换的旧方法，用新方法替换它
-                if (
-                    old_method_to_replace
-                    and method.method_name == old_method_to_replace.method_name
-                ):
-                    if not replaced:  # 确保只替换一次
-                        test_methods.append(refined_method)
-                        replaced = True
-                        if method.method_name != refined_method_name:
-                            logger.info(
-                                f"方法名已更改: {method.method_name} -> {refined_method_name}"
-                            )
-                else:
-                    test_methods.append(method)
+            for idx, refined_code in enumerate(refined_method_codes):
+                # 提取方法名
+                refined_method_name = extract_test_method_name(refined_code)
+                if not refined_method_name:
+                    # 如果无法提取方法名，使用默认名称
+                    refined_method_name = f"test_{target_method or 'method'}_{idx + 1}"
+                    logger.warning(
+                        f"无法提取优化后的方法名，使用: {refined_method_name}"
+                    )
 
-            # 如果没有替换任何方法，说明这是新增的方法
-            if not replaced:
+                # 创建优化后的 TestMethod 对象
+                refined_method = TestMethod(
+                    method_name=refined_method_name,
+                    code=refined_code,
+                    target_method=target_method
+                    or (
+                        test_case.methods[0].target_method if test_case.methods else ""
+                    ),
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                )
                 test_methods.append(refined_method)
-                logger.info(f"添加新测试方法: {refined_method_name}")
+
+            logger.info(f"完全替换测试方法，新方法数量: {len(test_methods)}")
 
             # 构建完整测试类
             method_codes = [m.code for m in test_methods]

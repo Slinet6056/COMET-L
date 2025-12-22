@@ -321,7 +321,31 @@ MUTATED:
     # 测试生成提示词
     GENERATE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门为 Java 代码生成高质量的测试用例。
 
-你的任务是为给定的方法生成一个测试方法，该方法应该在内部包含多个断言来覆盖不同的测试场景。
+你的任务是为给定的方法生成多个测试方法（具体数量由你根据复杂度决定），每个测试方法覆盖不同的测试场景。
+
+**输出格式要求**：
+使用 `===TEST_METHOD===` 分隔每个测试方法：
+
+===TEST_METHOD===
+@Test
+void testAddPositive() {
+    Calculator calc = new Calculator();
+    assertEquals(5, calc.add(2, 3));
+}
+
+===TEST_METHOD===
+@Test
+void testAddNegative() {
+    Calculator calc = new Calculator();
+    assertEquals(-1, calc.add(-3, 2));
+}
+
+===TEST_METHOD===
+@Test
+void testAddBoundary() {
+    Calculator calc = new Calculator();
+    assertEquals(Integer.MAX_VALUE, calc.add(Integer.MAX_VALUE, 0));
+}
 
 **Java 8 语法要求**：
 - **必须使用 Java 8 语法**，不能使用更高版本的特性
@@ -365,29 +389,15 @@ MUTATED:
 - 需要测试特定的异常场景（通过 mock 抛出异常）
 - 需要验证方法调用次数或参数
 
-**测试方法示例**：
-```java
-@Test
-void testCalculatorAdd() {
-    Calculator calc = new Calculator();
-
-    // 测试正常情况
-    assertEquals(5, calc.add(2, 3));
-    assertEquals(0, calc.add(0, 0));
-
-    // 测试边界情况
-    assertEquals(Integer.MAX_VALUE, calc.add(Integer.MAX_VALUE, 0));
-    assertEquals(-1, calc.add(Integer.MAX_VALUE, Integer.MIN_VALUE));
-
-    // 测试异常情况（如果有）
-    assertThrows(IllegalArgumentException.class, () -> calc.add(null, 5));
-}
-```
-
-**重要**：只返回一个完整的测试方法代码，包含 @Test 注解和方法体。不要返回任何 JSON、说明文字、类定义或其他额外内容。"""
+**重要**：
+1. 生成多个独立的测试方法，覆盖正常情况、边界情况、异常情况等
+2. 每个测试方法前必须加 `===TEST_METHOD===` 分隔符
+3. 每个测试方法都是独立的，包含 @Test 注解和完整的方法体
+4. 测试方法名应清晰描述测试场景（如 testAddPositive、testAddBoundary、testAddException）
+5. 不要返回任何 Markdown (```java)、JSON、说明文字、类定义或其他额外内容"""
 
     GENERATE_TEST_USER = Template(
-        """请为以下方法生成一个测试方法：
+        """请为以下方法生成多个测试方法：
 
 类名：{{ class_name }}
 方法签名：{{ method_signature }}
@@ -434,28 +444,55 @@ void testCalculatorAdd() {
 {% endif %}
 
 **测试要求**：
-1. 生成一个测试方法，在方法内包含多个断言覆盖不同场景（正常、边界、异常）
-2. **断言方法**：直接使用 assertEquals、assertTrue、assertThrows 等，不要添加 Assertions. 前缀
-3. 测试方法必须以 @Test 注解开头
-4. 测试方法名应清晰描述测试目标（如 testAdd 或 testAddMethod）
-5. 包含边界情况测试（如 Integer.MAX_VALUE, Integer.MIN_VALUE, 0）
-6. 如果方法可能抛出异常，使用 assertThrows 验证
-7. **如果被测类有依赖项，使用 Mockito 创建 mock 对象**（直接使用 mock()、when()、verify() 等，不要加 Mockito. 前缀）
-8. **测试方法必须在方法内部创建被测对象的实例**，不要使用类字段或假设存在 @BeforeEach 初始化
-9. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
-10. **只返回测试方法的代码，不要返回任何说明、注释或其他内容**
+1. **生成多个独立的测试方法**，分别覆盖不同场景：
+   - 正常情况测试（如 testAddPositive）
+   - 边界情况测试（如 testAddBoundary）
+   - 异常情况测试（如 testAddException）
+2. **每个测试方法前必须加 `===TEST_METHOD===` 分隔符**
+3. **断言方法**：直接使用 assertEquals、assertTrue、assertThrows 等，不要添加 Assertions. 前缀
+4. 每个测试方法必须以 @Test 注解开头
+5. 测试方法名应清晰描述测试场景
+6. 包含边界情况测试（如 Integer.MAX_VALUE, Integer.MIN_VALUE, 0）
+7. 如果方法可能抛出异常，使用 assertThrows 验证
+8. **如果被测类有依赖项，使用 Mockito 创建 mock 对象**（直接使用 mock()、when()、verify() 等，不要加 Mockito. 前缀）
+9. **每个测试方法必须在方法内部创建被测对象的实例**，不要使用类字段或假设存在 @BeforeEach 初始化
+10. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
+11. **只返回测试方法的代码**，使用 `===TEST_METHOD===` 分隔，不要返回任何说明、注释或其他内容
 
-请直接返回测试方法代码。"""
+请按照格式返回多个测试方法。"""
     )
 
     # 测试完善提示词
     REFINE_TEST_SYSTEM = """你是一个 JUnit 测试专家，专门完善和改进现有的测试用例。
 
-你的任务是根据评估反馈（如幸存的变异体、覆盖缺口等）来优化一个测试方法。你可以：
-1. **改进现有测试**：增强断言、添加边界检查、修复逻辑错误
-2. **补充测试场景**：在测试方法内添加更多断言覆盖缺失场景
+你的任务是根据评估反馈（如幸存的变异体、覆盖缺口等）来优化测试。你可以：
+1. **改进现有测试方法**：增强断言、添加边界检查、修复逻辑错误
+2. **生成新的测试方法**：补充缺失的测试场景
 3. **重构测试**：提高测试质量和可维护性
 4. **使用 Mockito 增强隔离性**：对有依赖的场景使用 mock 对象
+
+**输出格式要求**：
+使用 `===TEST_METHOD===` 分隔每个测试方法。你可以返回 1 个优化后的方法，也可以返回多个新方法：
+
+===TEST_METHOD===
+@Test
+void testAddPositive() {
+    Calculator calc = new Calculator();
+    assertEquals(5, calc.add(2, 3));
+}
+
+===TEST_METHOD===
+@Test
+void testAddBoundary() {
+    Calculator calc = new Calculator();
+    assertEquals(Integer.MAX_VALUE, calc.add(Integer.MAX_VALUE, 0));
+}
+
+**重要说明**：
+- 当前测试文件只包含一个目标方法的测试
+- 你必须返回该测试文件的**所有测试方法**（包括需要改进的和不需要改进的）
+- 你返回的所有测试方法将完全替换当前测试文件中的所有方法
+- 可以改进某些方法、删除某些方法、或添加新方法，但必须返回完整的方法列表
 
 **Java 8 语法要求**：
 - **必须使用 Java 8 语法**，不能使用更高版本的特性
@@ -496,10 +533,14 @@ void testCalculatorAdd() {
 - ✖ 错误：不要依赖 `@BeforeEach` 初始化
 - ✔ 正确：在测试方法内部使用 `ClassName obj = new ClassName();` 创建实例
 
-**重要**：只返回优化后的完整测试方法代码，包含 @Test 注解和方法体。不要返回任何 JSON、说明文字或其他额外内容。"""
+**重要**：
+1. 返回 1 个或多个测试方法，每个前面加 `===TEST_METHOD===` 分隔符
+2. 每个测试方法都是独立的，包含 @Test 注解和完整的方法体
+3. 这些方法将完全替换当前测试文件中的所有方法
+4. 不要返回任何 Markdown (```java)、JSON、说明文字或其他额外内容"""
 
     REFINE_TEST_USER = Template(
-        """请优化以下测试方法：
+        """请优化以下测试用例：
 
 目标类：{{ test_case.target_class }}
 {% if target_method %}
@@ -511,10 +552,12 @@ void testCalculatorAdd() {
 {{ class_code }}
 ```
 
-待优化的测试方法：
+当前测试类的所有测试方法：
+{% for method in test_case.methods %}
 ```java
-{{ method_to_refine }}
+{{ method.code }}
 ```
+{% endfor %}
 
 {% if survived_mutants %}
 **幸存变异体（需要击杀）**：
@@ -544,19 +587,21 @@ void testCalculatorAdd() {
 {% endif %}
 
 **完善要求**：
-1. 分析当前测试方法的不足之处
+1. 分析当前所有测试方法的不足之处
 {% if target_method %}
 2. **重点关注目标方法 {{ target_method }}**，优先击杀其幸存的变异体
 {% else %}
 2. 重点关注如何击杀幸存的变异体
 {% endif %}
-3. 补充缺失的测试场景（边界值、异常情况等）
-4. 改进测试的断言和验证逻辑
-5. **测试方法必须在方法内部创建被测对象实例**，不要使用类字段或依赖 @BeforeEach 初始化
-6. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
-7. **只返回优化后的测试方法代码，不要返回任何说明、注释或其他内容**
+3. 你可以：改进某些测试方法、删除重复/无效的测试方法、添加新的测试场景
+4. 补充缺失的测试场景（边界值、异常情况等）
+5. 改进测试的断言和验证逻辑
+6. **每个测试方法必须在方法内部创建被测对象实例**，不要使用类字段或依赖 @BeforeEach 初始化
+7. **严格遵守 Java 8 语法规范**：所有变量必须显式声明类型（不能使用 var），不能使用 switch 表达式、文本块等 Java 8+ 特性
+8. **返回所有测试方法**（包括改进的、保留的、新增的），每个前面加 `===TEST_METHOD===` 分隔符
+9. **只返回测试方法代码**，不要返回任何说明、注释或其他内容
 
-请直接返回优化后的测试方法代码。"""
+请按照格式返回所有测试方法。"""
     )
 
     # 测试修复提示词
@@ -981,7 +1026,6 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         survived_mutants: Optional[List[Any]] = None,
         coverage_gaps: Optional[Dict[str, Any]] = None,
         evaluation_feedback: Optional[str] = None,
-        method_to_refine: Optional[str] = None,
     ) -> tuple[str, str]:
         """渲染测试完善提示词"""
         system = cls.REFINE_TEST_SYSTEM
@@ -992,7 +1036,6 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
             survived_mutants=survived_mutants or [],
             coverage_gaps=coverage_gaps or {},
             evaluation_feedback=evaluation_feedback,
-            method_to_refine=method_to_refine,
         )
         return system, user
 

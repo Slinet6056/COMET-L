@@ -98,9 +98,81 @@ def parse_mutation_response(response: str) -> List[Dict[str, Any]]:
     return mutants
 
 
+def parse_test_methods_response(response: str) -> List[str]:
+    """
+    解析测试方法生成的响应（支持多个测试方法，使用分隔符格式）
+
+    格式示例：
+    ===TEST_METHOD===
+    @Test
+    void testAddPositive() {
+        Calculator calc = new Calculator();
+        assertEquals(5, calc.add(2, 3));
+    }
+
+    ===TEST_METHOD===
+    @Test
+    void testAddNegative() {
+        Calculator calc = new Calculator();
+        assertEquals(-1, calc.add(-3, 2));
+    }
+
+    Args:
+        response: LLM 返回的原始文本
+
+    Returns:
+        测试方法代码列表
+    """
+    test_methods = []
+
+    # 移除可能的 markdown 代码块标记
+    response = response.strip()
+    if response.startswith("```"):
+        lines = response.split("\n")
+        # 移除第一行和最后一行的代码块标记
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        response = "\n".join(lines)
+
+    # 按 ===TEST_METHOD=== 分割
+    parts = response.split("===TEST_METHOD===")
+
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        try:
+            # 验证代码包含 @Test 注解
+            if "@Test" not in part:
+                logger.warning("跳过：代码不包含 @Test 注解")
+                continue
+
+            # 验证代码看起来像一个方法
+            if not re.search(
+                r"(public|protected|private)?\s*(static\s+)?\w+\s+\w+\s*\(", part
+            ):
+                logger.warning("跳过：代码不像是一个完整的方法")
+                continue
+
+            test_methods.append(part)
+
+        except Exception as e:
+            logger.warning(f"解析测试方法失败: {e}")
+            logger.debug(f"Part 内容: {part[:200]}...")
+            continue
+
+    logger.info(f"成功解析 {len(test_methods)} 个测试方法")
+    return test_methods
+
+
 def parse_test_method_response(response: str) -> Optional[str]:
     """
-    解析测试方法生成的响应（纯代码格式）
+    解析测试方法生成的响应（纯代码格式，单个方法）
+
+    注意：此函数为兼容性保留，内部调用 parse_test_methods_response
 
     Args:
         response: LLM 返回的原始文本（应该是一个完整的测试方法）
@@ -108,31 +180,16 @@ def parse_test_method_response(response: str) -> Optional[str]:
     Returns:
         测试方法代码，如果解析失败则返回 None
     """
-    code = response.strip()
+    # 使用新的多方法解析器（兼容无分隔符的情况）
+    methods = parse_test_methods_response(response)
 
-    # 移除可能的 markdown 代码块标记
-    if code.startswith("```"):
-        lines = code.split("\n")
-        # 移除第一行（```java 或 ```）
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        # 移除最后一行（```）
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        code = "\n".join(lines).strip()
-
-    # 验证代码包含 @Test 注解
-    if "@Test" not in code:
-        logger.warning("解析的代码不包含 @Test 注解")
+    if not methods:
         return None
 
-    # 验证代码看起来像一个方法（有 void 或其他返回类型，有括号）
-    if not re.search(r"(public|protected|private)?\s*(static\s+)?\w+\s+\w+\s*\(", code):
-        logger.warning("解析的代码不像是一个完整的方法")
-        return None
+    if len(methods) > 1:
+        logger.warning(f"期望单个方法但解析出 {len(methods)} 个方法，使用第一个方法")
 
-    logger.info("成功解析测试方法")
-    return code
+    return methods[0]
 
 
 def parse_test_class_response(response: str) -> Optional[str]:
