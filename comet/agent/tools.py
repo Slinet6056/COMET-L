@@ -1633,52 +1633,41 @@ class AgentTools:
         # 关键修复：从数据库重建所有测试文件到 workspace
         logger.info("步骤0: 同步测试文件到 workspace...")
 
-        # 按测试类分组（可能有多个 TestCase 对象对应同一个测试类）
-        from collections import defaultdict
+        # 同步每个测试类（每个测试类对应一个 TestCase 对象）
+        compile_success_tests = [tc for tc in test_cases if tc.compile_success]
+        skipped_tests = [tc for tc in test_cases if not tc.compile_success]
 
-        tests_by_class = defaultdict(list)
-        for tc in test_cases:
-            # 只同步compile_success=True的测试
-            if tc.compile_success:
-                tests_by_class[tc.class_name].append(tc)
-            else:
-                logger.warning(f"跳过未通过编译的测试: {tc.class_name} (ID: {tc.id})")
+        for tc in skipped_tests:
+            logger.warning(f"跳过未通过编译的测试: {tc.class_name} (ID: {tc.id})")
 
-        logger.info(f"需要同步 {len(tests_by_class)} 个测试类")
+        logger.info(f"需要同步 {len(compile_success_tests)} 个测试类")
 
-        for class_name, test_case_list in tests_by_class.items():
-            # 使用最新更新的TestCase对象
-            # 按updated_at排序，取最新的TestCase
-            latest_tc = max(test_case_list, key=lambda tc: tc.updated_at)
-
+        for tc in compile_success_tests:
             # 检查full_code是否存在
-            if not latest_tc.full_code:
-                logger.warning(f"测试类 {class_name} 的最新TestCase没有full_code，跳过")
+            if not tc.full_code:
+                logger.warning(f"测试类 {tc.class_name} 没有full_code，跳过")
                 continue
 
-            # 重建测试文件
+            # 写入测试文件
             try:
                 from ..utils.project_utils import write_test_file
 
-                # 直接使用最新TestCase的full_code，而不是从methods重建
-                full_code = latest_tc.full_code
-
                 result = write_test_file(
                     project_path=self.project_path,
-                    package_name=latest_tc.package_name,
-                    test_code=full_code,
-                    test_class_name=class_name,
+                    package_name=tc.package_name,
+                    test_code=tc.full_code,
+                    test_class_name=tc.class_name,
                 )
 
                 if result:
-                    # 统计方法数量（从full_code中提取，或使用methods长度作为估算）
-                    method_count = len(latest_tc.methods) if latest_tc.methods else 0
-                    logger.debug(f"✓ 同步测试类: {class_name} ({method_count} 个方法)")
+                    # 统计方法数量
+                    method_count = len(tc.methods) if tc.methods else 0
+                    logger.debug(f"✓ 同步测试类: {tc.class_name} ({method_count} 个方法)")
                 else:
-                    logger.error(f"✗ 同步测试类失败: {class_name}")
+                    logger.error(f"✗ 同步测试类失败: {tc.class_name}")
 
             except Exception as e:
-                logger.error(f"同步测试类 {class_name} 时出错: {e}", exc_info=True)
+                logger.error(f"同步测试类 {tc.class_name} 时出错: {e}", exc_info=True)
 
         logger.info("✓ 测试文件同步完成")
 
