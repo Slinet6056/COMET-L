@@ -14,7 +14,6 @@ from ..utils.parsers import (
     parse_test_method_response,
     parse_test_class_response,
     extract_test_method_name,
-    normalize_code,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,9 +92,6 @@ class TestGenerator:
             if not test_code:
                 logger.warning(f"未能解析测试方法: {class_name}.{method_name}")
                 return None
-
-            # 处理代码规范化
-            test_code = normalize_code(test_code)
 
             # 提取方法名
             test_method_name = extract_test_method_name(test_code)
@@ -231,9 +227,6 @@ class TestGenerator:
             if not refined_code:
                 logger.warning("未能解析优化后的测试方法")
                 return None
-
-            # 处理代码规范化
-            refined_code = normalize_code(refined_code)
 
             # 提取方法名
             refined_method_name = extract_test_method_name(refined_code)
@@ -373,9 +366,6 @@ class TestGenerator:
                     logger.warning(f"修复尝试 {attempt + 1} 失败: 未返回修复代码")
                     continue
 
-                # 处理代码规范化
-                fixed_code = normalize_code(fixed_code)
-
                 logger.info(f"修复尝试 {attempt + 1} 成功")
 
                 # 更新测试用例
@@ -443,9 +433,6 @@ class TestGenerator:
                 if not fixed_code:
                     logger.warning(f"修复尝试 {attempt + 1} 失败: 未返回修复代码")
                     continue
-
-                # 处理代码规范化
-                fixed_code = normalize_code(fixed_code)
 
                 logger.info(f"修复尝试 {attempt + 1} 成功")
                 return fixed_code

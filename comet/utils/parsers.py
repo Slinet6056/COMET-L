@@ -189,30 +189,3 @@ def extract_test_method_name(test_code: str) -> Optional[str]:
 
     logger.warning("无法从测试代码中提取方法名")
     return None
-
-
-def normalize_code(code: str) -> str:
-    """
-    规范化代码字符串，处理各种转义字符
-
-    Args:
-        code: 可能包含转义字符的代码字符串
-
-    Returns:
-        规范化后的代码字符串
-    """
-    if not code:
-        return code
-
-    # 如果代码中包含字面的 \n（反斜杠+n），但没有实际的换行符，进行转换
-    if "\\n" in code:
-        has_actual_newline = "\n" in code.replace("\\n", "")
-        if not has_actual_newline:
-            try:
-                code = code.encode().decode("unicode_escape")
-            except (UnicodeDecodeError, UnicodeEncodeError):
-                code = code.replace("\\n", "\n")
-        else:
-            code = code.replace("\\n", "\n")
-
-    return code
