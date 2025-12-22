@@ -208,17 +208,15 @@ def write_test_file(
     package_name: str,
     test_code: str,
     test_class_name: str,
-    merge: bool = True,
 ) -> Optional[Path]:
     """
-    将测试代码写入文件（支持追加模式）
+    将测试代码写入文件（直接覆盖）
 
     Args:
         project_path: 项目路径
         package_name: 包名
         test_code: 测试代码
         test_class_name: 测试类名
-        merge: 是否合并已有测试（默认True）
 
     Returns:
         写入的文件路径，如果失败则返回 None
@@ -238,170 +236,12 @@ def write_test_file(
     # 写入文件
     test_file = package_dir / f"{test_class_name}.java"
     try:
-        # 如果文件存在且需要合并，则提取现有测试方法
-        if merge and test_file.exists():
-            existing_code = test_file.read_text(encoding="utf-8")
-            merged_code = _merge_test_methods(existing_code, test_code)
-            test_file.write_text(merged_code, encoding="utf-8")
-            logger.info(f"测试文件已更新（合并模式）: {test_file}")
-        else:
-            test_file.write_text(test_code, encoding="utf-8")
-            logger.info(f"测试文件已写入: {test_file}")
+        test_file.write_text(test_code, encoding="utf-8")
+        logger.info(f"测试文件已写入: {test_file}")
         return test_file
     except Exception as e:
         logger.error(f"写入测试文件失败: {e}")
         return None
-
-
-def _merge_test_methods(existing_code: str, new_code: str) -> str:
-    """
-    合并测试方法（支持更新和添加）
-
-    规则：
-    - 如果新方法名不存在于现有代码中，则添加
-    - 如果新方法名已存在，则用新方法替换旧方法（支持版本更新）
-
-    Args:
-        existing_code: 现有测试代码
-        new_code: 新生成的测试代码
-
-    Returns:
-        合并后的测试代码
-    """
-    import re
-
-    # 提取现有测试方法（方法名 -> 方法代码）
-    existing_methods_dict = _extract_test_methods(existing_code)
-    logger.debug(f"现有测试方法: {set(existing_methods_dict.keys())}")
-
-    # 从新代码中提取测试方法
-    new_test_methods = _extract_test_methods(new_code)
-
-    # 分类：需要更新的、需要添加的
-    methods_to_update = []
-    methods_to_add = []
-
-    for method_name, method_code in new_test_methods.items():
-        if method_name in existing_methods_dict:
-            # 比较代码是否有变化
-            if existing_methods_dict[method_name].strip() != method_code.strip():
-                methods_to_update.append((method_name, method_code))
-                logger.debug(f"更新测试方法: {method_name}")
-            else:
-                logger.debug(f"跳过重复测试方法: {method_name} (无变化)")
-        else:
-            methods_to_add.append(method_code)
-            logger.debug(f"添加新测试方法: {method_name}")
-
-    # 如果没有任何变化，直接返回
-    if not methods_to_update and not methods_to_add:
-        logger.info("没有新测试方法需要添加")
-        return existing_code
-
-    # 替换需要更新的方法
-    result_code = existing_code
-    for method_name, new_method_code in methods_to_update:
-        old_method_code = existing_methods_dict[method_name]
-        # 替换整个方法
-        result_code = result_code.replace(old_method_code, new_method_code)
-
-    # 在类结束前插入新方法
-    if methods_to_add:
-        last_brace_pos = result_code.rfind("}")
-        if last_brace_pos == -1:
-            logger.error("无法找到类结束标记")
-            return result_code
-
-        before_brace = result_code[:last_brace_pos].rstrip()
-        new_methods_str = "\n\n    ".join(methods_to_add)
-        result_code = f"{before_brace}\n\n    {new_methods_str}\n}}"
-
-    logger.info(
-        f"成功更新 {len(methods_to_update)} 个测试方法，添加 {len(methods_to_add)} 个新测试方法"
-    )
-    return result_code
-
-
-def _extract_test_methods(code: str) -> dict:
-    """
-    从代码中提取所有@Test和@ParameterizedTest测试方法
-
-    Args:
-        code: Java测试代码
-
-    Returns:
-        {method_name: method_code} 字典
-    """
-    import re
-
-    methods = {}
-    lines = code.split("\n")
-    i = 0
-
-    while i < len(lines):
-        line = lines[i].strip()
-
-        # 找到@Test或@ParameterizedTest注解（支持多行注解）
-        if line.startswith("@Test") or line.startswith("@ParameterizedTest"):
-            method_start = i
-
-            # 收集所有注解行（@Test, @ParameterizedTest, @CsvSource, @ValueSource等）
-            annotation_lines = [lines[i]]
-            i += 1
-
-            # 继续收集后续的注解行
-            while i < len(lines):
-                current_line = lines[i].strip()
-                # 如果是注解相关的行（@开头或注解内容如CsvSource的值）
-                if current_line.startswith("@") or (
-                    annotation_lines
-                    and (
-                        current_line.startswith('"')
-                        or current_line.startswith("}")
-                        or current_line.startswith("{")
-                    )
-                ):
-                    annotation_lines.append(lines[i])
-                    i += 1
-                else:
-                    # 到达方法签名行
-                    break
-
-            if i >= len(lines):
-                break
-
-            # 提取方法名
-            match = re.search(r"void\s+(\w+)\s*\(", lines[i])
-            if not match:
-                continue
-            method_name = match.group(1)
-
-            # 初始化方法行（包含所有注解行和方法签名）
-            method_lines = annotation_lines + [lines[i]]
-
-            # 计算方法签名行中的大括号
-            brace_count = lines[i].count("{") - lines[i].count("}")
-            i += 1
-
-            # 找到匹配的闭合大括号
-            while i < len(lines):
-                line = lines[i]
-                method_lines.append(line)
-
-                # 计算大括号
-                brace_count += line.count("{") - line.count("}")
-
-                # 当大括号平衡且当前行包含}时，方法结束
-                if brace_count == 0 and "}" in line:
-                    # 方法结束
-                    methods[method_name] = "\n".join(method_lines)
-                    break
-
-                i += 1
-
-        i += 1
-
-    return methods
 
 
 def is_maven_project(project_path: str) -> bool:
