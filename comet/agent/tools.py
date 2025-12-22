@@ -1998,6 +1998,7 @@ class AgentTools:
                 # 解析覆盖率报告
                 from pathlib import Path
                 from ..executor.coverage_parser import CoverageParser
+                import time
 
                 parser = CoverageParser()
                 jacoco_path = (
@@ -2008,7 +2009,21 @@ class AgentTools:
                     / "jacoco.xml"
                 )
 
-                if jacoco_path.exists():
+                # 等待 JaCoCo 报告文件生成（带重试）
+                # Maven 命令返回成功后，文件可能还在缓冲区/正在写入磁盘
+                file_found = False
+                max_wait_attempts = 5
+                for attempt in range(max_wait_attempts):
+                    if jacoco_path.exists():
+                        file_found = True
+                        break
+                    if attempt < max_wait_attempts - 1:
+                        logger.debug(
+                            f"等待 JaCoCo 报告生成... (尝试 {attempt + 1}/{max_wait_attempts})"
+                        )
+                        time.sleep(0.5)  # 每次等待 0.5 秒
+
+                if file_found:
                     logger.info(f"解析 JaCoCo 报告: {jacoco_path}")
                     method_coverages = parser.parse_jacoco_xml_with_lines(
                         str(jacoco_path)
@@ -2038,7 +2053,9 @@ class AgentTools:
                             f"已更新 state 中的全局覆盖率: 行 {self.state.line_coverage:.1%}, 分支 {self.state.branch_coverage:.1%}"
                         )
                 else:
-                    logger.warning(f"JaCoCo 报告不存在: {jacoco_path}")
+                    logger.warning(
+                        f"JaCoCo 报告在等待 {max_wait_attempts * 0.5}秒 后仍不存在: {jacoco_path}"
+                    )
         except Exception as e:
             logger.warning(f"覆盖率分析失败: {e}", exc_info=True)
 
