@@ -1,5 +1,9 @@
 package com.comet.analyzer;
 
+import java.io.File;
+import java.io.IOException;
+import java.util.Optional;
+
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParseResult;
 import com.github.javaparser.ast.CompilationUnit;
@@ -7,12 +11,8 @@ import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.comments.JavadocComment;
 import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 import com.google.gson.JsonArray;
-
-import java.io.File;
-import java.io.IOException;
-import java.util.Optional;
+import com.google.gson.JsonObject;
 
 /**
  * 代码分析器 - 使用 JavaParser 提取代码信息
