@@ -15,7 +15,6 @@ import org.apache.maven.shared.invoker.InvocationRequest;
 import org.apache.maven.shared.invoker.InvocationResult;
 import org.apache.maven.shared.invoker.Invoker;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
 /**
@@ -24,11 +23,9 @@ import com.google.gson.JsonObject;
 public class MavenExecutor {
 
     private final Invoker invoker;
-    private final Gson gson;
 
     public MavenExecutor() {
         this.invoker = new DefaultInvoker();
-        this.gson = new Gson();
 
         // 尝试找到 Maven 安装路径
         String mavenHome = System.getenv("M2_HOME");
