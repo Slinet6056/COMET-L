@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, List, Optional
 from jinja2 import Template
+from ..utils.code_utils import add_line_numbers
 
 
 class PromptManager:
@@ -402,9 +403,9 @@ void testAddBoundary() {
 类名：{{ class_name }}
 方法签名：{{ method_signature }}
 
-完整类代码：
+完整类代码（带行号）：
 ```java
-{{ class_code }}
+{{ class_code_with_lines }}
 ```
 
 {% if contracts %}
@@ -547,9 +548,9 @@ void testAddBoundary() {
 目标方法：{{ target_method }}（请重点针对此方法进行测试优化）
 {% endif %}
 
-被测类完整代码：
+被测类完整代码（带行号）：
 ```java
-{{ class_code }}
+{{ class_code_with_lines }}
 ```
 
 当前测试类的所有测试方法：
@@ -1006,10 +1007,12 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
     ) -> tuple[str, str]:
         """渲染测试生成提示词"""
         system = cls.GENERATE_TEST_SYSTEM
+        # 添加行号以便LLM准确定位未覆盖的代码行
+        class_code_with_lines = add_line_numbers(class_code)
         user = cls.GENERATE_TEST_USER.render(
             class_name=class_name,
             method_signature=method_signature,
-            class_code=class_code,
+            class_code_with_lines=class_code_with_lines,
             contracts=contracts,
             survived_mutants=survived_mutants or [],
             coverage_gaps=coverage_gaps or {},
@@ -1029,9 +1032,11 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
     ) -> tuple[str, str]:
         """渲染测试完善提示词"""
         system = cls.REFINE_TEST_SYSTEM
+        # 添加行号以便LLM准确定位未覆盖的代码行
+        class_code_with_lines = add_line_numbers(class_code)
         user = cls.REFINE_TEST_USER.render(
             test_case=test_case,
-            class_code=class_code,
+            class_code_with_lines=class_code_with_lines,
             target_method=target_method,
             survived_mutants=survived_mutants or [],
             coverage_gaps=coverage_gaps or {},
