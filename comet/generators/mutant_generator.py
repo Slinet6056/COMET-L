@@ -103,11 +103,10 @@ class MutantGenerator:
                 target_method=target_method,
             )
 
-            # 调用 LLM（不再使用 json_object 格式）
+            # 调用 LLM（不再使用 json_object 格式，使用配置文件的 temperature）
             response = self.llm.chat_with_system(
                 system_prompt=system,
                 user_prompt=user,
-                temperature=0.8,  # 较高温度以增加多样性
             )
 
             # DEBUG: 记录原始响应
@@ -251,11 +250,10 @@ class MutantGenerator:
                 target_method=target_method,
             )
 
-            # 调用 LLM（不再使用 json_object 格式）
+            # 调用 LLM（不再使用 json_object 格式，使用配置文件的 temperature）
             response = self.llm.chat_with_system(
                 system_prompt=system,
                 user_prompt=user,
-                temperature=0.8,  # 较高温度以增加多样性
             )
 
             # DEBUG: 记录原始响应
