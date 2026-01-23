@@ -19,6 +19,7 @@ from .project_utils import (
     write_test_file,
     is_maven_project,
 )
+from .java_formatter import JavaFormatter, format_java_file
 from .class_mapper import ClassMapper, ClassInfo
 from .project_scanner import ProjectScanner
 
@@ -39,6 +40,8 @@ __all__ = [
     "get_all_java_classes",
     "write_test_file",
     "is_maven_project",
+    "JavaFormatter",
+    "format_java_file",
     "ClassMapper",
     "ClassInfo",
     "ProjectScanner",

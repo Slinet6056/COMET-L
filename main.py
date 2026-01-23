@@ -187,6 +187,7 @@ def initialize_system(config: Settings):
     tools.sandbox_manager = sandbox_manager
 
     # 注入配置参数
+    tools.config = config  # 注入系统配置（用于格式化配置等）
     try:
         tools.min_method_lines = config.evolution.min_method_lines
     except AttributeError:
