@@ -77,11 +77,10 @@ class TestGenerator:
                 existing_tests=existing_tests or [],
             )
 
-            # 调用 LLM（不再使用 json_object 格式）
+            # 调用 LLM（不再使用 json_object 格式，使用配置文件的 temperature）
             response = self.llm.chat_with_system(
                 system_prompt=system,
                 user_prompt=user,
-                temperature=0.7,
             )
 
             # DEBUG: 记录原始响应
@@ -205,11 +204,10 @@ class TestGenerator:
                 evaluation_feedback=evaluation_feedback,
             )
 
-            # 调用 LLM（不再使用 json_object 格式）
+            # 调用 LLM（不再使用 json_object 格式，使用配置文件的 temperature）
             response = self.llm.chat_with_system(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=0.6,
             )
 
             # DEBUG: 记录原始响应
@@ -304,11 +302,10 @@ class TestGenerator:
                     class_code=class_code,
                 )
 
-                # 调用 LLM 修复（不再使用 json_object 格式）
+                # 调用 LLM 修复（不再使用 json_object 格式，使用配置文件的 temperature）
                 response = self.llm.chat_with_system(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
-                    temperature=0.3,  # 较低温度以获得更确定的修复
                 )
 
                 # DEBUG: 记录原始响应
@@ -372,11 +369,10 @@ class TestGenerator:
                     )
                 )
 
-                # 调用 LLM（不再使用 json_object 格式）
+                # 调用 LLM（不再使用 json_object 格式，使用配置文件的 temperature）
                 response = self.llm.chat_with_system(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
-                    temperature=0.3,
                 )
 
                 # DEBUG: 记录原始响应

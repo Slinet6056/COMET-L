@@ -528,11 +528,10 @@ class PlannerAgent:
                 state=self.state.to_dict(), tools_description=tools_description
             )
 
-            # 调用 LLM
+            # 调用 LLM（使用配置文件的 temperature）
             response = self.llm.chat_with_system(
                 system_prompt=system,
                 user_prompt=user,
-                temperature=0.5,
                 response_format={"type": "json_object"},
             )
 
