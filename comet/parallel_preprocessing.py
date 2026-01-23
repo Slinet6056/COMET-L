@@ -72,6 +72,21 @@ class ParallelPreprocessor:
 
         logger.info(f"并行预处理器初始化完成，最大并发数: {self.max_workers}")
 
+    def _get_formatting_config(self) -> tuple:
+        """
+        获取格式化配置
+
+        Returns:
+            (formatting_enabled, formatting_style) 元组
+        """
+        if self.config is not None:
+            try:
+                formatting = self.config.formatting
+                return (formatting.enabled, formatting.style)
+            except AttributeError:
+                pass
+        return (None, None)
+
     def run(self, project_path: str, workspace_sandbox: str) -> Dict[str, Any]:
         """
         运行并行预处理
@@ -457,11 +472,14 @@ class ParallelPreprocessor:
 
             # 写入测试文件到沙箱（传入数据库以支持多类文件）
             sandbox_file_path = find_java_file(sandbox_path, class_name, db=self.db)
+            formatting_enabled, formatting_style = self._get_formatting_config()
             test_file = write_test_file(
                 project_path=sandbox_path,
                 package_name=test_case.package_name,
                 test_code=test_case.full_code,
                 test_class_name=test_case.class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
             )
 
             if not test_file:
@@ -489,6 +507,7 @@ class ParallelPreprocessor:
             tools.java_executor = self.java_executor
             tools.test_generator = self.test_generator
             tools.db = self.db  # 必须设置db，否则_rebuild_test_file_from_db会失败
+            tools.config = self.config  # 注入配置（用于格式化配置等）
 
             test_case = tools._verify_and_fix_tests(
                 test_case=test_case,
@@ -727,11 +746,14 @@ class ParallelPreprocessor:
                     )
 
                 # 写入workspace
+                formatting_enabled, formatting_style = self._get_formatting_config()
                 write_test_file(
                     project_path=self.workspace_sandbox,
                     package_name=test_case.package_name,
                     test_code=final_full_code,
                     test_class_name=test_case.class_name,
+                    formatting_enabled=formatting_enabled,
+                    formatting_style=formatting_style,
                 )
 
                 logger.info(
@@ -972,12 +994,15 @@ class ParallelPreprocessor:
 
         try:
             # 写入所有测试类
+            formatting_enabled, formatting_style = self._get_formatting_config()
             for test_case in test_cases:
                 write_test_file(
                     project_path=validation_sandbox,
                     package_name=test_case.package_name,
                     test_code=test_case.full_code,
                     test_class_name=test_case.class_name,
+                    formatting_enabled=formatting_enabled,
+                    formatting_style=formatting_style,
                 )
 
             # 编译测试
@@ -1019,6 +1044,7 @@ class ParallelPreprocessor:
 
         logger.info(f"重新构建 workspace 测试文件，共 {len(all_test_cases)} 个测试类")
 
+        formatting_enabled, formatting_style = self._get_formatting_config()
         for test_case in all_test_cases:
             if test_case.full_code and test_case.methods:
                 write_test_file(
@@ -1026,6 +1052,8 @@ class ParallelPreprocessor:
                     package_name=test_case.package_name,
                     test_code=test_case.full_code,
                     test_class_name=test_case.class_name,
+                    formatting_enabled=formatting_enabled,
+                    formatting_style=formatting_style,
                 )
                 logger.debug(f"重新写入测试类: {test_case.class_name}")
 
@@ -1163,11 +1191,14 @@ class ParallelPreprocessor:
             )
 
             # 写入沙箱
+            formatting_enabled, formatting_style = self._get_formatting_config()
             write_test_file(
                 project_path=project_path,
                 package_name=package_name,
                 test_code=full_code,
                 test_class_name=test_class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
             )
 
             # 步骤1: 验证编译
@@ -1494,11 +1525,14 @@ class ParallelPreprocessor:
             )
 
             # 写入测试文件
+            formatting_enabled, formatting_style = self._get_formatting_config()
             write_test_file(
                 project_path=validation_sandbox,
                 package_name=package_name,
                 test_code=full_code,
                 test_class_name=test_class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
             )
 
             # 编译测试

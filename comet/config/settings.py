@@ -28,6 +28,13 @@ class LLMConfig(BaseModel):
     )
 
 
+class FormattingConfig(BaseModel):
+    """代码格式化配置"""
+
+    enabled: bool = Field(default=True, description="是否启用代码格式化")
+    style: str = Field(default="GOOGLE", description="格式化风格 (GOOGLE 或 AOSP)")
+
+
 class ExecutionConfig(BaseModel):
     """执行配置"""
 
@@ -117,6 +124,7 @@ class Settings(BaseModel):
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
+    formatting: FormattingConfig = Field(default_factory=FormattingConfig)
 
     @classmethod
     def from_yaml(cls, config_path: str) -> "Settings":

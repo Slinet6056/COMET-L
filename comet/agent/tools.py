@@ -43,9 +43,25 @@ class AgentTools:
         self.pattern_extractor: Any = None
         self.sandbox_manager: Any = None
         self.state: Any = None
+        self.config: Any = None  # 系统配置（用于访问格式化配置等）
         self.min_method_lines: int = 5  # 目标方法的最小行数
 
         self._register_default_tools()
+
+    def _get_formatting_config(self) -> tuple:
+        """
+        获取格式化配置
+
+        Returns:
+            (formatting_enabled, formatting_style) 元组
+        """
+        if self.config is not None:
+            try:
+                formatting = self.config.formatting
+                return (formatting.enabled, formatting.style)
+            except AttributeError:
+                pass
+        return (None, None)
 
     def _register_default_tools(self) -> None:
         """注册默认工具"""
@@ -364,11 +380,14 @@ class AgentTools:
                 }
 
             # 6. 写入测试文件到沙箱
+            formatting_enabled, formatting_style = self._get_formatting_config()
             test_file = write_test_file(
                 project_path=sandbox_path,
                 package_name=test_case.package_name,
                 test_code=test_case.full_code,
                 test_class_name=test_case.class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
             )
 
             if not test_file:
@@ -517,11 +536,14 @@ class AgentTools:
             class_code = extract_class_from_file(str(file_path))
 
             # 4. 将主空间的测试文件复制到沙箱（使用数据库中的测试代码）
+            formatting_enabled, formatting_style = self._get_formatting_config()
             write_test_file(
                 project_path=sandbox_path,
                 package_name=original_test_case.package_name,
                 test_code=original_test_case.full_code,
                 test_class_name=original_test_case.class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
             )
 
             # 5. 获取幸存变异体和覆盖缺口
@@ -570,11 +592,14 @@ class AgentTools:
                 }
 
             # 7. 写入完善后的测试文件到沙箱
+            formatting_enabled, formatting_style = self._get_formatting_config()
             test_file = write_test_file(
                 project_path=sandbox_path,
                 package_name=refined_test_case.package_name,
                 test_code=refined_test_case.full_code,
                 test_class_name=refined_test_case.class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
             )
 
             if not test_file:
@@ -689,11 +714,14 @@ class AgentTools:
             logger.info(f"提交测试到主工作空间: {test_case.class_name}")
 
             # 写入主工作空间
+            formatting_enabled, formatting_style = self._get_formatting_config()
             test_file = write_test_file(
                 project_path=self.project_path,
                 package_name=test_case.package_name,
                 test_code=test_case.full_code,
                 test_class_name=test_case.class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
             )
 
             if not test_file:
@@ -786,11 +814,14 @@ class AgentTools:
                 return test_case
 
             # 写入修复后的测试文件（直接覆盖）
+            formatting_enabled, formatting_style = self._get_formatting_config()
             test_file = write_test_file(
                 project_path=self.project_path,
                 package_name=fixed_test_case.package_name,
                 test_code=fixed_test_case.full_code,
                 test_class_name=fixed_test_case.class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
             )
             test_case = fixed_test_case
 
@@ -851,11 +882,14 @@ class AgentTools:
                 )
 
                 # 写入更新后的测试文件
+                formatting_enabled, formatting_style = self._get_formatting_config()
                 write_test_file(
                     project_path=self.project_path,
                     package_name=test_case.package_name,
                     test_code=test_case.full_code,
                     test_class_name=test_case.class_name,
+                    formatting_enabled=formatting_enabled,
+                    formatting_style=formatting_style,
                 )
 
                 logger.info(
@@ -985,11 +1019,14 @@ class AgentTools:
                 )
 
                 # 写入并测试
+                formatting_enabled, formatting_style = self._get_formatting_config()
                 write_test_file(
                     project_path=self.project_path,
                     package_name=test_case.package_name,
                     test_code=temp_full_code,
                     test_class_name=test_case.class_name,
+                    formatting_enabled=formatting_enabled,
+                    formatting_style=formatting_style,
                 )
 
                 compile_res = self.java_executor.compile_tests(self.project_path)
@@ -1047,11 +1084,14 @@ class AgentTools:
         )
 
         # 最后写入并验证
+        formatting_enabled, formatting_style = self._get_formatting_config()
         write_test_file(
             project_path=self.project_path,
             package_name=test_case.package_name,
             test_code=test_case.full_code,
             test_class_name=test_case.class_name,
+            formatting_enabled=formatting_enabled,
+            formatting_style=formatting_style,
         )
 
         final_compile = self.java_executor.compile_tests(self.project_path)
@@ -1114,11 +1154,14 @@ class AgentTools:
             )
 
             # 写入测试文件
+            formatting_enabled, formatting_style = self._get_formatting_config()
             write_test_file(
                 project_path=self.project_path,
                 package_name=test_case.package_name,
                 test_code=temp_full_code,
                 test_class_name=test_case.class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
             )
 
             # 编译测试
@@ -1652,11 +1695,14 @@ class AgentTools:
             try:
                 from ..utils.project_utils import write_test_file
 
+                formatting_enabled, formatting_style = self._get_formatting_config()
                 result = write_test_file(
                     project_path=self.project_path,
                     package_name=tc.package_name,
                     test_code=tc.full_code,
                     test_class_name=tc.class_name,
+                    formatting_enabled=formatting_enabled,
+                    formatting_style=formatting_style,
                 )
 
                 if result:

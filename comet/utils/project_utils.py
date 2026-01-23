@@ -208,6 +208,9 @@ def write_test_file(
     package_name: str,
     test_code: str,
     test_class_name: str,
+    format_code: bool = True,
+    formatting_enabled: Optional[bool] = None,
+    formatting_style: Optional[str] = None,
 ) -> Optional[Path]:
     """
     将测试代码写入文件（直接覆盖）
@@ -217,6 +220,9 @@ def write_test_file(
         package_name: 包名
         test_code: 测试代码
         test_class_name: 测试类名
+        format_code: 是否格式化代码（默认 True，已废弃，请使用 formatting_enabled）
+        formatting_enabled: 是否启用格式化（来自配置，优先于 format_code）
+        formatting_style: 格式化风格 (GOOGLE 或 AOSP)
 
     Returns:
         写入的文件路径，如果失败则返回 None
@@ -226,18 +232,29 @@ def write_test_file(
         logger.error("无法创建测试目录")
         return None
 
-    # 根据包名创建目录结构
     if package_name:
         package_dir = test_root / package_name.replace(".", "/")
         package_dir.mkdir(parents=True, exist_ok=True)
     else:
         package_dir = test_root
 
-    # 写入文件
     test_file = package_dir / f"{test_class_name}.java"
     try:
         test_file.write_text(test_code, encoding="utf-8")
         logger.info(f"测试文件已写入: {test_file}")
+
+        # 确定是否格式化：优先使用 formatting_enabled 配置，否则使用 format_code 参数
+        should_format = formatting_enabled if formatting_enabled is not None else format_code
+
+        if should_format:
+            from .java_formatter import format_java_file
+
+            style = formatting_style or "GOOGLE"
+            if format_java_file(str(test_file), style=style):
+                logger.debug(f"测试文件已格式化 (style={style}): {test_file}")
+            else:
+                logger.debug(f"格式化跳过或失败: {test_file}")
+
         return test_file
     except Exception as e:
         logger.error(f"写入测试文件失败: {e}")
