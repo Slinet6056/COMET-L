@@ -19,7 +19,7 @@ COMET-L（LLM 驱动的测试变异协同进化系统）是一个创新的自动
 # direnv 会自动激活虚拟环境和设置 Java 8
 # 首次使用需允许: direnv allow
 
-# 安装 Python 依赖
+# 安装 Python 依赖（包括 ChromaDB、sentence-transformers 等）
 pip install -r requirements.txt
 
 # 构建 Java 运行时模块（必须先完成此步骤）
@@ -27,6 +27,8 @@ cd java-runtime
 mvn clean package
 cd ..
 ```
+
+**注意**：首次运行时，系统会自动下载嵌入模型（sentence-transformers），可能需要一些时间。
 
 ## 常用命令
 
@@ -57,6 +59,12 @@ python main.py --project-path /path/to/project --resume output/interrupted_state
 cp config.example.yaml config.yaml
 # 编辑 config.yaml，设置 LLM API 密钥和其他参数
 ```
+
+**主要配置项**：
+- `llm` - LLM 相关配置（API 密钥、模型、温度等）
+- `knowledge` - RAG 知识库配置（启用开关、检索参数、嵌入模型）
+- `preprocessing` - 并行预处理配置（启用开关、工作线程数）
+- `formatting` - 代码格式化配置（Java 代码风格）
 
 ## 系统架构
 
@@ -97,9 +105,15 @@ cp config.example.yaml config.yaml
   - `coverage_parser.py` - 解析 JaCoCo 覆盖率报告
   - `surefire_parser.py` - 解析 Maven Surefire 测试报告
 
-- `comet/knowledge/` - 知识库系统
+- `comet/knowledge/` - RAG 知识库系统（最新集成）
+  - `knowledge_base.py` - 知识库主类，统一管理源代码契约和 Bug 模式
+  - `vector_store.py` - ChromaDB 向量存储封装，支持语义检索
+  - `chunker.py` - 智能文本分块器，针对代码和 Bug 报告优化
+  - `embedding.py` - 嵌入生成器，支持 OpenAI embeddings
+  - `retriever.py` - 检索器，实现混合检索策略（语义+关键词）
+  - `bug_parser.py` - Bug 报告解析器，从 Markdown 提取缺陷模式
   - 从源代码提取契约（前置条件、后置条件、不变量）
-  - 从 Bug 报告学习缺陷模式
+  - 从 Bug 报告学习缺陷模式，为测试生成提供上下文
 
 - `comet/llm/` - LLM 客户端和提示词管理
   - `client.py` - OpenAI API 客户端
@@ -113,6 +127,7 @@ cp config.example.yaml config.yaml
 **Java 侧（运行时模块）**
 - `java-runtime/src/main/java/com/comet/`
   - `analyzer/` - 代码分析（JavaParser）
+    - `DeepAnalyzer.java` - 深度代码分析，提取方法签名、依赖关系、控制流信息
   - `executor/` - 测试执行和覆盖率收集
   - `mutator/` - 变异体应用
   - `formatter/` - 代码格式化（使用 google-java-format）
@@ -143,6 +158,16 @@ cp config.example.yaml config.yaml
 - 系统自动识别外部依赖并使用 Mockito 5 创建隔离的单元测试
 - 生成的测试包含必要的 @ExtendWith(MockitoExtension.class) 和 @Mock 注解
 
+**RAG 知识库系统**（最新集成）
+- 使用 ChromaDB 作为向量数据库，支持语义检索
+- 智能文本分块：代码分块保留方法完整性，Bug 报告按语义段落分块
+- 混合检索策略：结合语义相似度和关键词匹配，提高检索准确性
+- 知识来源：
+  - 源代码契约：从 JavaDoc、异常处理、断言提取前置/后置条件
+  - Bug 报告：从 `examples/*/bug-reports/*.md` 学习历史缺陷模式
+- 配置位于 `config.yaml` 的 `knowledge` 部分
+- 为测试生成和变异体生成提供领域知识上下文，提高生成质量
+
 ## 开发注意事项
 
 ### LLM 提示词修改
@@ -158,7 +183,11 @@ cd java-runtime && mvn clean package && cd ..
 - 使用 `--debug` 标志启用详细日志
 - 日志文件：`comet.log`
 - 沙箱目录：`./sandbox/` - 保留了所有中间文件，便于调试
-- 数据库：`./cache/comet.db` 和 `./cache/knowledge.db` - 可用 SQLite 工具查看
+- 数据库文件：
+  - `./cache/comet.db` - 变异体、测试用例、覆盖率数据
+  - `./cache/knowledge.db` - RAG 知识库（契约和 Bug 模式）
+  - 可用 SQLite 工具查看
+- ChromaDB 向量数据：`./cache/chroma/` - 语义检索索引
 
 ### 测试输出
 生成的测试文件最终会导出到原项目的 `src/test/java/` 目录，命名规则：`{ClassName}_{methodName}Test.java`
