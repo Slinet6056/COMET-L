@@ -1,13 +1,13 @@
 """变异生成器"""
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import datetime
 
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
 from ..models import Mutant, MutationPatch, Contract, Pattern, TestCase
-from ..knowledge.knowledge_base import KnowledgeBase
+from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase
 from ..utils.hash_utils import generate_id
 from ..utils.code_utils import add_line_numbers
 from ..utils.parsers import parse_mutation_response
@@ -16,19 +16,55 @@ logger = logging.getLogger(__name__)
 
 
 class MutantGenerator:
-    """变异生成器 - 基于 LLM 生成语义变异"""
+    """变异生成器 - 基于 LLM 生成语义变异（支持 RAG 增强）"""
 
-    def __init__(self, llm_client: LLMClient, knowledge_base: KnowledgeBase):
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        knowledge_base: Union[KnowledgeBase, RAGKnowledgeBase],
+    ):
         """
         初始化变异生成器
 
         Args:
             llm_client: LLM 客户端
-            knowledge_base: 知识库
+            knowledge_base: 知识库（支持 RAG 增强）
         """
         self.llm = llm_client
         self.kb = knowledge_base
         self.prompt_manager = PromptManager()
+        self._is_rag_enabled = isinstance(knowledge_base, RAGKnowledgeBase)
+
+    def _get_rag_context(
+        self,
+        class_name: str,
+        method_name: Optional[str] = None,
+        source_code: Optional[str] = None,
+    ) -> str:
+        """
+        获取 RAG 检索的上下文（如果启用）
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+            source_code: 源代码
+
+        Returns:
+            RAG 上下文文本，未启用时返回空字符串
+        """
+        if not self._is_rag_enabled:
+            return ""
+
+        try:
+            context = self.kb.retrieve_for_mutation_generation(
+                class_name, method_name or "", source_code
+            )
+            if context:
+                logger.debug(f"获取到变异生成 RAG 上下文: {len(context)} 字符")
+            return context
+        except Exception as e:
+            logger.warning(f"获取变异生成 RAG 上下文失败: {e}")
+            return ""
 
     def generate_mutants(
         self,
@@ -76,7 +112,7 @@ class MutantGenerator:
         target_method: Optional[str] = None,
     ) -> List[Mutant]:
         """
-        单次生成变异体（内部方法）
+        单次生成变异体（内部方法，支持 RAG 增强）
 
         Args:
             class_name: 类名
@@ -91,6 +127,9 @@ class MutantGenerator:
             contracts = self.kb.get_contracts_for_class(class_name)
             patterns = self.kb.get_relevant_patterns(class_code, max_patterns=10)
 
+            # 获取 RAG 上下文（如果启用）
+            rag_context = self._get_rag_context(class_name, target_method, class_code)
+
             # 为代码添加行号
             code_with_lines = add_line_numbers(class_code)
 
@@ -102,6 +141,10 @@ class MutantGenerator:
                 patterns=patterns,
                 target_method=target_method,
             )
+
+            # 如果有 RAG 上下文，将其添加到用户提示词前面
+            if rag_context:
+                user = f"## 相关知识（RAG 检索）\n\n{rag_context}\n\n---\n\n{user}"
 
             # 调用 LLM（不再使用 json_object 格式，使用配置文件的 temperature）
             response = self.llm.chat_with_system(
@@ -217,7 +260,7 @@ class MutantGenerator:
         target_method: Optional[str] = None,
     ) -> List[Mutant]:
         """
-        单次完善变异体（内部方法）
+        单次完善变异体（内部方法，支持 RAG 增强）
 
         Args:
             class_name: 类名
@@ -235,6 +278,9 @@ class MutantGenerator:
             contracts = self.kb.get_contracts_for_class(class_name)
             patterns = self.kb.get_relevant_patterns(class_code, max_patterns=10)
 
+            # 获取 RAG 上下文（如果启用）
+            rag_context = self._get_rag_context(class_name, target_method, class_code)
+
             # 为代码添加行号
             code_with_lines = add_line_numbers(class_code)
 
@@ -249,6 +295,10 @@ class MutantGenerator:
                 patterns=patterns,
                 target_method=target_method,
             )
+
+            # 如果有 RAG 上下文，将其添加到用户提示词前面
+            if rag_context:
+                user = f"## 相关知识（RAG 检索）\n\n{rag_context}\n\n---\n\n{user}"
 
             # 调用 LLM（不再使用 json_object 格式，使用配置文件的 temperature）
             response = self.llm.chat_with_system(

@@ -74,15 +74,32 @@ class SpecExtractor:
             # 提取方法名
             method_name = method_signature.split("(")[0].strip().split()[-1]
 
+            # 规范化列表字段（LLM 可能返回字典或字符串）
+            def normalize_list(items: list) -> List[str]:
+                """将列表中的项转换为字符串"""
+                result = []
+                for item in items:
+                    if isinstance(item, str):
+                        result.append(item)
+                    elif isinstance(item, dict):
+                        # 将字典转换为可读字符串
+                        parts = []
+                        for k, v in item.items():
+                            parts.append(f"{k}: {v}")
+                        result.append(", ".join(parts))
+                    else:
+                        result.append(str(item))
+                return result
+
             # 创建 Contract 对象
             contract = Contract(
                 id=generate_id("contract", f"{class_name}.{method_name}"),
                 class_name=class_name,
                 method_name=method_name,
                 method_signature=method_signature,
-                preconditions=data.get("preconditions", []),
-                postconditions=data.get("postconditions", []),
-                exceptions=data.get("exceptions", []),
+                preconditions=normalize_list(data.get("preconditions", [])),
+                postconditions=normalize_list(data.get("postconditions", [])),
+                exceptions=normalize_list(data.get("exceptions", [])),
                 description=data.get("description"),
                 source="llm_extraction",
                 confidence=0.8,  # LLM 提取的置信度

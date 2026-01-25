@@ -34,9 +34,24 @@ evolution:
   min_method_lines: 5                 # 目标方法的最小行数，小于此值的方法将被跳过
 
 knowledge:
+  enabled: true  # 是否启用 RAG 知识库
   enable_dynamic_update: true
   pattern_confidence_threshold: 0.5
   contract_extraction_enabled: true
+  # Embedding 配置（用于 RAG 检索）
+  embedding:
+    base_url: "https://api.openai.com/v1"  # Embedding API 基础 URL
+    api_key: null  # 留空则使用 llm.api_key
+    model: "text-embedding-3-small"  # Embedding 模型名称
+    batch_size: 100  # 批量 embedding 的大小
+  # 向量数据库配置
+  vector_db:
+    type: "chromadb"  # 向量数据库类型
+    persist_directory: "./cache/chromadb"  # 持久化目录
+  # 检索配置
+  retrieval:
+    top_k: 5  # 每次检索返回的文档数
+    score_threshold: 0.5  # 相似度阈值（0-1，越高越严格）
 
 logging:
   level: "INFO"
