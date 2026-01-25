@@ -99,8 +99,10 @@ class CoverageParser:
                     methods_info = []
                     for method in clazz.findall("method"):
                         method_name = method.get("name", "")
-                        # 跳过构造函数
+                        # 跳过构造函数和 lambda 表达式（编译器生成的内部方法）
                         if method_name == "<init>" or method_name == "<clinit>":
+                            continue
+                        if method_name.startswith("lambda$"):
                             continue
 
                         start_line = int(method.get("line", 0))
