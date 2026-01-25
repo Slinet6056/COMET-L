@@ -85,14 +85,55 @@ class EvolutionConfig(BaseModel):
     )
 
 
+class EmbeddingConfig(BaseModel):
+    """Embedding 配置"""
+
+    base_url: str = Field(
+        default="https://api.openai.com/v1", description="Embedding API 基础 URL"
+    )
+    api_key: Optional[str] = Field(
+        default=None, description="API 密钥，留空则使用 llm.api_key"
+    )
+    model: str = Field(
+        default="text-embedding-3-small", description="Embedding 模型名称"
+    )
+    batch_size: int = Field(default=100, ge=1, description="批量 embedding 的大小")
+
+
+class VectorDBConfig(BaseModel):
+    """向量数据库配置"""
+
+    type: str = Field(default="chromadb", description="向量数据库类型")
+    persist_directory: str = Field(default="./cache/chromadb", description="持久化目录")
+
+
+class RetrievalConfig(BaseModel):
+    """检索配置"""
+
+    top_k: int = Field(default=5, ge=1, description="每次检索返回的文档数")
+    score_threshold: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="相似度阈值"
+    )
+
+
 class KnowledgeConfig(BaseModel):
     """知识库配置"""
 
+    enabled: bool = Field(default=True, description="是否启用 RAG 知识库")
     enable_dynamic_update: bool = Field(default=True, description="启用动态更新")
     pattern_confidence_threshold: float = Field(
         default=0.5, ge=0.0, le=1.0, description="模式置信度阈值"
     )
     contract_extraction_enabled: bool = Field(default=True, description="启用契约提取")
+    embedding: EmbeddingConfig = Field(
+        default_factory=EmbeddingConfig, description="Embedding 配置"
+    )
+    vector_db: VectorDBConfig = Field(
+        default_factory=VectorDBConfig, description="向量数据库配置"
+    )
+    retrieval: RetrievalConfig = Field(
+        default_factory=RetrievalConfig, description="检索配置"
+    )
 
 
 class LoggingConfig(BaseModel):

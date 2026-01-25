@@ -36,6 +36,10 @@ class ParallelPreprocessor:
         self.db = components["db"]
         self.project_scanner = components["project_scanner"]
 
+        # RAG 相关组件（可选）
+        self.knowledge_base = components.get("knowledge_base")
+        self.spec_extractor = components.get("spec_extractor")
+
         # 统计信息
         self._stats = {
             "total_methods": 0,
@@ -46,6 +50,10 @@ class ParallelPreprocessor:
             "processing_times": [],
         }
         self._stats_lock = threading.Lock()
+
+        # 已分析的类（避免重复分析）
+        self._analyzed_classes: set = set()
+        self._analyzed_classes_lock = threading.Lock()
 
         # 获取并发配置
         try:
@@ -86,6 +94,74 @@ class ParallelPreprocessor:
             except AttributeError:
                 pass
         return (None, None)
+
+    def _extract_and_index_contract(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: str,
+        class_code: str,
+    ) -> None:
+        """
+        提取契约并索引到知识库（RAG 模式）
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+            method_signature: 方法签名
+            class_code: 类代码
+        """
+        if not self.spec_extractor or not self.knowledge_base:
+            return
+
+        try:
+            # 检查是否启用契约提取
+            if hasattr(self.config, "knowledge"):
+                if not getattr(
+                    self.config.knowledge, "contract_extraction_enabled", True
+                ):
+                    return
+
+            # 提取契约
+            contract = self.spec_extractor.extract_from_method(
+                class_name=class_name,
+                method_signature=method_signature,
+                source_code=class_code,
+            )
+
+            if contract:
+                self.knowledge_base.add_contract(contract)
+                logger.debug(f"提取并索引契约: {class_name}.{method_name}")
+        except Exception as e:
+            logger.warning(f"契约提取失败 {class_name}.{method_name}: {e}")
+
+    def _index_source_analysis(self, file_path: str, class_name: str) -> None:
+        """
+        对源文件进行深度分析并索引到知识库（RAG 模式）
+
+        Args:
+            file_path: 文件路径
+            class_name: 类名
+        """
+        from .knowledge.knowledge_base import RAGKnowledgeBase
+
+        if not isinstance(self.knowledge_base, RAGKnowledgeBase):
+            return
+
+        try:
+            # 执行深度分析
+            analysis_result = self.java_executor.analyze_deep(file_path)
+
+            if analysis_result:
+                # 索引分析结果
+                for cls in analysis_result.get("classes", []):
+                    if cls.get("name") == class_name or not class_name:
+                        self.knowledge_base.index_source_analysis(
+                            cls.get("name", class_name), cls
+                        )
+                logger.debug(f"索引源码分析: {class_name}")
+        except Exception as e:
+            logger.warning(f"源码分析失败 {class_name}: {e}")
 
     def run(self, project_path: str, workspace_sandbox: str) -> Dict[str, Any]:
         """
@@ -433,6 +509,17 @@ class ParallelPreprocessor:
                 logger.error(f"未找到类文件: {class_name}")
                 return result
 
+            # 索引源码分析（每个类只分析一次）
+            with self._analyzed_classes_lock:
+                if class_name not in self._analyzed_classes:
+                    self._analyzed_classes.add(class_name)
+                    should_analyze = True
+                else:
+                    should_analyze = False
+
+            if should_analyze:
+                self._index_source_analysis(str(file_path), class_name)
+
             # 设置超时计时
             processing_start_time = time.time()
             timeout_deadline = processing_start_time + self.timeout_per_method
@@ -441,6 +528,11 @@ class ParallelPreprocessor:
             class_code = extract_class_from_file(str(file_path))
             method_signature = method_info.get(
                 "signature", f"public void {method_name}()"
+            )
+
+            # 1.1 提取契约（RAG 知识库）
+            self._extract_and_index_contract(
+                class_name, method_name, method_signature, class_code
             )
 
             # 获取现有测试（用于参考）

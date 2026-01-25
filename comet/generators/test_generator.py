@@ -1,13 +1,13 @@
 """测试生成器"""
 
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
 from ..models import TestCase, TestMethod, Contract, Mutant
-from ..knowledge.knowledge_base import KnowledgeBase
+from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase
 from ..utils.hash_utils import generate_id
 from ..utils.code_utils import build_test_class, extract_imports, parse_java_class
 from ..utils.parsers import (
@@ -21,19 +21,57 @@ logger = logging.getLogger(__name__)
 
 
 class TestGenerator:
-    """测试生成器 - 生成 JUnit5 测试方法"""
+    """测试生成器 - 生成 JUnit5 测试方法（支持 RAG 增强）"""
 
-    def __init__(self, llm_client: LLMClient, knowledge_base: KnowledgeBase):
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        knowledge_base: Union[KnowledgeBase, RAGKnowledgeBase],
+    ):
         """
         初始化测试生成器
 
         Args:
             llm_client: LLM 客户端
-            knowledge_base: 知识库
+            knowledge_base: 知识库（支持 RAG 增强）
         """
         self.llm = llm_client
         self.kb = knowledge_base
         self.prompt_manager = PromptManager()
+        self._is_rag_enabled = isinstance(knowledge_base, RAGKnowledgeBase)
+
+    def _get_rag_context(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+        source_code: Optional[str] = None,
+    ) -> str:
+        """
+        获取 RAG 检索的上下文（如果启用）
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+            method_signature: 方法签名
+            source_code: 源代码
+
+        Returns:
+            RAG 上下文文本，未启用时返回空字符串
+        """
+        if not self._is_rag_enabled:
+            return ""
+
+        try:
+            context = self.kb.retrieve_for_test_generation(
+                class_name, method_name, method_signature, source_code
+            )
+            if context:
+                logger.debug(f"获取到 RAG 上下文: {len(context)} 字符")
+            return context
+        except Exception as e:
+            logger.warning(f"获取 RAG 上下文失败: {e}")
+            return ""
 
     def generate_tests_for_method(
         self,
@@ -45,7 +83,7 @@ class TestGenerator:
         existing_tests: Optional[List[TestCase]] = None,
     ) -> Optional[TestCase]:
         """
-        为方法生成测试（数量由 LLM 自主决定）
+        为方法生成测试（数量由 LLM 自主决定，支持 RAG 增强）
 
         Args:
             class_name: 类名
@@ -66,6 +104,11 @@ class TestGenerator:
             contracts = self.kb.get_contracts_for_method(class_name, method_name)
             contract = contracts[0] if contracts else None
 
+            # 获取 RAG 上下文（如果启用）
+            rag_context = self._get_rag_context(
+                class_name, method_name, method_signature, class_code
+            )
+
             # 渲染提示词
             system, user = self.prompt_manager.render_generate_test(
                 class_name=class_name,
@@ -76,6 +119,10 @@ class TestGenerator:
                 coverage_gaps=coverage_gaps or {},
                 existing_tests=existing_tests or [],
             )
+
+            # 如果有 RAG 上下文，将其添加到用户提示词前面
+            if rag_context:
+                user = f"## 相关知识（RAG 检索）\n\n{rag_context}\n\n---\n\n{user}"
 
             # 调用 LLM（不再使用 json_object 格式，使用配置文件的 temperature）
             response = self.llm.chat_with_system(

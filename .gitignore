@@ -54,6 +54,9 @@ examples/*/src/test/
 # Config with sensitive data
 config.yaml
 
+# direnv
+.envrc
+
 # Logs
 *.log
 

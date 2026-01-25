@@ -10,7 +10,7 @@ from typing import Optional
 from comet.config import Settings
 from comet.llm import LLMClient
 from comet.store import Database, KnowledgeStore
-from comet.knowledge import KnowledgeBase
+from comet.knowledge import create_knowledge_base
 from comet.extractors import SpecExtractor, PatternExtractor
 from comet.generators import MutantGenerator, TestGenerator, StaticGuard
 from comet.executor import JavaExecutor, MutationEvaluator, MetricsCollector
@@ -101,15 +101,23 @@ def parse_args():
         "--debug", action="store_true", help="启用调试日志（DEBUG级别）"
     )
 
+    parser.add_argument(
+        "--bug-reports-dir",
+        type=str,
+        default=None,
+        help="Bug 报告目录（Markdown 文件），用于 RAG 知识库",
+    )
+
     return parser.parse_args()
 
 
-def initialize_system(config: Settings):
+def initialize_system(config: Settings, bug_reports_dir: Optional[str] = None):
     """
     初始化系统组件
 
     Args:
         config: 配置对象
+        bug_reports_dir: Bug 报告目录（可选，用于 RAG 知识库）
 
     Returns:
         初始化后的组件字典
@@ -137,7 +145,28 @@ def initialize_system(config: Settings):
     # 初始化存储
     db = Database(db_path=f"{config.paths.cache}/comet.db")
     knowledge_store = KnowledgeStore(db_path=f"{config.paths.cache}/knowledge.db")
-    knowledge_base = KnowledgeBase(knowledge_store)
+
+    # 创建知识库（支持 RAG 模式）
+    knowledge_base = create_knowledge_base(
+        store=knowledge_store,
+        config=config.knowledge,
+        llm_api_key=config.llm.api_key,
+    )
+
+    # 如果提供了 Bug 报告目录，索引 Bug 报告
+    if bug_reports_dir:
+        bug_dir = Path(bug_reports_dir)
+        if bug_dir.exists() and bug_dir.is_dir():
+            try:
+                count = knowledge_base.index_bug_reports(str(bug_dir))
+                logger.info(f"已索引 {count} 个 Bug 报告: {bug_reports_dir}")
+            except AttributeError:
+                logger.warning("知识库不支持 RAG 模式，跳过 Bug 报告索引")
+            except Exception as e:
+                logger.warning(f"索引 Bug 报告失败: {e}")
+        else:
+            logger.warning(f"Bug 报告目录不存在: {bug_reports_dir}")
+
     logger.info("数据库和知识库已初始化")
 
     # 初始化提取器
@@ -496,8 +525,17 @@ def main():
             logger.error(f"不是有效的 Maven 项目: {args.project_path}")
             sys.exit(1)
 
+        # 验证 Bug 报告目录（如果指定）
+        bug_reports_dir = None
+        if args.bug_reports_dir:
+            bug_dir = Path(args.bug_reports_dir)
+            if bug_dir.exists() and bug_dir.is_dir():
+                bug_reports_dir = str(bug_dir.resolve())
+            else:
+                logger.warning(f"Bug 报告目录不存在: {args.bug_reports_dir}")
+
         # 初始化系统
-        components = initialize_system(config)
+        components = initialize_system(config, bug_reports_dir=bug_reports_dir)
 
         # 运行协同进化
         run_evolution(

@@ -234,6 +234,64 @@ class JavaExecutor:
                 return None
         return None
 
+    def analyze_deep(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """
+        深度分析 Java 代码文件（用于 RAG 知识库）
+
+        分析内容包括：
+        - Null 检查模式
+        - 边界检查模式
+        - 异常处理模式
+        - 方法调用链
+        - 字段依赖
+        - 圈复杂度
+
+        Args:
+            file_path: 文件路径
+
+        Returns:
+            深度分析结果
+        """
+        result = self._run_java_command(
+            "com.comet.analyzer.DeepAnalyzer",
+            ["analyzeDeep", file_path],
+        )
+
+        if result.get("success"):
+            try:
+                return json.loads(result["stdout"])
+            except json.JSONDecodeError:
+                logger.error(f"解析深度分析结果失败: {result['stdout']}")
+                return None
+        return None
+
+    def analyze_method_deep(
+        self, file_path: str, class_name: str, method_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        深度分析特定方法
+
+        Args:
+            file_path: 文件路径
+            class_name: 类名
+            method_name: 方法名
+
+        Returns:
+            方法深度分析结果
+        """
+        result = self._run_java_command(
+            "com.comet.analyzer.DeepAnalyzer",
+            ["analyzeMethod", file_path, class_name, method_name],
+        )
+
+        if result.get("success"):
+            try:
+                return json.loads(result["stdout"])
+            except json.JSONDecodeError:
+                logger.error(f"解析方法分析结果失败: {result['stdout']}")
+                return None
+        return None
+
     def apply_mutation(
         self,
         source_file: str,

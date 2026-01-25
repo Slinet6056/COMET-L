@@ -1708,7 +1708,9 @@ class AgentTools:
                 if result:
                     # 统计方法数量
                     method_count = len(tc.methods) if tc.methods else 0
-                    logger.debug(f"✓ 同步测试类: {tc.class_name} ({method_count} 个方法)")
+                    logger.debug(
+                        f"✓ 同步测试类: {tc.class_name} ({method_count} 个方法)"
+                    )
                 else:
                     logger.error(f"✗ 同步测试类失败: {tc.class_name}")
 
@@ -1872,15 +1874,26 @@ class AgentTools:
     def update_knowledge(
         self, type: Optional[str] = None, data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """更新知识库"""
+        """
+        更新知识库（支持 RAG 模式）
+
+        Args:
+            type: 知识类型
+                - pattern: 添加缺陷模式
+                - contract: 添加契约
+                - survived_mutant: 从幸存变异体学习
+                - source_analysis: 索引源代码分析结果
+                - bug_reports: 索引 Bug 报告目录
+                - auto_learn: 自动从评估结果学习
+            data: 知识数据
+        """
         if not self.knowledge_base:
             logger.error("update_knowledge: 知识库未初始化")
             return {"updated": False}
 
-        # 如果没有提供参数，返回成功但不做任何操作
+        # 如果没有提供参数，执行自动学习
         if type is None or data is None:
-            logger.info("update_knowledge: 无具体参数，跳过知识库更新")
-            return {"updated": True, "message": "No specific knowledge to update"}
+            return self._auto_learn_from_evaluation()
 
         try:
             if type == "pattern":
@@ -1922,12 +1935,153 @@ class AgentTools:
                 else:
                     return {"updated": False, "error": "模式提取失败"}
 
+            elif type == "source_analysis":
+                # 索引源代码深度分析结果（RAG 模式）
+                return self._index_source_analysis(data)
+
+            elif type == "bug_reports":
+                # 索引 Bug 报告目录（RAG 模式）
+                return self._index_bug_reports(data)
+
+            elif type == "auto_learn":
+                # 自动从评估结果学习
+                return self._auto_learn_from_evaluation()
+
             else:
                 logger.warning(f"未知的知识类型: {type}")
                 return {"updated": False, "error": f"未知类型: {type}"}
 
         except Exception as e:
             logger.error(f"更新知识库失败: {e}")
+            return {"updated": False, "error": str(e)}
+
+    def _auto_learn_from_evaluation(self) -> Dict[str, Any]:
+        """
+        从评估结果自动学习
+
+        - 更新被击杀变异体对应模式的成功率
+        - 从幸存变异体学习新模式
+        """
+        if not self.db or not self.knowledge_base:
+            return {"updated": False, "error": "缺少必要组件"}
+
+        try:
+            learned_patterns = 0
+            updated_stats = 0
+
+            # 获取当前目标的变异体
+            current_target = self.state.current_target if self.state else None
+            if current_target and current_target.get("class_name"):
+                class_name = current_target["class_name"]
+                method_name = current_target.get("method_name")
+
+                mutants = self.db.get_mutants_by_method(
+                    class_name=class_name,
+                    method_name=method_name,
+                    status="valid",
+                )
+            else:
+                mutants = self.db.get_valid_mutants()
+
+            # 统计被击杀和幸存的变异体
+            killed_mutants = [m for m in mutants if not m.survived]
+            survived_mutants = [m for m in mutants if m.survived]
+
+            logger.info(
+                f"自动学习: {len(killed_mutants)} 个被击杀, {len(survived_mutants)} 个幸存"
+            )
+
+            # 从幸存变异体学习新模式（限制数量，避免过多）
+            if self.pattern_extractor and survived_mutants:
+                for mutant in survived_mutants[:3]:  # 最多学习 3 个
+                    try:
+                        pattern = self.pattern_extractor.extract_from_surviving_mutant(
+                            mutant_code=mutant.patch.mutated_code,
+                            original_code=mutant.patch.original_code,
+                            semantic_intent="",
+                        )
+                        if pattern:
+                            self.knowledge_base.add_pattern(pattern)
+                            learned_patterns += 1
+                            logger.debug(f"从幸存变异体学习到模式: {pattern.name}")
+                    except Exception as e:
+                        logger.warning(f"从变异体学习失败: {e}")
+
+            # 返回结果
+            return {
+                "updated": True,
+                "learned_patterns": learned_patterns,
+                "updated_stats": updated_stats,
+                "killed_count": len(killed_mutants),
+                "survived_count": len(survived_mutants),
+            }
+
+        except Exception as e:
+            logger.error(f"自动学习失败: {e}")
+            return {"updated": False, "error": str(e)}
+
+    def _index_source_analysis(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        索引源代码深度分析结果到 RAG 知识库
+
+        Args:
+            data: 包含 class_name 和 file_path 的字典
+        """
+        from ..knowledge.knowledge_base import RAGKnowledgeBase
+
+        if not isinstance(self.knowledge_base, RAGKnowledgeBase):
+            return {"updated": False, "error": "知识库不支持 RAG 模式"}
+
+        class_name = data.get("class_name")
+        file_path = data.get("file_path")
+
+        if not class_name or not file_path:
+            return {"updated": False, "error": "需要 class_name 和 file_path"}
+
+        try:
+            # 执行深度分析
+            analysis_result = self.java_executor.analyze_deep(file_path)
+
+            if not analysis_result:
+                return {"updated": False, "error": "深度分析失败"}
+
+            # 索引到 RAG
+            for cls in analysis_result.get("classes", []):
+                if cls.get("name") == class_name or not class_name:
+                    self.knowledge_base.index_source_analysis(
+                        cls.get("name", class_name), cls
+                    )
+
+            logger.info(f"已索引源代码分析结果: {class_name}")
+            return {"updated": True, "class_name": class_name}
+
+        except Exception as e:
+            logger.error(f"索引源代码分析失败: {e}")
+            return {"updated": False, "error": str(e)}
+
+    def _index_bug_reports(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        索引 Bug 报告目录到 RAG 知识库
+
+        Args:
+            data: 包含 directory 的字典
+        """
+        from ..knowledge.knowledge_base import RAGKnowledgeBase
+
+        if not isinstance(self.knowledge_base, RAGKnowledgeBase):
+            return {"updated": False, "error": "知识库不支持 RAG 模式"}
+
+        directory = data.get("directory")
+        if not directory:
+            return {"updated": False, "error": "需要 directory 参数"}
+
+        try:
+            count = self.knowledge_base.index_bug_reports(directory)
+            logger.info(f"已索引 {count} 个 Bug 报告")
+            return {"updated": True, "indexed_count": count}
+
+        except Exception as e:
+            logger.error(f"索引 Bug 报告失败: {e}")
             return {"updated": False, "error": str(e)}
 
     def refine_mutants(
