@@ -9,6 +9,7 @@ COMET-L 是一个创新的测试生成系统，通过测试生成器和变异生
 - **知识库驱动**：从源代码提取契约，从 Bug 报告学习缺陷模式
 - **语义变异**：基于 LLM 生成有意义的语义变异，而非简单的语法变异
 - **Agent 调度**：智能 Agent 自动选择目标、分配预算、调整策略
+- **并行处理**：支持预处理和主循环的并行模式，显著提升处理效率
 - **沙箱隔离**：独立的执行环境确保测试和变异互不干扰
 - **Mockito 支持**：自动识别依赖并使用 Mockito 创建隔离的单元测试
 
@@ -100,6 +101,12 @@ python main.py --project-path /path/to/project --debug
 
 # 指定 Bug 报告目录（用于 RAG 知识库）
 python main.py --project-path /path/to/project --bug-reports-dir /path/to/bug-reports
+
+# 启用并行 Agent 模式（批量处理多个目标）
+python main.py --project-path /path/to/project --parallel
+
+# 指定并行目标数
+python main.py --project-path /path/to/project --parallel --parallel-targets 8
 ```
 
 ## Bug 报告格式
@@ -148,11 +155,13 @@ COMET-L/
    - 深度分析代码模式（null检查、边界检查、异常处理等）
    - 索引 Bug 报告到向量数据库
 
-2. **并行预处理**：
+2. **并行预处理**（可选）：
    - 为每个公共方法生成初始测试和变异体
    - 提取契约并索引到 RAG 知识库
 
 3. **迭代循环**：
+   - **标准模式**：顺序处理单个目标方法
+   - **并行模式**：批量并行处理多个目标，提高吞吐量
    - 变异生成器创建语义变异体（RAG 提供相关 Bug 模式）
    - 执行测试识别幸存变异体
    - 测试生成器针对幸存变异生成新测试（RAG 提供契约和分析上下文）

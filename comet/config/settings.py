@@ -155,6 +155,29 @@ class PreprocessingConfig(BaseModel):
     )
 
 
+class AgentParallelConfig(BaseModel):
+    """Agent 并行配置"""
+
+    enabled: bool = Field(default=False, description="是否启用并行 Agent 模式")
+    max_parallel_targets: int = Field(
+        default=4, ge=1, le=16, description="最大并行目标数"
+    )
+    max_eval_workers: int = Field(
+        default=4, ge=1, le=16, description="变异体评估并行度"
+    )
+    timeout_per_target: int = Field(
+        default=300, ge=1, description="单个目标的超时时间（秒）"
+    )
+
+
+class AgentConfig(BaseModel):
+    """Agent 配置"""
+
+    parallel: AgentParallelConfig = Field(
+        default_factory=AgentParallelConfig, description="并行配置"
+    )
+
+
 class Settings(BaseModel):
     """系统配置"""
 
@@ -166,6 +189,7 @@ class Settings(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
     formatting: FormattingConfig = Field(default_factory=FormattingConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
 
     @classmethod
     def from_yaml(cls, config_path: str) -> "Settings":

@@ -5,16 +5,16 @@ llm:
   temperature: 0.7
   max_tokens: 4096
   supports_json_mode: true # 如果使用本地模型不支持 JSON 模式，请设置为 false
-  timeout: 120  # API 请求超时时间（秒）
-  reasoning_effort: null  # 推理努力程度，可能的可选值: 'none', 'minimal', 'low', 'medium', 'high'，null 表示使用默认值
-  verbosity: null  # 响应详细程度，可能的可选值: 'low', 'medium', 'high'，null 表示使用默认值
+  timeout: 120 # API 请求超时时间（秒）
+  reasoning_effort: null # 推理努力程度，可能的可选值: 'none', 'minimal', 'low', 'medium', 'high'，null 表示使用默认值
+  verbosity: null # 响应详细程度，可能的可选值: 'low', 'medium', 'high'，null 表示使用默认值
 
 execution:
-  timeout: 300  # 秒
-  test_timeout: 30  # 测试执行超时时间（秒），默认30秒快速失败
-  coverage_timeout: 300  # 覆盖率收集超时时间（秒），JaCoCo需要更多时间
+  timeout: 300 # 秒
+  test_timeout: 30 # 测试执行超时时间（秒），默认30秒快速失败
+  coverage_timeout: 300 # 覆盖率收集超时时间（秒），JaCoCo需要更多时间
   max_retries: 3
-  maven_home: null  # 留空使用系统默认
+  maven_home: null # 留空使用系统默认
 
 paths:
   workspace: "./workspace"
@@ -28,40 +28,47 @@ evolution:
   budget_llm_calls: 1000
   stop_on_no_improvement_rounds: 3
   # 优秀水平阈值（达到后可提前停止，可根据项目调整）
-  excellent_mutation_score: 0.95      # 变异分数阈值（默认 95%）
-  excellent_line_coverage: 0.90       # 行覆盖率阈值（默认 90%）
-  excellent_branch_coverage: 0.85     # 分支覆盖率阈值（默认 85%）
-  min_method_lines: 5                 # 目标方法的最小行数，小于此值的方法将被跳过
+  excellent_mutation_score: 0.95 # 变异分数阈值（默认 95%）
+  excellent_line_coverage: 0.90 # 行覆盖率阈值（默认 90%）
+  excellent_branch_coverage: 0.85 # 分支覆盖率阈值（默认 85%）
+  min_method_lines: 5 # 目标方法的最小行数，小于此值的方法将被跳过
 
 knowledge:
-  enabled: true  # 是否启用 RAG 知识库
+  enabled: true # 是否启用 RAG 知识库
   enable_dynamic_update: true
   pattern_confidence_threshold: 0.5
   contract_extraction_enabled: true
   # Embedding 配置（用于 RAG 检索）
   embedding:
-    base_url: "https://api.openai.com/v1"  # Embedding API 基础 URL
-    api_key: null  # 留空则使用 llm.api_key
-    model: "text-embedding-3-small"  # Embedding 模型名称
-    batch_size: 100  # 批量 embedding 的大小
+    base_url: "https://api.openai.com/v1" # Embedding API 基础 URL
+    api_key: null # 留空则使用 llm.api_key
+    model: "text-embedding-3-small" # Embedding 模型名称
+    batch_size: 100 # 批量 embedding 的大小
   # 向量数据库配置
   vector_db:
-    type: "chromadb"  # 向量数据库类型
-    persist_directory: "./cache/chromadb"  # 持久化目录
+    type: "chromadb" # 向量数据库类型
+    persist_directory: "./cache/chromadb" # 持久化目录
   # 检索配置
   retrieval:
-    top_k: 5  # 每次检索返回的文档数
-    score_threshold: 0.5  # 相似度阈值（0-1，越高越严格）
+    top_k: 5 # 每次检索返回的文档数
+    score_threshold: 0.5 # 相似度阈值（0-1，越高越严格）
 
 logging:
   level: "INFO"
   file: "comet.log"
 
 preprocessing:
-  enabled: true  # 是否启用并行预处理
-  max_workers: null  # 最大并发数，null表示自动（cpu_count）
-  timeout_per_method: 300  # 单个方法的超时时间（秒）
+  enabled: true # 是否启用并行预处理
+  max_workers: null # 最大并发数，null表示自动（cpu_count）
+  timeout_per_method: 300 # 单个方法的超时时间（秒）
 
 formatting:
-  enabled: true  # 是否启用代码格式化（使用 google-java-format）
-  style: "GOOGLE"  # 格式化风格: GOOGLE 或 AOSP
+  enabled: true # 是否启用代码格式化（使用 google-java-format）
+  style: "GOOGLE" # 格式化风格: GOOGLE 或 AOSP
+
+agent:
+  parallel:
+    enabled: false # 是否启用并行 Agent 模式（批量并行处理多个目标）
+    max_parallel_targets: 4 # 最大并行目标数（同时处理的方法数）
+    max_eval_workers: 4 # 变异体评估并行度（每个目标内的评估并行度）
+    timeout_per_target: 300 # 单个目标的超时时间（秒）

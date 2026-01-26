@@ -1,7 +1,9 @@
 """变异评估器"""
 
 import logging
-from typing import List, Dict, Set
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Set, Optional
 from datetime import datetime
 from pathlib import Path
 
@@ -238,18 +240,43 @@ class MutationEvaluator:
         mutants: List[Mutant],
         test_cases: List[TestCase],
         project_path: str,
+        max_workers: Optional[int] = None,
     ) -> KillMatrix:
         """
-        构建击杀矩阵
+        构建击杀矩阵（支持并行评估）
 
         Args:
             mutants: 变异体列表
             test_cases: 测试用例列表
             project_path: 项目路径
+            max_workers: 最大并行工作线程数，None 表示串行执行，
+                        正整数表示并行度（建议 2-8）
 
         Returns:
             击杀矩阵
         """
+        kill_matrix = KillMatrix()
+
+        if not mutants:
+            logger.info("没有变异体需要评估")
+            return kill_matrix
+
+        # 串行模式（向后兼容）
+        if max_workers is None or max_workers <= 1:
+            return self._build_kill_matrix_serial(mutants, test_cases, project_path)
+
+        # 并行模式
+        return self._build_kill_matrix_parallel(
+            mutants, test_cases, project_path, max_workers
+        )
+
+    def _build_kill_matrix_serial(
+        self,
+        mutants: List[Mutant],
+        test_cases: List[TestCase],
+        project_path: str,
+    ) -> KillMatrix:
+        """串行构建击杀矩阵（原有逻辑）"""
         kill_matrix = KillMatrix()
 
         for mutant in mutants:
@@ -276,6 +303,86 @@ class MutationEvaluator:
         logger.info(
             f"击杀矩阵构建完成: "
             f"{len([m for m in mutants if not m.survived])}/{len(mutants)} 被击杀"
+        )
+        return kill_matrix
+
+    def _build_kill_matrix_parallel(
+        self,
+        mutants: List[Mutant],
+        test_cases: List[TestCase],
+        project_path: str,
+        max_workers: int,
+    ) -> KillMatrix:
+        """并行构建击杀矩阵"""
+        kill_matrix = KillMatrix()
+        results_lock = threading.Lock()
+
+        # 统计信息
+        total = len(mutants)
+        completed = 0
+        completed_lock = threading.Lock()
+
+        logger.info(f"开始并行评估 {total} 个变异体（并行度: {max_workers}）")
+
+        def evaluate_and_update(mutant: Mutant) -> None:
+            """评估单个变异体并更新状态"""
+            nonlocal completed
+
+            try:
+                # 评估变异体（每个变异体在独立沙箱中运行）
+                test_results = self.evaluate_mutant(mutant, test_cases, project_path)
+
+                # 线程安全地更新击杀矩阵和变异体状态
+                with results_lock:
+                    for test_id, passed in test_results.items():
+                        if not passed:
+                            kill_matrix.add_kill(mutant.id, test_id)
+
+                    # 更新变异体状态
+                    if kill_matrix.is_killed(mutant.id):
+                        mutant.survived = False
+                        mutant.killed_by = kill_matrix.get_killers(mutant.id)
+                    else:
+                        mutant.survived = True
+
+                    mutant.evaluated_at = datetime.now()
+
+                # 更新进度
+                with completed_lock:
+                    completed += 1
+                    current = completed
+                    if current % 5 == 0 or current == total:
+                        logger.info(
+                            f"评估进度: {current}/{total} ({current*100//total}%)"
+                        )
+
+            except Exception as e:
+                logger.error(f"评估变异体 {mutant.id} 时出错: {e}")
+                # 出错时标记为幸存（保守策略）
+                with results_lock:
+                    mutant.survived = True
+                    mutant.evaluated_at = datetime.now()
+
+        # 使用线程池并行评估
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            futures = {
+                executor.submit(evaluate_and_update, mutant): mutant
+                for mutant in mutants
+            }
+
+            # 等待所有任务完成，处理异常
+            for future in as_completed(futures):
+                mutant = futures[future]
+                try:
+                    future.result()  # 获取结果，触发异常（如果有）
+                except Exception as e:
+                    logger.error(f"变异体 {mutant.id} 评估任务失败: {e}")
+
+        killed_count = len([m for m in mutants if not m.survived])
+        logger.info(
+            f"并行击杀矩阵构建完成: {killed_count}/{total} 被击杀 "
+            f"(变异分数: {killed_count*100//total if total > 0 else 0}%)"
         )
         return kill_matrix
 

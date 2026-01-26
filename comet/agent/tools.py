@@ -397,19 +397,15 @@ class AgentTools:
                     "sandbox_id": sandbox_id,
                 }
 
-            # 7. 在沙箱中验证和修复测试（临时修改 project_path）
-            original_project_path = self.project_path
-            self.project_path = sandbox_path
-            try:
-                logger.info("在验证沙箱中验证和修复测试...")
-                test_case = self._verify_and_fix_tests(
-                    test_case=test_case,
-                    class_code=class_code,
-                    max_compile_retries=3,
-                    max_test_retries=3,
-                )
-            finally:
-                self.project_path = original_project_path
+            # 7. 在沙箱中验证和修复测试（传递 sandbox_path，支持并发执行）
+            logger.info("在验证沙箱中验证和修复测试...")
+            test_case = self._verify_and_fix_tests(
+                test_case=test_case,
+                class_code=class_code,
+                max_compile_retries=3,
+                max_test_retries=3,
+                project_path=sandbox_path,  # 显式传递沙箱路径，避免竞争条件
+            )
 
             # 8. 静态校验
             if test_case.compile_success:
@@ -610,19 +606,15 @@ class AgentTools:
                     "original_test_case": original_test_case,
                 }
 
-            # 8. 在沙箱中验证和修复测试（临时修改 project_path）
-            original_project_path_backup = self.project_path
-            self.project_path = sandbox_path
-            try:
-                logger.info("在验证沙箱中验证和修复完善后的测试...")
-                refined_test_case = self._verify_and_fix_tests(
-                    test_case=refined_test_case,
-                    class_code=class_code,
-                    max_compile_retries=3,
-                    max_test_retries=3,
-                )
-            finally:
-                self.project_path = original_project_path_backup
+            # 8. 在沙箱中验证和修复测试（传递 sandbox_path，支持并发执行）
+            logger.info("在验证沙箱中验证和修复完善后的测试...")
+            refined_test_case = self._verify_and_fix_tests(
+                test_case=refined_test_case,
+                class_code=class_code,
+                max_compile_retries=3,
+                max_test_retries=3,
+                project_path=sandbox_path,  # 显式传递沙箱路径，避免竞争条件
+            )
 
             # 9. 静态校验
             if refined_test_case.compile_success:
@@ -741,6 +733,7 @@ class AgentTools:
         class_code: str,
         max_compile_retries: int = 3,
         max_test_retries: int = 3,
+        project_path: Optional[str] = None,
     ):
         """
         验证并修复测试方法
@@ -756,6 +749,8 @@ class AgentTools:
             class_code: 被测类代码
             max_compile_retries: 编译失败时的最大重试次数
             max_test_retries: 测试失败时的最大重试次数
+            project_path: 项目路径（可选，默认使用 self.project_path）
+                         注意：为支持并发执行，应传入独立的沙箱路径
 
         Returns:
             修复后的测试用例
@@ -764,8 +759,12 @@ class AgentTools:
         from ..utils.project_utils import write_test_file
         from ..utils.code_utils import build_test_class
 
+        # 使用传入的 project_path 或默认的 self.project_path
+        # 这样可以支持并发执行，每个线程使用独立的沙箱
+        work_path = project_path or self.project_path
+
         surefire_parser = SurefireParser()
-        reports_dir = os.path.join(self.project_path, "target", "surefire-reports")
+        reports_dir = os.path.join(work_path, "target", "surefire-reports")
 
         # ===== 步骤1: 编译测试，最多重试max_compile_retries次 =====
         compile_retry_count = 0
@@ -773,7 +772,7 @@ class AgentTools:
             logger.debug(
                 f"编译测试（第 {compile_retry_count + 1}/{max_compile_retries} 次尝试）..."
             )
-            compile_result = self.java_executor.compile_tests(self.project_path)
+            compile_result = self.java_executor.compile_tests(work_path)
 
             if compile_result.get("success"):
                 logger.info(f"✓ 测试编译成功: {test_case.class_name}")
@@ -816,7 +815,7 @@ class AgentTools:
             # 写入修复后的测试文件（直接覆盖）
             formatting_enabled, formatting_style = self._get_formatting_config()
             test_file = write_test_file(
-                project_path=self.project_path,
+                project_path=work_path,
                 package_name=fixed_test_case.package_name,
                 test_code=fixed_test_case.full_code,
                 test_class_name=fixed_test_case.class_name,
@@ -833,7 +832,7 @@ class AgentTools:
 
         # ===== 步骤2: 运行测试 =====
         logger.info("运行测试验证...")
-        test_result = self.java_executor.run_tests(self.project_path)
+        test_result = self.java_executor.run_tests(work_path)
 
         # 如果所有测试通过，直接返回
         if test_result.get("success"):
@@ -847,7 +846,7 @@ class AgentTools:
             logger.error("测试运行超时，开始逐个测试方法以识别超时方法...")
 
             # 逐个运行测试方法来识别超时的方法
-            timeout_methods = self._identify_timeout_methods(test_case)
+            timeout_methods = self._identify_timeout_methods(test_case, work_path)
 
             if timeout_methods:
                 logger.warning(
@@ -884,7 +883,7 @@ class AgentTools:
                 # 写入更新后的测试文件
                 formatting_enabled, formatting_style = self._get_formatting_config()
                 write_test_file(
-                    project_path=self.project_path,
+                    project_path=work_path,
                     package_name=test_case.package_name,
                     test_code=test_case.full_code,
                     test_class_name=test_case.class_name,
@@ -897,7 +896,7 @@ class AgentTools:
                 )
 
                 # 重新编译和测试，确保剩余方法一起工作正常
-                compile_result = self.java_executor.compile_tests(self.project_path)
+                compile_result = self.java_executor.compile_tests(work_path)
                 if not compile_result.get("success"):
                     logger.error("过滤后的测试用例编译失败")
                     test_case.compile_success = False
@@ -905,7 +904,7 @@ class AgentTools:
                     test_case.methods = []
                     return test_case
 
-                test_result = self.java_executor.run_tests(self.project_path)
+                test_result = self.java_executor.run_tests(work_path)
                 if test_result.get("success"):
                     logger.info(
                         f"✓ 过滤后的测试用例验证成功，保留 {len(valid_methods)} 个方法"
@@ -1021,7 +1020,7 @@ class AgentTools:
                 # 写入并测试
                 formatting_enabled, formatting_style = self._get_formatting_config()
                 write_test_file(
-                    project_path=self.project_path,
+                    project_path=work_path,
                     package_name=test_case.package_name,
                     test_code=temp_full_code,
                     test_class_name=test_case.class_name,
@@ -1029,9 +1028,9 @@ class AgentTools:
                     formatting_style=formatting_style,
                 )
 
-                compile_res = self.java_executor.compile_tests(self.project_path)
+                compile_res = self.java_executor.compile_tests(work_path)
                 if compile_res.get("success"):
-                    test_res = self.java_executor.run_tests(self.project_path)
+                    test_res = self.java_executor.run_tests(work_path)
                     if test_res.get("success"):
                         logger.info(f"✓ 方法 {method_name} 修复成功")
                         fixed_methods[method_name] = fixed_code
@@ -1086,7 +1085,7 @@ class AgentTools:
         # 最后写入并验证
         formatting_enabled, formatting_style = self._get_formatting_config()
         write_test_file(
-            project_path=self.project_path,
+            project_path=work_path,
             package_name=test_case.package_name,
             test_code=test_case.full_code,
             test_class_name=test_case.class_name,
@@ -1094,10 +1093,10 @@ class AgentTools:
             formatting_style=formatting_style,
         )
 
-        final_compile = self.java_executor.compile_tests(self.project_path)
+        final_compile = self.java_executor.compile_tests(work_path)
 
         if final_compile.get("success"):
-            final_test = self.java_executor.run_tests(self.project_path)
+            final_test = self.java_executor.run_tests(work_path)
             if final_test.get("success"):
                 logger.info(f"✓ 最终测试验证成功！保留 {len(final_methods)} 个方法")
                 test_case.compile_success = True
@@ -1117,17 +1116,23 @@ class AgentTools:
 
         return test_case
 
-    def _identify_timeout_methods(self, test_case) -> set:
+    def _identify_timeout_methods(
+        self, test_case, project_path: Optional[str] = None
+    ) -> set:
         """
         通过逐个运行测试方法来识别导致超时的方法
 
         Args:
             test_case: TestCase 对象
+            project_path: 项目路径（可选，默认使用 self.project_path）
 
         Returns:
             导致超时的方法名集合
         """
         from comet.utils import write_test_file, build_test_class
+
+        # 使用传入的 project_path 或默认的 self.project_path
+        work_path = project_path or self.project_path
 
         timeout_methods = set()
 
@@ -1156,7 +1161,7 @@ class AgentTools:
             # 写入测试文件
             formatting_enabled, formatting_style = self._get_formatting_config()
             write_test_file(
-                project_path=self.project_path,
+                project_path=work_path,
                 package_name=test_case.package_name,
                 test_code=temp_full_code,
                 test_class_name=test_case.class_name,
@@ -1165,7 +1170,7 @@ class AgentTools:
             )
 
             # 编译测试
-            compile_result = self.java_executor.compile_tests(self.project_path)
+            compile_result = self.java_executor.compile_tests(work_path)
             if not compile_result.get("success"):
                 logger.warning(f"方法 {method_name} 编译失败，标记为有问题")
                 timeout_methods.add(method_name)
@@ -1173,7 +1178,7 @@ class AgentTools:
 
             # 运行单个测试方法
             test_result = self.java_executor.run_single_test_method(
-                self.project_path, full_class_name, method_name
+                work_path, full_class_name, method_name
             )
 
             # 检查是否超时（匹配 "Timeout after X seconds" 格式）
