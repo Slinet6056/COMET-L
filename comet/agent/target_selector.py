@@ -712,7 +712,7 @@ class TargetSelector:
                 )
                 return class_methods
         except Exception as e:
-            logger.error(f"获取 public 方法失败: {e}")
+            logger.warning(f"获取 public 方法失败: {e}")
 
         # 如果失败，返回空列表
         return []

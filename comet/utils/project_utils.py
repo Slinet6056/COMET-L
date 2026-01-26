@@ -20,7 +20,7 @@ def find_java_files(project_path: str, pattern: str = "**/*.java") -> List[Path]
     """
     project = Path(project_path)
     if not project.exists():
-        logger.error(f"项目路径不存在: {project_path}")
+        logger.warning(f"项目路径不存在: {project_path}")
         return []
 
     # 排除测试文件
@@ -164,7 +164,7 @@ def clear_test_directory(project_path: str) -> bool:
         logger.info(f"已清空测试目录: {test_root}")
         return True
     except Exception as e:
-        logger.error(f"清空测试目录失败: {e}")
+        logger.warning(f"清空测试目录失败: {e}")
         return False
 
 
@@ -229,7 +229,7 @@ def write_test_file(
     """
     test_root = get_test_root(project_path)
     if not test_root:
-        logger.error("无法创建测试目录")
+        logger.warning("无法创建测试目录")
         return None
 
     if package_name:
@@ -257,7 +257,7 @@ def write_test_file(
 
         return test_file
     except Exception as e:
-        logger.error(f"写入测试文件失败: {e}")
+        logger.warning(f"写入测试文件失败: {e}")
         return None
 
 

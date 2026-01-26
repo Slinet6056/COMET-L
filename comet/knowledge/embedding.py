@@ -112,7 +112,7 @@ class EmbeddingService:
 
             return embedding
         except Exception as e:
-            logger.error(f"获取 embedding 失败: {e}")
+            logger.warning(f"获取 embedding 失败: {e}")
             raise
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
@@ -166,7 +166,7 @@ class EmbeddingService:
                     self._cache[cache_key] = embedding
 
             except Exception as e:
-                logger.error(f"批量获取 embedding 失败: {e}")
+                logger.warning(f"批量获取 embedding 失败: {e}")
                 raise
 
         # 保存缓存

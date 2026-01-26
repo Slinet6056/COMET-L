@@ -11,6 +11,7 @@ from ..models import Mutant, TestCase, KillMatrix, EvaluationResult
 from .java_executor import JavaExecutor
 from .surefire_parser import SurefireParser
 from ..utils.sandbox import SandboxManager
+from ..utils.log_context import log_context
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class MutationEvaluator:
             # 确定源文件路径
             original_file_path = mutant.patch.file_path
             if not original_file_path:
-                logger.error(f"变异体 {mutant.id} 没有指定源文件路径")
+                logger.warning(f"变异体 {mutant.id} 没有指定源文件路径")
                 return {}
 
             # 确定沙箱中的目标文件路径
@@ -126,12 +127,12 @@ class MutationEvaluator:
             )
 
             if not mutation_result.get("success", False):
-                logger.error(f"应用变异失败: {mutant.id}")
-                logger.error(
+                logger.warning(f"应用变异失败: {mutant.id}")
+                logger.warning(
                     f"  行范围: {mutant.patch.line_start}-{mutant.patch.line_end}"
                 )
                 if mutation_result.get("stderr"):
-                    logger.error(f"  Java 错误: {mutation_result['stderr'][:500]}")
+                    logger.warning(f"  Java 错误: {mutation_result['stderr'][:500]}")
 
                 # 跳过此变异体，不运行测试
                 return {}
@@ -328,40 +329,44 @@ class MutationEvaluator:
             """评估单个变异体并更新状态"""
             nonlocal completed
 
-            try:
-                # 评估变异体（每个变异体在独立沙箱中运行）
-                test_results = self.evaluate_mutant(mutant, test_cases, project_path)
+            # 设置日志上下文，便于在多线程日志中区分不同变异体评估任务
+            with log_context(f"Eval:{mutant.id[:8]}"):
+                try:
+                    # 评估变异体（每个变异体在独立沙箱中运行）
+                    test_results = self.evaluate_mutant(
+                        mutant, test_cases, project_path
+                    )
 
-                # 线程安全地更新击杀矩阵和变异体状态
-                with results_lock:
-                    for test_id, passed in test_results.items():
-                        if not passed:
-                            kill_matrix.add_kill(mutant.id, test_id)
+                    # 线程安全地更新击杀矩阵和变异体状态
+                    with results_lock:
+                        for test_id, passed in test_results.items():
+                            if not passed:
+                                kill_matrix.add_kill(mutant.id, test_id)
 
-                    # 更新变异体状态
-                    if kill_matrix.is_killed(mutant.id):
-                        mutant.survived = False
-                        mutant.killed_by = kill_matrix.get_killers(mutant.id)
-                    else:
+                        # 更新变异体状态
+                        if kill_matrix.is_killed(mutant.id):
+                            mutant.survived = False
+                            mutant.killed_by = kill_matrix.get_killers(mutant.id)
+                        else:
+                            mutant.survived = True
+
+                        mutant.evaluated_at = datetime.now()
+
+                    # 更新进度
+                    with completed_lock:
+                        completed += 1
+                        current = completed
+                        if current % 5 == 0 or current == total:
+                            logger.info(
+                                f"评估进度: {current}/{total} ({current*100//total}%)"
+                            )
+
+                except Exception as e:
+                    logger.warning(f"评估变异体时出错: {e}")
+                    # 出错时标记为幸存（保守策略）
+                    with results_lock:
                         mutant.survived = True
-
-                    mutant.evaluated_at = datetime.now()
-
-                # 更新进度
-                with completed_lock:
-                    completed += 1
-                    current = completed
-                    if current % 5 == 0 or current == total:
-                        logger.info(
-                            f"评估进度: {current}/{total} ({current*100//total}%)"
-                        )
-
-            except Exception as e:
-                logger.error(f"评估变异体 {mutant.id} 时出错: {e}")
-                # 出错时标记为幸存（保守策略）
-                with results_lock:
-                    mutant.survived = True
-                    mutant.evaluated_at = datetime.now()
+                        mutant.evaluated_at = datetime.now()
 
         # 使用线程池并行评估
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -377,7 +382,7 @@ class MutationEvaluator:
                 try:
                     future.result()  # 获取结果，触发异常（如果有）
                 except Exception as e:
-                    logger.error(f"变异体 {mutant.id} 评估任务失败: {e}")
+                    logger.warning(f"变异体 {mutant.id} 评估任务失败: {e}")
 
         killed_count = len([m for m in mutants if not m.survived])
         logger.info(

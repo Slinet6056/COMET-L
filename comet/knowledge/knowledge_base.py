@@ -245,7 +245,7 @@ class RAGKnowledgeBase(KnowledgeBase):
             return True
 
         except Exception as e:
-            logger.error(f"RAG 知识库初始化失败: {e}")
+            logger.warning(f"RAG 知识库初始化失败: {e}")
             return False
 
     @property

@@ -134,7 +134,7 @@ class StaticGuard:
             return True
 
         except Exception as e:
-            logger.error(f"验证变异体失败: {e}")
+            logger.warning(f"验证变异体失败: {e}")
             mutant.compile_error = str(e)
             mutant.status = "invalid"
             return False
@@ -262,8 +262,8 @@ class StaticGuard:
                 logger.debug(f"编译错误: {result.stderr}")
                 return False
         except subprocess.TimeoutExpired:
-            logger.error(f"项目编译超时: {project_root}")
+            logger.warning(f"项目编译超时: {project_root}")
             return False
         except Exception as e:
-            logger.error(f"项目编译出错: {e}")
+            logger.warning(f"项目编译出错: {e}")
             return False

@@ -110,7 +110,7 @@ class SpecExtractor:
             return contract
 
         except Exception as e:
-            logger.error(f"契约提取失败: {e}")
+            logger.warning(f"契约提取失败: {e}")
             return None
 
     def extract_from_class(
@@ -131,7 +131,7 @@ class SpecExtractor:
             Contract 对象列表
         """
         if not self.java_executor:
-            logger.error("需要 JavaExecutor 来解析 Java 代码")
+            logger.warning("需要 JavaExecutor 来解析 Java 代码")
             return []
 
         try:
@@ -169,5 +169,5 @@ class SpecExtractor:
             return contracts
 
         except Exception as e:
-            logger.error(f"提取类契约失败: {e}")
+            logger.warning(f"提取类契约失败: {e}")
             return []

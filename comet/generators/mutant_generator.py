@@ -99,9 +99,9 @@ class MutantGenerator:
                 logger.warning(f"第 {attempt + 1} 次尝试未生成任何变异体")
 
             except Exception as e:
-                logger.error(f"第 {attempt + 1} 次生成变异体失败: {e}")
+                logger.warning(f"第 {attempt + 1} 次生成变异体失败: {e}")
                 if attempt == max_retries - 1:
-                    logger.error("已达最大重试次数，返回空列表")
+                    logger.warning("已达最大重试次数，返回空列表")
 
         return []
 
@@ -194,7 +194,7 @@ class MutantGenerator:
             return mutants
 
         except Exception as e:
-            logger.error(f"变异生成失败: {e}")
+            logger.warning(f"变异生成失败: {e}")
             return []
 
     def refine_mutants(
@@ -244,9 +244,9 @@ class MutantGenerator:
                 logger.warning(f"第 {attempt + 1} 次尝试未生成任何变异体")
 
             except Exception as e:
-                logger.error(f"第 {attempt + 1} 次完善变异体失败: {e}")
+                logger.warning(f"第 {attempt + 1} 次完善变异体失败: {e}")
                 if attempt == max_retries - 1:
-                    logger.error("已达最大重试次数，返回空列表")
+                    logger.warning("已达最大重试次数，返回空列表")
 
         return []
 
@@ -348,5 +348,5 @@ class MutantGenerator:
             return mutants
 
         except Exception as e:
-            logger.error(f"变异完善失败: {e}")
+            logger.warning(f"变异完善失败: {e}")
             return []

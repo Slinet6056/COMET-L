@@ -217,10 +217,10 @@ class CoverageParser:
             return method_coverages
 
         except ET.ParseError as e:
-            logger.error(f"解析 JaCoCo XML 失败: {e}")
+            logger.warning(f"解析 JaCoCo XML 失败: {e}")
             return []
         except Exception as e:
-            logger.error(f"解析覆盖率报告时出错: {e}")
+            logger.warning(f"解析覆盖率报告时出错: {e}")
             return []
 
     def aggregate_coverage_by_sourcefile(
@@ -412,10 +412,10 @@ class CoverageParser:
             return source_coverages
 
         except ET.ParseError as e:
-            logger.error(f"解析 JaCoCo XML 失败: {e}")
+            logger.warning(f"解析 JaCoCo XML 失败: {e}")
             return []
         except Exception as e:
-            logger.error(f"解析覆盖率报告时出错: {e}")
+            logger.warning(f"解析覆盖率报告时出错: {e}")
             return []
 
     def aggregate_global_coverage(
@@ -550,7 +550,7 @@ class CoverageParser:
             }
 
         except ET.ParseError as e:
-            logger.error(f"解析 JaCoCo XML 失败: {e}")
+            logger.warning(f"解析 JaCoCo XML 失败: {e}")
             return {
                 "line_coverage": 0.0,
                 "branch_coverage": 0.0,
@@ -560,7 +560,7 @@ class CoverageParser:
                 "covered_branches": 0,
             }
         except Exception as e:
-            logger.error(f"解析覆盖率报告时出错: {e}")
+            logger.warning(f"解析覆盖率报告时出错: {e}")
             return {
                 "line_coverage": 0.0,
                 "branch_coverage": 0.0,

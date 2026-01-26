@@ -81,7 +81,7 @@ class SurefireParser:
                 if suite_result:
                     results.append(suite_result)
             except Exception as e:
-                logger.error(f"解析 Surefire 报告失败 {xml_file}: {e}")
+                logger.warning(f"解析 Surefire 报告失败 {xml_file}: {e}")
 
         return results
 
@@ -141,10 +141,10 @@ class SurefireParser:
             return suite_result
 
         except ET.ParseError as e:
-            logger.error(f"解析 Surefire XML 失败: {e}")
+            logger.warning(f"解析 Surefire XML 失败: {e}")
             return None
         except Exception as e:
-            logger.error(f"解析 Surefire 报告时出错: {e}")
+            logger.warning(f"解析 Surefire 报告时出错: {e}")
             return None
 
     def _parse_testcase(self, testcase_elem: ET.Element) -> Optional[TestResult]:
@@ -200,7 +200,7 @@ class SurefireParser:
             )
 
         except Exception as e:
-            logger.error(f"解析测试用例失败: {e}")
+            logger.warning(f"解析测试用例失败: {e}")
             return None
 
     def get_failed_test_names(self, reports_dir: str) -> Set[str]:
