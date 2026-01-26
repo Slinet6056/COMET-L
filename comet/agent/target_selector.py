@@ -236,20 +236,26 @@ class TargetSelector:
             logger.warning("未找到任何 Java 类")
             return {"class_name": None, "method_name": None}
 
-        # 遍历类，选择第一个有可用方法的类
+        # 遍历类，选择第一个有可用方法且不在黑名单中的目标
         for selected_class in all_classes:
             methods = self._get_public_methods(selected_class)
-            if methods and len(methods) > 0:
-                selected_method_info = methods[0]
-                method_name = (
-                    selected_method_info.get("name")
-                    if isinstance(selected_method_info, dict)
-                    else selected_method_info
-                )
+            if not methods:
+                continue
+
+            for method in methods:
+                method_name = method.get("name") if isinstance(method, dict) else method
+                target_key = f"{selected_class}.{method_name}"
+
+                # 检查黑名单
+                if target_key in blacklist:
+                    continue
+
+                # 优先选择未处理的目标
+                if target_key in processed_targets:
+                    continue
+
                 method_signature = (
-                    selected_method_info.get("signature")
-                    if isinstance(selected_method_info, dict)
-                    else None
+                    method.get("signature") if isinstance(method, dict) else None
                 )
 
                 logger.info(f"选择目标（默认）: {selected_class}.{method_name}")
@@ -257,16 +263,41 @@ class TargetSelector:
                     "class_name": selected_class,
                     "method_name": method_name,
                     "method_signature": method_signature,
-                    "method_info": (
-                        selected_method_info
-                        if isinstance(selected_method_info, dict)
-                        else None
-                    ),
+                    "method_info": method if isinstance(method, dict) else None,
+                    "strategy": "coverage",
+                }
+
+        # 如果所有未处理目标都在黑名单中，尝试选择已处理但不在黑名单的目标
+        for selected_class in all_classes:
+            methods = self._get_public_methods(selected_class)
+            if not methods:
+                continue
+
+            for method in methods:
+                method_name = method.get("name") if isinstance(method, dict) else method
+                target_key = f"{selected_class}.{method_name}"
+
+                # 只检查黑名单，允许已处理的目标
+                if target_key in blacklist:
+                    continue
+
+                method_signature = (
+                    method.get("signature") if isinstance(method, dict) else None
+                )
+
+                logger.info(f"选择目标（默认，已处理）: {selected_class}.{method_name}")
+                return {
+                    "class_name": selected_class,
+                    "method_name": method_name,
+                    "method_signature": method_signature,
+                    "method_info": method if isinstance(method, dict) else None,
                     "strategy": "coverage",
                 }
 
         # 如果所有类都没有可用方法，返回 None
-        logger.warning("所有类都没有符合条件的方法（可能都被最小行数配置过滤掉了）")
+        logger.warning(
+            "所有类都没有符合条件的方法（可能都在黑名单中或被最小行数配置过滤掉了）"
+        )
         return {"class_name": None, "method_name": None}
 
     def select_by_mutations(

@@ -14,7 +14,8 @@ from comet.knowledge import create_knowledge_base
 from comet.extractors import SpecExtractor, PatternExtractor
 from comet.generators import MutantGenerator, TestGenerator, StaticGuard
 from comet.executor import JavaExecutor, MutationEvaluator, MetricsCollector
-from comet.agent import PlannerAgent, AgentTools, AgentState
+from comet.agent import PlannerAgent, ParallelPlannerAgent, AgentTools, AgentState
+from comet.agent.target_selector import TargetSelector
 from comet.utils import SandboxManager, ProjectScanner
 
 
@@ -108,16 +109,34 @@ def parse_args():
         help="Bug 报告目录（Markdown 文件），用于 RAG 知识库",
     )
 
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="启用并行 Agent 模式（批量并行处理多个目标）",
+    )
+
+    parser.add_argument(
+        "--parallel-targets",
+        type=int,
+        default=None,
+        help="并行目标数（覆盖配置文件）",
+    )
+
     return parser.parse_args()
 
 
-def initialize_system(config: Settings, bug_reports_dir: Optional[str] = None):
+def initialize_system(
+    config: Settings,
+    bug_reports_dir: Optional[str] = None,
+    parallel_mode: bool = False,
+):
     """
     初始化系统组件
 
     Args:
         config: 配置对象
         bug_reports_dir: Bug 报告目录（可选，用于 RAG 知识库）
+        parallel_mode: 是否启用并行 Agent 模式
 
     Returns:
         初始化后的组件字典
@@ -227,18 +246,33 @@ def initialize_system(config: Settings, bug_reports_dir: Optional[str] = None):
     max_iterations = config.evolution.max_iterations
     budget = config.evolution.budget_llm_calls
 
-    planner = PlannerAgent(
-        llm_client=llm_client,
-        tools=tools,
-        max_iterations=max_iterations,
-        budget=budget,
-        excellent_mutation_score=config.evolution.excellent_mutation_score,
-        excellent_line_coverage=config.evolution.excellent_line_coverage,
-        excellent_branch_coverage=config.evolution.excellent_branch_coverage,
-    )
+    # 初始化目标选择器（并行模式需要）
+    # 注意：project_path 将在 run_evolution 中设置
+    target_selector = None
+
+    # 根据模式选择 Agent
+    if parallel_mode or config.agent.parallel.enabled:
+        logger.info("使用并行 Agent 模式")
+        # 并行模式使用 ParallelPlannerAgent
+        # 注意：ParallelPlannerAgent 需要更多参数，将在 run_evolution 中完成初始化
+        planner = None  # 延迟初始化
+        planner_type = "parallel"
+    else:
+        logger.info("使用标准 Agent 模式")
+        planner = PlannerAgent(
+            llm_client=llm_client,
+            tools=tools,
+            max_iterations=max_iterations,
+            budget=budget,
+            excellent_mutation_score=config.evolution.excellent_mutation_score,
+            excellent_line_coverage=config.evolution.excellent_line_coverage,
+            excellent_branch_coverage=config.evolution.excellent_branch_coverage,
+        )
+        planner_type = "standard"
 
     # 共享状态
-    tools.state = planner.state
+    if planner:
+        tools.state = planner.state
 
     # 初始化项目扫描器
     project_scanner = ProjectScanner(java_executor, db)
@@ -260,6 +294,8 @@ def initialize_system(config: Settings, bug_reports_dir: Optional[str] = None):
         "mutation_evaluator": mutation_evaluator,
         "metrics_collector": metrics_collector,
         "planner": planner,
+        "planner_type": planner_type,
+        "tools": tools,
         "project_scanner": project_scanner,
     }
 
@@ -280,10 +316,10 @@ def run_evolution(
     logger.info(f"原项目路径: {project_path}")
     logger.info(f"{'='*60}")
 
-    planner = components["planner"]
     config = components["config"]
     sandbox_manager = components["sandbox_manager"]
     project_scanner = components["project_scanner"]
+    planner_type = components.get("planner_type", "standard")
 
     # 扫描项目，建立类到文件的映射
     logger.info("扫描项目，建立类到文件的映射...")
@@ -298,12 +334,61 @@ def run_evolution(
     workspace_sandbox = sandbox_manager.create_workspace_sandbox(project_path)
     logger.info(f"工作空间沙箱: {workspace_sandbox}")
 
-    # 设置 tools 使用沙箱路径
-    if hasattr(planner, "tools") and hasattr(planner.tools, "project_path"):
-        planner.tools.project_path = workspace_sandbox  # 工作路径（沙箱）
-        planner.tools.original_project_path = project_path  # 保存原始路径
-        logger.info(f"已设置沙箱路径到 AgentTools: {workspace_sandbox}")
-        logger.info(f"原始项目路径: {project_path}")
+    # 根据模式创建/获取 planner
+    if planner_type == "parallel":
+        # 创建并行 Agent
+        logger.info("初始化并行 Agent...")
+
+        # 创建目标选择器
+        target_selector = TargetSelector(
+            project_path=workspace_sandbox,
+            java_executor=components["java_executor"],
+            database=components["db"],
+            min_method_lines=config.evolution.min_method_lines,
+        )
+
+        # 获取并行配置
+        parallel_config = config.agent.parallel
+
+        planner = ParallelPlannerAgent(
+            llm_client=components["llm_client"],
+            tools=components["tools"],
+            target_selector=target_selector,
+            java_executor=components["java_executor"],
+            sandbox_manager=sandbox_manager,
+            database=components["db"],
+            project_path=project_path,
+            workspace_path=workspace_sandbox,
+            max_parallel_targets=parallel_config.max_parallel_targets,
+            max_eval_workers=parallel_config.max_eval_workers,
+            max_iterations=config.evolution.max_iterations,
+            budget=config.evolution.budget_llm_calls,
+            timeout_per_target=parallel_config.timeout_per_target,
+            excellent_mutation_score=config.evolution.excellent_mutation_score,
+            excellent_line_coverage=config.evolution.excellent_line_coverage,
+            excellent_branch_coverage=config.evolution.excellent_branch_coverage,
+        )
+
+        # 设置 tools 的状态
+        components["tools"].state = planner.state
+        components["tools"].project_path = workspace_sandbox
+        components["tools"].original_project_path = project_path
+
+        logger.info(
+            f"并行 Agent 已初始化: "
+            f"max_parallel_targets={parallel_config.max_parallel_targets}, "
+            f"max_eval_workers={parallel_config.max_eval_workers}"
+        )
+    else:
+        # 使用标准 Agent
+        planner = components["planner"]
+
+        # 设置 tools 使用沙箱路径
+        if hasattr(planner, "tools") and hasattr(planner.tools, "project_path"):
+            planner.tools.project_path = workspace_sandbox  # 工作路径（沙箱）
+            planner.tools.original_project_path = project_path  # 保存原始路径
+            logger.info(f"已设置沙箱路径到 AgentTools: {workspace_sandbox}")
+            logger.info(f"原始项目路径: {project_path}")
 
     # 运行主循环（包括预处理）
     try:
@@ -534,8 +619,16 @@ def main():
             else:
                 logger.warning(f"Bug 报告目录不存在: {args.bug_reports_dir}")
 
+        # 覆盖并行配置
+        parallel_mode = args.parallel or config.agent.parallel.enabled
+        if args.parallel_targets:
+            config.agent.parallel.max_parallel_targets = args.parallel_targets
+            parallel_mode = True
+
         # 初始化系统
-        components = initialize_system(config, bug_reports_dir=bug_reports_dir)
+        components = initialize_system(
+            config, bug_reports_dir=bug_reports_dir, parallel_mode=parallel_mode
+        )
 
         # 运行协同进化
         run_evolution(

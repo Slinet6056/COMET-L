@@ -2,9 +2,11 @@
 
 import json
 import logging
+import threading
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Set
 from datetime import datetime
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -264,4 +266,260 @@ class AgentState:
             data = json.load(f)
 
         logger.info(f"状态已加载: {file_path}")
+        return cls.from_dict(data)
+
+
+@dataclass
+class WorkerResult:
+    """Worker 处理结果"""
+
+    target_id: str  # 目标标识: "{class_name}.{method_name}"
+    class_name: str
+    method_name: str
+    success: bool = False
+    error: Optional[str] = None
+
+    # 生成结果
+    tests_generated: int = 0
+    mutants_generated: int = 0
+
+    # 评估结果
+    mutants_evaluated: int = 0
+    mutants_killed: int = 0
+    local_mutation_score: float = 0.0
+
+    # 测试文件（路径 -> 内容）
+    test_files: Dict[str, str] = field(default_factory=dict)
+
+    # 处理时间
+    processing_time: float = 0.0
+
+
+class ParallelAgentState(AgentState):
+    """并行 Agent 状态 - 支持多目标追踪和线程安全"""
+
+    def __init__(self):
+        """初始化并行状态"""
+        super().__init__()
+
+        # 线程安全锁
+        self._lock = threading.RLock()  # 可重入锁，支持嵌套调用
+
+        # 多目标追踪
+        self._active_targets: Dict[str, Dict[str, Any]] = {}  # {target_id: target_info}
+        self._active_targets_lock = threading.Lock()
+
+        # 批次管理
+        self.current_batch: int = 0
+        self.batch_results: List[List[WorkerResult]] = []  # 每批次的结果
+
+        # 并行统计
+        self.parallel_stats: Dict[str, Any] = {
+            "total_batches": 0,
+            "total_workers_spawned": 0,
+            "total_targets_processed": 0,
+            "failed_targets_in_parallel": 0,
+            "merge_conflicts": 0,
+        }
+
+    def acquire_target(self, class_name: str, method_name: str) -> bool:
+        """
+        原子地获取目标（避免多个 Worker 选择同一目标）
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+
+        Returns:
+            是否成功获取（False 表示目标已被其他 Worker 占用）
+        """
+        target_id = f"{class_name}.{method_name}"
+        with self._active_targets_lock:
+            if target_id in self._active_targets:
+                return False
+            if target_id in self.processed_targets:
+                return False
+            # 检查黑名单
+            if any(ft.get("target") == target_id for ft in self.failed_targets):
+                return False
+
+            self._active_targets[target_id] = {
+                "class_name": class_name,
+                "method_name": method_name,
+                "started_at": datetime.now(),
+            }
+            return True
+
+    def release_target(self, class_name: str, method_name: str, success: bool) -> None:
+        """
+        释放目标（Worker 完成处理后调用）
+
+        Args:
+            class_name: 类名
+            method_name: 方法名
+            success: 是否处理成功
+        """
+        target_id = f"{class_name}.{method_name}"
+        with self._active_targets_lock:
+            if target_id in self._active_targets:
+                del self._active_targets[target_id]
+            if success:
+                self.mark_target_processed(target_id)
+
+    def get_active_targets(self) -> List[str]:
+        """获取当前活跃的目标列表"""
+        with self._active_targets_lock:
+            return list(self._active_targets.keys())
+
+    def get_active_target_count(self) -> int:
+        """获取当前活跃目标数量"""
+        with self._active_targets_lock:
+            return len(self._active_targets)
+
+    def update_threadsafe(self, metrics: Dict[str, Any]) -> None:
+        """
+        线程安全地更新状态
+
+        Args:
+            metrics: 度量数据
+        """
+        with self._lock:
+            self.update(metrics)
+
+    def add_action_threadsafe(
+        self, action: str, params: Dict[str, Any], success: bool, result: Any = None
+    ) -> None:
+        """线程安全地添加操作记录"""
+        with self._lock:
+            self.add_action(action, params, success, result)
+
+    def increment_llm_calls(self, count: int = 1) -> int:
+        """
+        线程安全地增加 LLM 调用计数
+
+        Returns:
+            更新后的总调用次数
+        """
+        with self._lock:
+            self.llm_calls += count
+            return self.llm_calls
+
+    def add_batch_result(self, batch_results: List[WorkerResult]) -> None:
+        """
+        添加一个批次的结果
+
+        Args:
+            batch_results: 该批次所有 Worker 的结果
+        """
+        with self._lock:
+            self.batch_results.append(batch_results)
+            self.current_batch += 1
+            self.parallel_stats["total_batches"] += 1
+            self.parallel_stats["total_workers_spawned"] += len(batch_results)
+            self.parallel_stats["total_targets_processed"] += sum(
+                1 for r in batch_results if r.success
+            )
+            self.parallel_stats["failed_targets_in_parallel"] += sum(
+                1 for r in batch_results if not r.success
+            )
+
+    def update_global_stats_from_batch(
+        self,
+        total_mutants: int,
+        killed_mutants: int,
+        line_coverage: float,
+        branch_coverage: float,
+    ) -> None:
+        """
+        从批次结果更新全局统计（在同步阶段调用）
+
+        Args:
+            total_mutants: 全局变异体总数
+            killed_mutants: 全局被击杀变异体数
+            line_coverage: 全局行覆盖率
+            branch_coverage: 全局分支覆盖率
+        """
+        with self._lock:
+            self.global_total_mutants = total_mutants
+            self.global_killed_mutants = killed_mutants
+            self.global_survived_mutants = total_mutants - killed_mutants
+            self.global_mutation_score = (
+                killed_mutants / total_mutants if total_mutants > 0 else 0.0
+            )
+            self.line_coverage = line_coverage
+            self.branch_coverage = branch_coverage
+            self.last_update = datetime.now()
+
+    def record_merge_conflict(self) -> None:
+        """记录合并冲突"""
+        with self._lock:
+            self.parallel_stats["merge_conflicts"] += 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典（线程安全）"""
+        with self._lock:
+            data = super().to_dict()
+            data["current_batch"] = self.current_batch
+            data["parallel_stats"] = self.parallel_stats
+            data["active_targets"] = list(self._active_targets.keys())
+            return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ParallelAgentState":
+        """从字典创建"""
+        state = cls()
+        # 调用父类的 from_dict 逻辑
+        state.iteration = data.get("iteration", 0)
+        state.global_total_mutants = data.get("global_total_mutants", 0)
+        state.global_killed_mutants = data.get("global_killed_mutants", 0)
+        state.global_survived_mutants = data.get("global_survived_mutants", 0)
+        state.global_mutation_score = data.get("global_mutation_score", 0.0)
+        state.total_mutants = data.get("total_mutants", 0)
+        state.killed_mutants = data.get("killed_mutants", 0)
+        state.survived_mutants = data.get("survived_mutants", 0)
+        state.mutation_score = data.get("mutation_score", 0.0)
+        state.total_tests = data.get("total_tests", 0)
+        state.line_coverage = data.get("line_coverage", 0.0)
+        state.branch_coverage = data.get("branch_coverage", 0.0)
+        state.current_method_coverage = data.get("current_method_coverage")
+        state.llm_calls = data.get("llm_calls", 0)
+        state.budget = data.get("budget", 1000)
+        state.current_target = data.get("current_target")
+        state.previous_target = data.get("previous_target")
+        state.action_history = data.get("action_history", [])
+        state.recent_improvements = data.get("recent_improvements", [])
+        state.processed_targets = data.get("processed_targets", [])
+        state.available_targets = data.get("available_targets", [])
+        state.failed_targets = data.get("failed_targets", [])
+
+        if data.get("start_time"):
+            state.start_time = datetime.fromisoformat(data["start_time"])
+        if data.get("last_update"):
+            state.last_update = datetime.fromisoformat(data["last_update"])
+
+        # 并行特有字段
+        state.current_batch = data.get("current_batch", 0)
+        state.parallel_stats = data.get(
+            "parallel_stats",
+            {
+                "total_batches": 0,
+                "total_workers_spawned": 0,
+                "total_targets_processed": 0,
+                "failed_targets_in_parallel": 0,
+                "merge_conflicts": 0,
+            },
+        )
+
+        return state
+
+    @classmethod
+    def load(cls, file_path: str) -> Optional["ParallelAgentState"]:
+        """从文件加载状态"""
+        if not Path(file_path).exists():
+            return None
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        logger.info(f"并行状态已加载: {file_path}")
         return cls.from_dict(data)
