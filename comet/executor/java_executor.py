@@ -87,7 +87,7 @@ class JavaExecutor:
                     "stderr": stderr,
                 }
             except subprocess.TimeoutExpired as e:
-                logger.error(f"命令超时 ({timeout}秒): {' '.join(cmd)}")
+                logger.warning(f"命令超时 ({timeout}秒): {' '.join(cmd)}")
 
                 # 超时后清理整个进程组
                 self._kill_process_tree(process)
@@ -103,7 +103,7 @@ class JavaExecutor:
                     "stderr": stderr,
                 }
         except Exception as e:
-            logger.error(f"命令执行失败: {e}")
+            logger.warning(f"命令执行失败: {e}")
             if process:
                 self._kill_process_tree(process)
             return {
@@ -181,7 +181,7 @@ class JavaExecutor:
                 pass
 
         except Exception as e:
-            logger.error(f"清理进程树失败: {e}")
+            logger.warning(f"清理进程树失败: {e}")
             # 最后尝试直接杀死进程
             try:
                 process.kill()
@@ -208,7 +208,7 @@ class JavaExecutor:
             try:
                 return json.loads(result["stdout"])
             except json.JSONDecodeError:
-                logger.error(f"解析分析结果失败: {result['stdout']}")
+                logger.warning(f"解析分析结果失败: {result['stdout']}")
                 return None
         return None
 
@@ -261,7 +261,7 @@ class JavaExecutor:
             try:
                 return json.loads(result["stdout"])
             except json.JSONDecodeError:
-                logger.error(f"解析深度分析结果失败: {result['stdout']}")
+                logger.warning(f"解析深度分析结果失败: {result['stdout']}")
                 return None
         return None
 
@@ -288,7 +288,7 @@ class JavaExecutor:
             try:
                 return json.loads(result["stdout"])
             except json.JSONDecodeError:
-                logger.error(f"解析方法分析结果失败: {result['stdout']}")
+                logger.warning(f"解析方法分析结果失败: {result['stdout']}")
                 return None
         return None
 
@@ -316,14 +316,14 @@ class JavaExecutor:
 
         # 记录详细信息
         if not result.get("success", False):
-            logger.error(f"变异应用失败:")
-            logger.error(f"  源文件: {source_file}")
-            logger.error(f"  输出路径: {output_path}")
-            logger.error(f"  补丁: {patch_json[:200]}...")
+            logger.warning(f"变异应用失败:")
+            logger.warning(f"  源文件: {source_file}")
+            logger.warning(f"  输出路径: {output_path}")
+            logger.warning(f"  补丁: {patch_json[:200]}...")
             if result.get("stderr"):
-                logger.error(f"  错误信息: {result['stderr']}")
+                logger.warning(f"  错误信息: {result['stderr']}")
             if result.get("stdout"):
-                logger.error(f"  标准输出: {result['stdout']}")
+                logger.warning(f"  标准输出: {result['stdout']}")
 
         return result
 
@@ -406,8 +406,8 @@ class JavaExecutor:
 
         # 修复：如果所有输出都是空的，返回更详细的错误信息
         if not error_msg and not stderr and not stdout:
-            logger.error(f"编译失败但没有任何输出信息，可能是进程被中断或超时")
-            logger.error(f"  项目路径: {project_path}")
+            logger.warning(f"编译失败但没有任何输出信息，可能是进程被中断或超时")
+            logger.warning(f"  项目路径: {project_path}")
             return {
                 "success": False,
                 "error": "Compilation failed with no output (possible timeout or interruption)",

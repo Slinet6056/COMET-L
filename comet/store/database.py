@@ -581,7 +581,7 @@ class Database:
                 self.conn.commit()
                 logger.info(f"已删除测试用例: {test_id}")
             except Exception as e:
-                logger.error(f"删除测试用例失败: {e}")
+                logger.warning(f"删除测试用例失败: {e}")
                 self.conn.rollback()
                 raise
 
@@ -624,7 +624,7 @@ class Database:
                     return True
                 return False
             except Exception as e:
-                logger.error(f"删除测试方法失败: {e}")
+                logger.warning(f"删除测试方法失败: {e}")
                 self.conn.rollback()
                 raise
 
@@ -637,7 +637,7 @@ class Database:
                 self.conn.commit()
                 logger.info(f"已删除变异体: {mutant_id}")
             except Exception as e:
-                logger.error(f"删除变异体失败: {e}")
+                logger.warning(f"删除变异体失败: {e}")
                 self.conn.rollback()
                 raise
 
@@ -710,7 +710,7 @@ class Database:
 
                 return False
             except Exception as e:
-                logger.error(f"更新变异体击杀信息失败: {e}")
+                logger.warning(f"更新变异体击杀信息失败: {e}")
                 self.conn.rollback()
                 raise
 
@@ -791,7 +791,7 @@ class Database:
                     )
                 return updated_count
             except Exception as e:
-                logger.error(f"批量更新变异体击杀信息失败: {e}")
+                logger.warning(f"批量更新变异体击杀信息失败: {e}")
                 self.conn.rollback()
                 raise
 

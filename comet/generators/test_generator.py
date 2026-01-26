@@ -205,7 +205,7 @@ class TestGenerator:
             return test_case
 
         except Exception as e:
-            logger.error(f"测试生成失败: {e}")
+            logger.warning(f"测试生成失败: {e}")
             return None
 
     def refine_tests(
@@ -238,7 +238,7 @@ class TestGenerator:
         try:
             # 检查测试用例是否有方法
             if not test_case.methods:
-                logger.error("测试用例没有方法，无法优化")
+                logger.warning("测试用例没有方法，无法优化")
                 return None
 
             # 渲染提示词（传入所有测试方法）
@@ -314,7 +314,7 @@ class TestGenerator:
             return test_case
 
         except Exception as e:
-            logger.error(f"完善测试失败: {e}")
+            logger.warning(f"完善测试失败: {e}")
             return None
 
     def regenerate_with_feedback(
@@ -374,10 +374,10 @@ class TestGenerator:
                 return test_case
 
             except Exception as e:
-                logger.error(f"修复尝试 {attempt + 1} 失败: {e}")
+                logger.warning(f"修复尝试 {attempt + 1} 失败: {e}")
                 continue
 
-        logger.error(f"经过 {max_retries} 次尝试仍无法修复编译错误")
+        logger.warning(f"经过 {max_retries} 次尝试仍无法修复编译错误")
         return None
 
     def fix_single_method(
@@ -436,8 +436,8 @@ class TestGenerator:
                 return fixed_code
 
             except Exception as e:
-                logger.error(f"修复尝试 {attempt + 1} 失败: {e}")
+                logger.warning(f"修复尝试 {attempt + 1} 失败: {e}")
                 continue
 
-        logger.error(f"经过 {max_retries} 次尝试仍无法修复方法 {method_name}")
+        logger.warning(f"经过 {max_retries} 次尝试仍无法修复方法 {method_name}")
         return None

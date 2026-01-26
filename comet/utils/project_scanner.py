@@ -177,5 +177,5 @@ class ProjectScanner:
             logger.info(f"重新扫描文件: {file_path} ({len(classes)} 个类)")
             return len(classes)
         except Exception as e:
-            logger.error(f"重新扫描文件失败 {file_path}: {e}")
+            logger.warning(f"重新扫描文件失败 {file_path}: {e}")
             return 0

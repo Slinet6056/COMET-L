@@ -47,7 +47,7 @@ class PatternExtractor:
             Pattern 对象，如果提取失败则返回 None
         """
         if not any([bug_description, diff_patch, before_code, after_code]):
-            logger.error("必须提供至少一种输入")
+            logger.warning("必须提供至少一种输入")
             return None
 
         try:
@@ -90,7 +90,7 @@ class PatternExtractor:
             return pattern
 
         except Exception as e:
-            logger.error(f"模式提取失败: {e}")
+            logger.warning(f"模式提取失败: {e}")
             return None
 
     def extract_from_surviving_mutant(

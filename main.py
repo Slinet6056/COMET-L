@@ -17,40 +17,91 @@ from comet.executor import JavaExecutor, MutationEvaluator, MetricsCollector
 from comet.agent import PlannerAgent, ParallelPlannerAgent, AgentTools, AgentState
 from comet.agent.target_selector import TargetSelector
 from comet.utils import SandboxManager, ProjectScanner
+from comet.utils.log_context import ContextFilter
 
 
 class ColoredFormatter(logging.Formatter):
     """为终端输出添加 ANSI 颜色的格式化器"""
 
+    # ANSI 颜色代码
     RESET = "\033[0m"
-    COLORS = {
-        logging.DEBUG: "\033[36m",  # 青色
-        logging.INFO: "\033[32m",  # 绿色
-        logging.WARNING: "\033[33m",  # 黄色
-        logging.ERROR: "\033[31m",  # 红色
-        logging.CRITICAL: "\033[35m",  # 洋红
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+
+    # 基础颜色
+    BLACK = "\033[30m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    WHITE = "\033[37m"
+
+    # 亮色（用于时间戳等）
+    BRIGHT_BLACK = "\033[90m"
+
+    # 日志级别颜色
+    LEVEL_COLORS = {
+        logging.DEBUG: CYAN,
+        logging.INFO: GREEN,
+        logging.WARNING: YELLOW,
+        logging.ERROR: RED,
+        logging.CRITICAL: f"{BOLD}{RED}",
     }
 
     def format(self, record: logging.LogRecord) -> str:
+        # 保存原始值
         original_levelname = record.levelname
-        color = self.COLORS.get(record.levelno, "")
-        if color:
-            record.levelname = f"{color}{record.levelname}{self.RESET}"
+        original_name = record.name
+        original_task_id = getattr(record, "task_id", "main")
+
+        # 获取颜色
+        level_color = self.LEVEL_COLORS.get(record.levelno, "")
+
+        # 应用颜色
+        # 日志级别：使用级别对应的颜色
+        if level_color:
+            record.levelname = f"{level_color}{record.levelname}{self.RESET}"
+
+        # task_id：使用洋红色
+        record.task_id = f"{self.MAGENTA}{original_task_id}{self.RESET}"
+
+        # 模块名：使用蓝色
+        record.name = f"{self.BLUE}{record.name}{self.RESET}"
+
         try:
-            return super().format(record)
+            # 格式化基础消息
+            formatted = super().format(record)
+
+            # 时间戳部分使用暗色（替换开头的时间戳）
+            # 格式: "2026-01-26 10:30:45,123"
+            if formatted and len(formatted) > 23:
+                timestamp = formatted[:23]
+                rest = formatted[23:]
+                formatted = f"{self.BRIGHT_BLACK}{timestamp}{self.RESET}{rest}"
+
+            return formatted
         finally:
-            # 恢复，避免影响其他 handler（例如文件）
+            # 恢复原始值，避免影响其他 handler
             record.levelname = original_levelname
+            record.name = original_name
+            record.task_id = original_task_id
 
 
-LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+LOG_FORMAT = "%(asctime)s - [%(task_id)s] %(name)s - %(levelname)s - %(message)s"
 
 # 配置日志：文件使用纯文本，终端使用彩色输出
+# 添加上下文过滤器，为多线程日志提供任务标识
+context_filter = ContextFilter()
+
 file_handler = logging.FileHandler("comet.log", encoding="utf-8")
 file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+file_handler.addFilter(context_filter)
 
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(ColoredFormatter(LOG_FORMAT))
+console_handler.addFilter(context_filter)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -463,7 +514,7 @@ def run_evolution(
                                     or coverage_result.get("stdout")
                                     or "Unknown error"
                                 )
-                                logger.error(
+                                logger.warning(
                                     f"初始覆盖率测试失败 (尝试 {attempt}/{max_retries}): {error_detail[:500]}"
                                 )
 
@@ -477,7 +528,7 @@ def run_evolution(
                         except RuntimeError:
                             raise  # 重新抛出 RuntimeError（最后一次重试失败）
                         except Exception as e:
-                            logger.error(
+                            logger.warning(
                                 f"运行初始覆盖率测试异常 (尝试 {attempt}/{max_retries}): {e}"
                             )
                             if attempt < max_retries:
@@ -495,7 +546,7 @@ def run_evolution(
                     logger.error(f"关键错误: {e}", exc_info=True)
                     raise
                 except Exception as e:
-                    logger.error(f"并行预处理失败: {e}", exc_info=True)
+                    logger.warning(f"并行预处理失败: {e}", exc_info=True)
                     logger.warning("将跳过预处理，继续正常流程")
             else:
                 logger.info("并行预处理已禁用，跳过预处理阶段")

@@ -15,6 +15,7 @@ from ..executor.java_executor import JavaExecutor
 from ..executor.coverage_parser import CoverageParser
 from ..store.database import Database
 from ..utils.sandbox import SandboxManager
+from ..utils.log_context import log_context
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +298,7 @@ class ParallelPlannerAgent:
                     result = future.result(timeout=self.timeout_per_target)
                     results.append(result)
                 except Exception as e:
-                    logger.error(
+                    logger.warning(
                         f"处理目标 {target.get('class_name')}.{target.get('method_name')} 失败: {e}"
                     )
                     results.append(
@@ -339,9 +340,20 @@ class ParallelPlannerAgent:
         class_name = target.get("class_name", "")
         method_name = target.get("method_name", "")
         target_id = f"{class_name}.{method_name}"
+
+        # 设置日志上下文，便于在多线程日志中区分不同 Worker
+        with log_context(f"Worker:{target_id}"):
+            return self._process_single_target_impl(
+                target, class_name, method_name, target_id
+            )
+
+    def _process_single_target_impl(
+        self, target: Dict[str, Any], class_name: str, method_name: str, target_id: str
+    ) -> WorkerResult:
+        """_process_single_target 的实际实现"""
         start_time = time.time()
 
-        logger.info(f"[Worker] 开始处理: {target_id}")
+        logger.info(f"开始处理: {target_id}")
 
         result = WorkerResult(
             target_id=target_id,
@@ -359,7 +371,7 @@ class ParallelPlannerAgent:
             )
             # 从路径中提取 sandbox_id（路径的最后一部分）
             sandbox_id = Path(sandbox_path).name
-            logger.debug(f"[Worker] 创建沙箱: {sandbox_path} (id: {sandbox_id})")
+            logger.debug(f"创建沙箱: {sandbox_path} (id: {sandbox_id})")
 
             # 1. 并行生成测试和变异体（两者都只读源代码，可并行）
             test_result = None
@@ -383,12 +395,12 @@ class ParallelPlannerAgent:
                 try:
                     test_result = test_future.result(timeout=180)
                 except Exception as e:
-                    logger.error(f"[Worker] {target_id}: 测试生成异常: {e}")
+                    logger.warning(f"测试生成异常: {e}")
 
                 try:
                     mutant_result = mutant_future.result(timeout=180)
                 except Exception as e:
-                    logger.error(f"[Worker] {target_id}: 变异体生成异常: {e}")
+                    logger.warning(f"变异体生成异常: {e}")
 
             # 处理测试生成结果
             if test_result:
@@ -397,7 +409,7 @@ class ParallelPlannerAgent:
 
             if result.tests_generated == 0:
                 result.error = "测试生成失败"
-                logger.warning(f"[Worker] {target_id}: 测试生成失败")
+                logger.warning(f"测试生成失败")
                 return result
 
             # 处理变异体生成结果
@@ -406,7 +418,7 @@ class ParallelPlannerAgent:
 
             if result.mutants_generated == 0:
                 # 没有变异体也算成功（可能方法太简单）
-                logger.info(f"[Worker] {target_id}: 没有生成变异体")
+                logger.info(f"没有生成变异体")
                 result.success = True
                 return result
 
@@ -423,7 +435,7 @@ class ParallelPlannerAgent:
             result.processing_time = time.time() - start_time
 
             logger.info(
-                f"[Worker] {target_id} 完成: "
+                f"完成: "
                 f"{result.tests_generated} 测试, "
                 f"{result.mutants_generated} 变异体, "
                 f"变异分数 {result.local_mutation_score:.1%}, "
@@ -433,7 +445,7 @@ class ParallelPlannerAgent:
         except Exception as e:
             result.error = str(e)
             result.processing_time = time.time() - start_time
-            logger.error(f"[Worker] {target_id} 处理异常: {e}")
+            logger.warning(f"处理异常: {e}")
 
         finally:
             # 清理沙箱
@@ -441,7 +453,7 @@ class ParallelPlannerAgent:
                 try:
                     self.sandbox_manager.cleanup_sandbox(sandbox_id)
                 except Exception as e:
-                    logger.warning(f"[Worker] 清理沙箱失败: {e}")
+                    logger.warning(f"清理沙箱失败: {e}")
 
         return result
 
@@ -485,7 +497,7 @@ class ParallelPlannerAgent:
             return result
 
         except Exception as e:
-            logger.error(f"生成测试失败: {e}")
+            logger.warning(f"生成测试失败: {e}")
             return None
 
     def _generate_mutants_in_sandbox(
@@ -507,7 +519,7 @@ class ParallelPlannerAgent:
             return result
 
         except Exception as e:
-            logger.error(f"生成变异体失败: {e}")
+            logger.warning(f"生成变异体失败: {e}")
             return None
 
     def _evaluate_in_sandbox(
@@ -574,7 +586,7 @@ class ParallelPlannerAgent:
             }
 
         except Exception as e:
-            logger.error(f"评估变异体失败: {e}")
+            logger.warning(f"评估变异体失败: {e}")
             return None
 
     def _collect_test_files(
@@ -679,7 +691,7 @@ class ParallelPlannerAgent:
                 merged_count += 1
                 logger.debug(f"合并测试文件: {rel_path}")
             except Exception as e:
-                logger.error(f"写入测试文件失败: {rel_path}: {e}")
+                logger.warning(f"写入测试文件失败: {rel_path}: {e}")
 
         logger.info(
             f"测试文件合并完成: {merged_count} 个新文件, "
@@ -767,7 +779,7 @@ class ParallelPlannerAgent:
                 logger.warning(f"JaCoCo 报告不存在: {jacoco_path}")
 
         except Exception as e:
-            logger.error(f"收集覆盖率失败: {e}")
+            logger.warning(f"收集覆盖率失败: {e}")
 
     def _sync_global_state(self) -> None:
         """同步全局状态"""
@@ -795,7 +807,7 @@ class ParallelPlannerAgent:
             )
 
         except Exception as e:
-            logger.error(f"同步全局状态失败: {e}")
+            logger.warning(f"同步全局状态失败: {e}")
 
     def _check_improvement(
         self,

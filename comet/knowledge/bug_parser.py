@@ -194,7 +194,7 @@ class BugReportParser:
             )
 
         except Exception as e:
-            logger.error(f"解析 Bug 报告失败 {file_path}: {e}")
+            logger.warning(f"解析 Bug 报告失败 {file_path}: {e}")
             return None
 
     def parse_directory(self, directory: str) -> List[BugReport]:

@@ -546,7 +546,7 @@ class PlannerAgent:
             return decision
 
         except Exception as e:
-            logger.error(f"决策失败: {e}")
+            logger.warning(f"决策失败: {e}")
             return None
 
     def _execute_tool(self, decision: Dict[str, Any]) -> Any:
@@ -565,7 +565,7 @@ class PlannerAgent:
         # 确保 action 为有效的字符串，避免类型错误
         if not isinstance(action, str) or not action:
             safe_action = "unknown" if action is None or action == "" else str(action)
-            logger.error(f"决策缺少有效的 action: {action}")
+            logger.warning(f"决策缺少有效的 action: {action}")
             self.state.add_action(
                 action=safe_action,
                 params=params,
@@ -624,7 +624,7 @@ class PlannerAgent:
                 return result
             else:
                 # 工具返回了错误标志
-                logger.error(f"工具执行失败: {action} - {error_msg}")
+                logger.warning(f"工具执行失败: {action} - {error_msg}")
 
                 # 记录失败的操作
                 self.state.add_action(
@@ -637,7 +637,7 @@ class PlannerAgent:
                 return None
 
         except Exception as e:
-            logger.error(f"工具执行失败: {action} - {e}")
+            logger.warning(f"工具执行失败: {action} - {e}")
 
             # 记录失败的操作
             self.state.add_action(
@@ -726,7 +726,7 @@ class PlannerAgent:
                     logger.warning("  ✗ 测试生成失败或未生成任何测试，停止自动流程")
                     return
             except Exception as e:
-                logger.error(f"  ✗ 自动生成测试失败: {e}")
+                logger.warning(f"  ✗ 自动生成测试失败: {e}")
                 return
         else:
             logger.info("→ 跳过 generate_tests（目标方法已有测试）")
@@ -759,7 +759,7 @@ class PlannerAgent:
                     logger.warning("  ✗ 变异体生成失败或未生成任何变异体，停止自动流程")
                     return
             except Exception as e:
-                logger.error(f"  ✗ 自动生成变异体失败: {e}")
+                logger.warning(f"  ✗ 自动生成变异体失败: {e}")
                 return
         else:
             logger.info("→ 跳过 generate_mutants（已有变异体）")
@@ -788,7 +788,7 @@ class PlannerAgent:
                 else:
                     logger.warning("  ✗ 评估失败")
             except Exception as e:
-                logger.error(f"  ✗ 自动评估失败: {e}")
+                logger.warning(f"  ✗ 自动评估失败: {e}")
 
         logger.info(f"{'='*60}")
         logger.info("新目标自动化流程完成")
@@ -824,7 +824,7 @@ class PlannerAgent:
             else:
                 logger.warning("  ✗ 评估失败")
         except Exception as e:
-            logger.error(f"  ✗ 自动评估失败: {e}")
+            logger.warning(f"  ✗ 自动评估失败: {e}")
 
         logger.info(f"{'='*60}")
 

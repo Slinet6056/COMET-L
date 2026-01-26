@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
+from .utils.log_context import log_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -348,11 +350,11 @@ class ParallelPreprocessor:
                                 f"失败: {result.get('error', 'Unknown')}"
                             )
                     except TimeoutError:
-                        logger.error(
+                        logger.warning(
                             f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 超时"
                         )
                     except Exception as e:
-                        logger.error(
+                        logger.warning(
                             f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} 异常: {e}"
                         )
 
@@ -401,21 +403,23 @@ class ParallelPreprocessor:
         """
         from datetime import datetime
 
-        # 记录开始时间，用于后续清理
-        start_time = datetime.now()
+        # 设置日志上下文，便于在多线程日志中区分不同任务
+        with log_context(f"Pre:{class_name}.{method_name}"):
+            # 记录开始时间，用于后续清理
+            start_time = datetime.now()
 
-        # 直接调用处理方法（不使用额外的线程池包装）
-        # 超时控制在 _process_method 内部通过检查时间来实现
-        try:
-            result = self._process_method(
-                class_name, method_name, method_info, start_time
-            )
-            return result
-        except Exception as e:
-            logger.error(f"方法 {class_name}.{method_name} 处理异常: {e}")
-            with self._stats_lock:
-                self._stats["failed"] += 1
-            return {"success": False, "error": str(e)}
+            # 直接调用处理方法（不使用额外的线程池包装）
+            # 超时控制在 _process_method 内部通过检查时间来实现
+            try:
+                result = self._process_method(
+                    class_name, method_name, method_info, start_time
+                )
+                return result
+            except Exception as e:
+                logger.warning(f"方法处理异常: {e}")
+                with self._stats_lock:
+                    self._stats["failed"] += 1
+                return {"success": False, "error": str(e)}
 
     def _cleanup_timeout_data(
         self, class_name: str, method_name: str, start_time
@@ -506,7 +510,7 @@ class ParallelPreprocessor:
             # 获取文件路径（传入数据库以支持多类文件）
             file_path = find_java_file(self.workspace_sandbox, class_name, db=self.db)
             if not file_path:
-                logger.error(f"未找到类文件: {class_name}")
+                logger.warning(f"未找到类文件: {class_name}")
                 return result
 
             # 索引源码分析（每个类只分析一次）
@@ -551,7 +555,7 @@ class ParallelPreprocessor:
 
             # 检查超时
             if time.time() > timeout_deadline:
-                logger.error(
+                logger.warning(
                     f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试生成后"
                 )
                 self._cleanup_timeout_data(class_name, method_name, task_start_time)
@@ -575,13 +579,13 @@ class ParallelPreprocessor:
             )
 
             if not test_file:
-                logger.error(f"写入测试文件失败: {class_name}.{method_name}")
+                logger.warning(f"写入测试文件失败: {class_name}.{method_name}")
                 return result
 
             # 验证和修复测试
             # 检查超时
             if time.time() > timeout_deadline:
-                logger.error(
+                logger.warning(
                     f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在写入测试文件后"
                 )
                 self._cleanup_timeout_data(class_name, method_name, task_start_time)
@@ -614,7 +618,7 @@ class ParallelPreprocessor:
 
             # 检查超时
             if time.time() > timeout_deadline:
-                logger.error(
+                logger.warning(
                     f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试验证后"
                 )
                 self._cleanup_timeout_data(class_name, method_name, task_start_time)
@@ -638,7 +642,9 @@ class ParallelPreprocessor:
                 ]
 
                 if not test_case.methods:
-                    logger.error(f"所有测试方法都包含错误: {class_name}.{method_name}")
+                    logger.warning(
+                        f"所有测试方法都包含错误: {class_name}.{method_name}"
+                    )
                     return result
 
                 # 重新构建测试代码
@@ -669,7 +675,7 @@ class ParallelPreprocessor:
             else:
                 # 检查超时
                 if time.time() > timeout_deadline:
-                    logger.error(
+                    logger.warning(
                         f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在生成变异体后"
                     )
                     self._cleanup_timeout_data(class_name, method_name, task_start_time)
@@ -718,7 +724,9 @@ class ParallelPreprocessor:
             result["success"] = True
 
         except Exception as e:
-            logger.error(f"处理方法失败 {class_name}.{method_name}: {e}", exc_info=True)
+            logger.warning(
+                f"处理方法失败 {class_name}.{method_name}: {e}", exc_info=True
+            )
             result["error"] = str(e)
 
         finally:
@@ -805,12 +813,12 @@ class ParallelPreprocessor:
                     logger.warning(f"验证沙箱中验证失败: {class_name}")
 
             except Exception as e:
-                logger.error(f"在验证沙箱中验证测试文件失败 {class_name}: {e}")
+                logger.warning(f"在验证沙箱中验证测试文件失败 {class_name}: {e}")
 
         # 3. 清空workspace测试目录
         logger.info("步骤 3: 清空workspace测试目录...")
         if not clear_test_directory(self.workspace_sandbox):
-            logger.error("清空测试目录失败")
+            logger.warning("清空测试目录失败")
             return
 
         # 4. 将验证通过的测试写入workspace并更新数据库
@@ -860,7 +868,7 @@ class ParallelPreprocessor:
                 self.db.save_test_case(test_case)
 
             except Exception as e:
-                logger.error(f"写入测试文件失败 {class_name}: {e}", exc_info=True)
+                logger.warning(f"写入测试文件失败 {class_name}: {e}", exc_info=True)
 
         # 5. 整体验证：确保所有测试类组合在一起可以正常工作
         logger.info("步骤 5: 对 workspace 进行整体验证...")
@@ -889,7 +897,7 @@ class ParallelPreprocessor:
                 removed = self._handle_workspace_compile_failure(compile_result)
 
                 if not removed:
-                    logger.error("无法定位编译失败的测试类，放弃修复")
+                    logger.warning("无法定位编译失败的测试类，放弃修复")
                     break
 
                 logger.info(f"已删除 {removed} 个有问题的测试类，重新验证...")
@@ -908,13 +916,13 @@ class ParallelPreprocessor:
             removed = self._handle_workspace_test_failure()
 
             if not removed:
-                logger.error("无法定位失败的测试方法，放弃修复")
+                logger.warning("无法定位失败的测试方法，放弃修复")
                 break
 
             logger.info(f"已删除 {removed} 个失败的测试方法，重新验证...")
 
         if iteration >= max_iterations:
-            logger.error(f"整体验证达到最大迭代次数 {max_iterations}，停止修复")
+            logger.warning(f"整体验证达到最大迭代次数 {max_iterations}，停止修复")
 
     def _handle_workspace_compile_failure(self, compile_result: Dict[str, Any]) -> int:
         """
@@ -1113,7 +1121,7 @@ class ParallelPreprocessor:
             return success
 
         except Exception as e:
-            logger.error(f"验证沙箱 {sandbox_id} 异常: {e}")
+            logger.warning(f"验证沙箱 {sandbox_id} 异常: {e}")
             return False
         finally:
             # 清理沙箱
@@ -1198,7 +1206,7 @@ class ParallelPreprocessor:
             return valid_methods
 
         except Exception as e:
-            logger.error(f"在验证沙箱中构建和验证测试失败: {e}")
+            logger.warning(f"在验证沙箱中构建和验证测试失败: {e}")
             return []
         finally:
             # 清理验证沙箱
@@ -1266,7 +1274,7 @@ class ParallelPreprocessor:
 
             # 检查是否有进展（防止无限循环）
             if len(valid_methods) == last_method_count and iteration > 1:
-                logger.error(f"验证陷入死循环，方法数量未变化: {len(valid_methods)}")
+                logger.warning(f"验证陷入死循环，方法数量未变化: {len(valid_methods)}")
                 break
             last_method_count = len(valid_methods)
 
@@ -1319,7 +1327,7 @@ class ParallelPreprocessor:
                             self._delete_test_method_from_db(target_class, method_name)
                     else:
                         # 二分查找也没找到，这不应该发生
-                        logger.error("二分查找未能识别失败方法，删除所有方法")
+                        logger.warning("二分查找未能识别失败方法，删除所有方法")
                         for m in valid_methods:
                             self._delete_test_method_from_db(
                                 target_class, m.method_name
@@ -1335,7 +1343,7 @@ class ParallelPreprocessor:
                     self._delete_test_method_from_db(target_class, removed.method_name)
                 else:
                     # 没有方法了，退出
-                    logger.error("所有方法都编译失败")
+                    logger.warning("所有方法都编译失败")
                     break
 
                 # 继续下一次迭代
@@ -1383,7 +1391,7 @@ class ParallelPreprocessor:
                             self._delete_test_method_from_db(target_class, method_name)
                     else:
                         # 二分查找也没找到，这不应该发生
-                        logger.error("二分查找未能识别失败方法，删除所有方法")
+                        logger.warning("二分查找未能识别失败方法，删除所有方法")
                         for m in valid_methods:
                             self._delete_test_method_from_db(
                                 target_class, m.method_name
@@ -1401,7 +1409,7 @@ class ParallelPreprocessor:
                     continue
                 else:
                     # 没有方法了
-                    logger.error("所有测试方法都失败")
+                    logger.warning("所有测试方法都失败")
                     break
 
             # 从文件和数据库中删除失败的测试方法
@@ -1416,7 +1424,7 @@ class ParallelPreprocessor:
                 self._delete_test_method_from_db(target_class, method_name)
 
             if not valid_methods:
-                logger.error("所有测试方法都失败了")
+                logger.warning("所有测试方法都失败了")
                 break
 
             # 重新构建和验证（确保删除后的方法仍然可以编译和运行）
@@ -1499,7 +1507,7 @@ class ParallelPreprocessor:
             right_names = {m.method_name for m in right_methods}
             duplicates = left_names & right_names
             if duplicates:
-                logger.error(f"发现重名方法: {duplicates}，这些方法会导致编译失败")
+                logger.warning(f"发现重名方法: {duplicates}，这些方法会导致编译失败")
                 # 返回所有重名方法（每个重名方法在两侧都出现）
                 return list(duplicates)
 
@@ -1521,7 +1529,7 @@ class ParallelPreprocessor:
                     return failed_in_individual
                 else:
                     # 所有方法单独都通过，说明是组合问题，保守删除所有
-                    logger.error(f"所有方法单独都通过但合并失败，删除所有方法")
+                    logger.warning(f"所有方法单独都通过但合并失败，删除所有方法")
                     return [m.method_name for m in methods]
             else:
                 # 方法较多，继续递归二分（每侧再细分）
@@ -1643,7 +1651,7 @@ class ParallelPreprocessor:
             return True
 
         except Exception as e:
-            logger.error(f"验证沙箱 {sandbox_id} 异常: {e}")
+            logger.warning(f"验证沙箱 {sandbox_id} 异常: {e}")
             return False
         finally:
             # 清理沙箱
@@ -1683,7 +1691,7 @@ class ParallelPreprocessor:
                 logger.debug(f"未找到需要删除的方法: {target_class}.{method_name}")
 
         except Exception as e:
-            logger.error(f"从数据库删除测试方法失败: {e}")
+            logger.warning(f"从数据库删除测试方法失败: {e}")
 
     def _identify_failed_test_methods(
         self, test_class_name: str, project_path: Optional[str] = None
@@ -1732,7 +1740,7 @@ class ParallelPreprocessor:
 
             return failed_methods
         except Exception as e:
-            logger.error(f"解析Surefire报告失败: {e}")
+            logger.warning(f"解析Surefire报告失败: {e}")
             return failed_methods
 
     def _get_method_line_ranges_by_regex(

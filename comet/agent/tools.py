@@ -459,7 +459,7 @@ class AgentTools:
             }
 
         except Exception as e:
-            logger.error(f"在沙箱中生成测试失败: {e}", exc_info=True)
+            logger.warning(f"在沙箱中生成测试失败: {e}", exc_info=True)
             return {"success": False, "error": str(e), "sandbox_id": sandbox_id}
 
     def _refine_and_verify_in_sandbox(
@@ -674,7 +674,7 @@ class AgentTools:
             }
 
         except Exception as e:
-            logger.error(f"在沙箱中完善测试失败: {e}", exc_info=True)
+            logger.warning(f"在沙箱中完善测试失败: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e),
@@ -717,14 +717,14 @@ class AgentTools:
             )
 
             if not test_file:
-                logger.error("写入测试文件到主工作空间失败")
+                logger.warning("写入测试文件到主工作空间失败")
                 return False
 
             logger.info(f"✓ 成功提交测试到主工作空间: {test_file}")
             return True
 
         except Exception as e:
-            logger.error(f"提交测试到主工作空间失败: {e}", exc_info=True)
+            logger.warning(f"提交测试到主工作空间失败: {e}", exc_info=True)
             return False
 
     def _verify_and_fix_tests(
@@ -784,7 +784,7 @@ class AgentTools:
             compile_retry_count += 1
 
             if compile_retry_count >= max_compile_retries:
-                logger.error(
+                logger.warning(
                     f"✗ 编译失败且已达到最大重试次数（{max_compile_retries}次）"
                 )
                 test_case.compile_success = False
@@ -805,7 +805,7 @@ class AgentTools:
             )
 
             if not fixed_test_case:
-                logger.error("LLM 未能生成修复后的测试代码")
+                logger.warning("LLM 未能生成修复后的测试代码")
                 test_case.compile_success = False
                 test_case.compile_error = (
                     f"编译失败（已重试{compile_retry_count}次）且无法修复"
@@ -825,7 +825,7 @@ class AgentTools:
             test_case = fixed_test_case
 
             if not test_file:
-                logger.error("写入修复后的测试文件失败")
+                logger.warning("写入修复后的测试文件失败")
                 test_case.compile_success = False
                 test_case.compile_error = "写入测试文件失败"
                 return test_case
@@ -843,7 +843,7 @@ class AgentTools:
         # ===== 步骤3: 处理测试失败 =====
         # 检查是否超时（匹配 "Timeout after X seconds" 格式）
         if test_result.get("error", "").startswith("Timeout"):
-            logger.error("测试运行超时，开始逐个测试方法以识别超时方法...")
+            logger.warning("测试运行超时，开始逐个测试方法以识别超时方法...")
 
             # 逐个运行测试方法来识别超时的方法
             timeout_methods = self._identify_timeout_methods(test_case, work_path)
@@ -858,7 +858,7 @@ class AgentTools:
                 ]
 
                 if not valid_methods:
-                    logger.error("所有测试方法都超时或失败")
+                    logger.warning("所有测试方法都超时或失败")
                     test_case.compile_success = False
                     timeout_value = (
                         self.java_executor.test_timeout if self.java_executor else 30
@@ -898,7 +898,7 @@ class AgentTools:
                 # 重新编译和测试，确保剩余方法一起工作正常
                 compile_result = self.java_executor.compile_tests(work_path)
                 if not compile_result.get("success"):
-                    logger.error("过滤后的测试用例编译失败")
+                    logger.warning("过滤后的测试用例编译失败")
                     test_case.compile_success = False
                     test_case.compile_error = "Filtered test case compilation failed"
                     test_case.methods = []
@@ -913,13 +913,13 @@ class AgentTools:
                     test_case.compile_error = None
                     return test_case
                 else:
-                    logger.error("过滤后的测试用例运行失败，可能存在测试间依赖")
+                    logger.warning("过滤后的测试用例运行失败，可能存在测试间依赖")
                     test_case.compile_success = False
                     test_case.compile_error = "Filtered test case execution failed"
                     test_case.methods = []
                     return test_case
             else:
-                logger.error("无法识别超时方法")
+                logger.warning("无法识别超时方法")
                 test_case.compile_success = False
                 timeout_value = (
                     self.java_executor.test_timeout if self.java_executor else 30
@@ -940,7 +940,7 @@ class AgentTools:
         suite_results = surefire_parser.parse_surefire_reports(reports_dir)
 
         if not suite_results:
-            logger.error("无法解析 Surefire 报告")
+            logger.warning("无法解析 Surefire 报告")
             test_case.compile_success = False
             test_case.compile_error = "测试运行失败且无法解析报告"
             return test_case
@@ -1066,7 +1066,7 @@ class AgentTools:
                 final_methods.append(method)
 
         if not final_methods:
-            logger.error("所有测试方法都失败了，无有效测试")
+            logger.warning("所有测试方法都失败了，无有效测试")
             test_case.compile_success = False
             test_case.compile_error = "所有测试方法都失败"
             return test_case
@@ -1106,7 +1106,7 @@ class AgentTools:
                 test_case.compile_success = False
                 test_case.compile_error = "Final test run failed"
         else:
-            logger.error("最终编译失败（但这不应该发生）")
+            logger.warning("最终编译失败（但这不应该发生）")
             test_case.compile_success = False
             test_case.compile_error = "Final compilation failed"
 
@@ -1199,7 +1199,7 @@ class AgentTools:
     def select_target(self, criteria: str = "coverage") -> Dict[str, Any]:
         """选择目标类和方法（跳过黑名单中的目标）"""
         if not self.project_path or not self.java_executor or not self.db:
-            logger.error("select_target: 缺少必要组件")
+            logger.warning("select_target: 缺少必要组件")
             return {"class_name": None, "method_name": None}
 
         from .target_selector import TargetSelector
@@ -1282,7 +1282,7 @@ class AgentTools:
         if not all(
             [self.project_path, self.mutant_generator, self.static_guard, self.db]
         ):
-            logger.error("generate_mutants: 缺少必要组件")
+            logger.warning("generate_mutants: 缺少必要组件")
             return {"generated": 0}
 
         from ..utils.project_utils import find_java_file
@@ -1292,7 +1292,7 @@ class AgentTools:
         file_path = find_java_file(self.project_path, class_name, db=self.db)
 
         if not file_path:
-            logger.error(f"未找到类文件: {class_name}")
+            logger.warning(f"未找到类文件: {class_name}")
             return {"generated": 0}
 
         # 读取源代码
@@ -1353,7 +1353,7 @@ class AgentTools:
                 self.sandbox_manager,
             ]
         ):
-            logger.error("generate_tests: 缺少必要组件")
+            logger.warning("generate_tests: 缺少必要组件")
             return {"generated": 0}
 
         logger.info(f"开始生成测试: {class_name}.{method_name}")
@@ -1363,7 +1363,7 @@ class AgentTools:
 
         if not result["success"]:
             # 验证失败，主空间完全不受影响
-            logger.error(
+            logger.warning(
                 f"✗ 测试在验证沙箱中验证失败: {result.get('error', 'Unknown')}"
             )
 
@@ -1427,7 +1427,7 @@ class AgentTools:
         logger.info(f"测试在沙箱中验证通过，准备提交到主工作空间...")
         if not self._commit_test_to_workspace(test_case, sandbox_path):
             # 提交失败，主空间仍保持原状
-            logger.error("✗ 提交测试到主工作空间失败")
+            logger.warning("✗ 提交测试到主工作空间失败")
 
             # 清理沙箱
             try:
@@ -1449,7 +1449,7 @@ class AgentTools:
             self.db.save_test_case(test_case)
             logger.info(f"✓ 测试用例已保存到数据库: {test_case.id}")
         except Exception as e:
-            logger.error(f"保存测试用例到数据库失败: {e}")
+            logger.warning(f"保存测试用例到数据库失败: {e}")
             # 注意：此时主空间已被修改，但数据库保存失败
             # 这是一个不一致的状态，但比污染主空间要好
             logger.warning("警告：测试文件已写入主工作空间，但数据库保存失败")
@@ -1496,7 +1496,7 @@ class AgentTools:
                 self.sandbox_manager,
             ]
         ):
-            logger.error("refine_tests: 缺少必要组件")
+            logger.warning("refine_tests: 缺少必要组件")
             return {"refined": 0}
 
         logger.info(f"开始完善测试: {class_name}.{method_name}")
@@ -1506,7 +1506,7 @@ class AgentTools:
 
         if not result["success"]:
             # 验证失败，主空间完全不受影响
-            logger.error(
+            logger.warning(
                 f"✗ 测试在验证沙箱中验证失败: {result.get('error', 'Unknown')}"
             )
 
@@ -1577,7 +1577,7 @@ class AgentTools:
         logger.info(f"测试在沙箱中验证通过，准备提交到主工作空间...")
         if not self._commit_test_to_workspace(refined_test_case, sandbox_path):
             # 提交失败，主空间仍保持原状
-            logger.error("✗ 提交测试到主工作空间失败")
+            logger.warning("✗ 提交测试到主工作空间失败")
 
             # 清理沙箱
             try:
@@ -1599,7 +1599,7 @@ class AgentTools:
             self.db.save_test_case(refined_test_case)
             logger.info(f"✓ 测试用例已保存到数据库: {refined_test_case.id}")
         except Exception as e:
-            logger.error(f"保存测试用例到数据库失败: {e}")
+            logger.warning(f"保存测试用例到数据库失败: {e}")
             # 注意：此时主空间已被修改，但数据库保存失败
             # 这是一个不一致的状态，但比污染主空间要好
             logger.warning("警告：测试文件已写入主工作空间，但数据库保存失败")
@@ -1642,7 +1642,7 @@ class AgentTools:
         if not all(
             [self.project_path, self.mutation_evaluator, self.java_executor, self.db]
         ):
-            logger.error("run_evaluation: 缺少必要组件")
+            logger.warning("run_evaluation: 缺少必要组件")
             return {"evaluated": 0}
 
         # 获取当前目标方法
@@ -1717,10 +1717,10 @@ class AgentTools:
                         f"✓ 同步测试类: {tc.class_name} ({method_count} 个方法)"
                     )
                 else:
-                    logger.error(f"✗ 同步测试类失败: {tc.class_name}")
+                    logger.warning(f"✗ 同步测试类失败: {tc.class_name}")
 
             except Exception as e:
-                logger.error(f"同步测试类 {tc.class_name} 时出错: {e}", exc_info=True)
+                logger.warning(f"同步测试类 {tc.class_name} 时出错: {e}", exc_info=True)
 
         logger.info("✓ 测试文件同步完成")
 
@@ -1745,7 +1745,7 @@ class AgentTools:
             if not error_msg or not error_msg.strip():
                 error_msg = "Unknown error"
 
-            logger.error(
+            logger.warning(
                 f"✗ 测试运行失败！这不应该发生，因为所有测试都应该在生成时验证过。\n"
                 f"可能原因：\n"
                 f"  1. 测试文件同步到 workspace 失败\n"
@@ -1893,7 +1893,7 @@ class AgentTools:
             data: 知识数据
         """
         if not self.knowledge_base:
-            logger.error("update_knowledge: 知识库未初始化")
+            logger.warning("update_knowledge: 知识库未初始化")
             return {"updated": False}
 
         # 如果没有提供参数，执行自动学习
@@ -1957,7 +1957,7 @@ class AgentTools:
                 return {"updated": False, "error": f"未知类型: {type}"}
 
         except Exception as e:
-            logger.error(f"更新知识库失败: {e}")
+            logger.warning(f"更新知识库失败: {e}")
             return {"updated": False, "error": str(e)}
 
     def _auto_learn_from_evaluation(self) -> Dict[str, Any]:
@@ -2022,7 +2022,7 @@ class AgentTools:
             }
 
         except Exception as e:
-            logger.error(f"自动学习失败: {e}")
+            logger.warning(f"自动学习失败: {e}")
             return {"updated": False, "error": str(e)}
 
     def _index_source_analysis(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2061,7 +2061,7 @@ class AgentTools:
             return {"updated": True, "class_name": class_name}
 
         except Exception as e:
-            logger.error(f"索引源代码分析失败: {e}")
+            logger.warning(f"索引源代码分析失败: {e}")
             return {"updated": False, "error": str(e)}
 
     def _index_bug_reports(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2086,7 +2086,7 @@ class AgentTools:
             return {"updated": True, "indexed_count": count}
 
         except Exception as e:
-            logger.error(f"索引 Bug 报告失败: {e}")
+            logger.warning(f"索引 Bug 报告失败: {e}")
             return {"updated": False, "error": str(e)}
 
     def refine_mutants(
@@ -2107,7 +2107,7 @@ class AgentTools:
         if not all(
             [self.project_path, self.mutant_generator, self.static_guard, self.db]
         ):
-            logger.error("refine_mutants: 缺少必要组件")
+            logger.warning("refine_mutants: 缺少必要组件")
             return {"generated": 0}
 
         from ..utils.project_utils import find_java_file
@@ -2117,7 +2117,7 @@ class AgentTools:
         file_path = find_java_file(self.project_path, class_name, db=self.db)
 
         if not file_path:
-            logger.error(f"未找到类文件: {class_name}")
+            logger.warning(f"未找到类文件: {class_name}")
             return {"generated": 0}
 
         # 读取源代码

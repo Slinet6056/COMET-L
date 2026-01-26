@@ -37,7 +37,7 @@ class JavaFormatter:
             是否成功
         """
         if not Path(file_path).exists():
-            logger.error(f"文件不存在: {file_path}")
+            logger.warning(f"文件不存在: {file_path}")
             return False
 
         cmd = [
@@ -65,10 +65,10 @@ class JavaFormatter:
                 return False
 
         except subprocess.TimeoutExpired:
-            logger.error(f"格式化超时: {file_path}")
+            logger.warning(f"格式化超时: {file_path}")
             return False
         except Exception as e:
-            logger.error(f"格式化异常: {e}")
+            logger.warning(f"格式化异常: {e}")
             return False
 
     def format_source(self, source: str, temp_file: Optional[str] = None) -> Optional[str]:

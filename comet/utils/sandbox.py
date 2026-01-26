@@ -143,7 +143,7 @@ class SandboxManager:
                     shutil.rmtree(sandbox_path)
                     logger.info(f"清理沙箱: {sandbox_path}")
                 except Exception as e:
-                    logger.error(f"清理沙箱失败 {sandbox_path}: {e}")
+                    logger.warning(f"清理沙箱失败 {sandbox_path}: {e}")
                 finally:
                     # 从记录中移除
                     self._sandboxes.pop(sandbox_id, None)
@@ -212,7 +212,7 @@ class SandboxManager:
         """
         sandbox_path = self.sandbox_root / sandbox_id
         if not sandbox_path.exists():
-            logger.error(f"沙箱不存在: {sandbox_id}")
+            logger.warning(f"沙箱不存在: {sandbox_id}")
             return
 
         # 获取沙箱中的测试目录
