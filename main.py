@@ -571,9 +571,6 @@ def run_evolution(
         sandbox_manager.export_test_files("workspace", project_path)
         logger.info("=" * 60)
 
-        # 输出摘要
-        print_summary(final_state, components["metrics_collector"])
-
     except KeyboardInterrupt:
         logger.info("\n用户中断，保存当前状态...")
         state_file = f"{config.paths.output}/interrupted_state.json"
@@ -595,38 +592,6 @@ def run_evolution(
         except:
             pass
         raise
-
-
-def print_summary(state: AgentState, metrics_collector: MetricsCollector):
-    """打印运行摘要"""
-    # 从 metrics_collector 获取历史趋势
-    summary = metrics_collector.get_summary()
-
-    # 从 state 获取最终的准确状态（更可靠）
-    final_mutation_score = state.mutation_score
-    final_line_coverage = state.line_coverage
-    total_iterations = state.iteration
-    total_tests = state.total_tests
-    llm_calls = state.llm_calls
-
-    # 从 metrics_collector 获取初始值（如果有）
-    initial_mutation_score = summary.get("initial_mutation_score", 0.0)
-    initial_coverage = summary.get("initial_coverage", 0.0)
-
-    # 如果 metrics_collector 没有历史记录，使用 state 的当前值作为最终值
-    if not metrics_collector.history:
-        initial_mutation_score = 0.0
-        initial_coverage = 0.0
-
-    print("\n" + "=" * 60)
-    print("运行摘要")
-    print("=" * 60)
-    print(f"总迭代次数: {total_iterations}")
-    print(f"变异分数: {initial_mutation_score:.3f} -> {final_mutation_score:.3f}")
-    print(f"行覆盖率: {initial_coverage:.3f} -> {final_line_coverage:.3f}")
-    print(f"总测试数: {total_tests}")
-    print(f"LLM 调用次数: {llm_calls}")
-    print("=" * 60)
 
 
 def main():
