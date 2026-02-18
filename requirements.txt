@@ -1,9 +1,0 @@
-openai
-pyyaml
-requests
-jinja2
-pydantic
-javalang
-chromadb
-tiktoken
-# httpx[socks]

@@ -12,15 +12,15 @@ COMET-L（LLM 驱动的测试变异协同进化系统）是一个创新的自动
 - Python 3.13+ (项目使用 Python 3.14)
 - Java 8+ (使用 direnv 自动管理，默认 Java 8)
 - Maven 3.6+
-- 推荐使用 direnv 自动激活 Python 虚拟环境和 Java 版本
+- 推荐使用 direnv + uv 自动同步 Python 依赖并激活 Python/Java 环境
 
 ### 环境设置
 ```bash
-# direnv 会自动激活虚拟环境和设置 Java 8
+# direnv 会自动执行 uv sync 并设置 Java 8
 # 首次使用需允许: direnv allow
 
-# 安装 Python 依赖（包括 ChromaDB、sentence-transformers 等）
-pip install -r requirements.txt
+# 使用 uv 同步 Python 依赖（包括 ChromaDB、sentence-transformers 等）
+uv sync
 
 # 构建 Java 运行时模块（必须先完成此步骤）
 cd java-runtime
@@ -38,19 +38,19 @@ cd ..
 cd java-runtime && mvn clean package && cd ..
 
 # 运行系统（使用示例项目）
-python main.py --project-path examples/calculator-demo
+uv run python main.py --project-path examples/calculator-demo
 
 # 运行系统（带调试日志）
-python main.py --project-path /path/to/project --debug
+uv run python main.py --project-path /path/to/project --debug
 
 # 使用自定义配置
-python main.py --project-path /path/to/project --config my-config.yaml
+uv run python main.py --project-path /path/to/project --config my-config.yaml
 
 # 设置迭代次数和预算
-python main.py --project-path /path/to/project --max-iterations 5 --budget 500
+uv run python main.py --project-path /path/to/project --max-iterations 5 --budget 500
 
 # 从中断状态恢复
-python main.py --project-path /path/to/project --resume output/interrupted_state.json
+uv run python main.py --project-path /path/to/project --resume output/interrupted_state.json
 ```
 
 ### 配置文件
