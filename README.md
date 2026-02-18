@@ -35,8 +35,8 @@ COMET-L 是一个创新的测试生成系统，通过测试生成器和变异生
 ### 安装
 
 ```bash
-# 安装 Python 依赖
-pip install -r requirements.txt
+# 使用 uv 同步 Python 依赖（会根据 pyproject.toml + uv.lock 创建/更新 .venv）
+uv sync
 
 # 构建 Java 运行时模块
 cd java-runtime
@@ -72,41 +72,41 @@ knowledge:
 对任意 Maven 项目运行协同进化：
 
 ```bash
-python main.py --project-path /path/to/your/java/project
+uv run python main.py --project-path /path/to/your/java/project
 ```
 
 使用示例项目测试：
 
 ```bash
-python main.py --project-path examples/calculator-demo
+uv run python main.py --project-path examples/calculator-demo
 ```
 
 ## 使用示例
 
 ```bash
 # 基本使用
-python main.py --project-path /path/to/project
+uv run python main.py --project-path /path/to/project
 
 # 指定最大迭代次数
-python main.py --project-path /path/to/project --max-iterations 5
+uv run python main.py --project-path /path/to/project --max-iterations 5
 
 # 设置 LLM 调用预算
-python main.py --project-path /path/to/project --budget 500
+uv run python main.py --project-path /path/to/project --budget 500
 
 # 使用自定义配置
-python main.py --project-path /path/to/project --config my-config.yaml
+uv run python main.py --project-path /path/to/project --config my-config.yaml
 
 # 启用调试日志
-python main.py --project-path /path/to/project --debug
+uv run python main.py --project-path /path/to/project --debug
 
 # 指定 Bug 报告目录（用于 RAG 知识库）
-python main.py --project-path /path/to/project --bug-reports-dir /path/to/bug-reports
+uv run python main.py --project-path /path/to/project --bug-reports-dir /path/to/bug-reports
 
 # 启用并行 Agent 模式（批量处理多个目标）
-python main.py --project-path /path/to/project --parallel
+uv run python main.py --project-path /path/to/project --parallel
 
 # 指定并行目标数
-python main.py --project-path /path/to/project --parallel --parallel-targets 8
+uv run python main.py --project-path /path/to/project --parallel --parallel-targets 8
 ```
 
 ## Bug 报告格式
