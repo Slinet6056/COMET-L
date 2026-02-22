@@ -1,0 +1,56 @@
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "03:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+
+  - package-ecosystem: "maven"
+    directory: "/java-runtime"
+    schedule:
+      interval: "daily"
+      time: "03:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "java"
+
+  - package-ecosystem: "maven"
+    directory: "/examples/calculator-demo"
+    schedule:
+      interval: "daily"
+      time: "03:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "java"
+
+  - package-ecosystem: "maven"
+    directory: "/examples/mockito-demo"
+    schedule:
+      interval: "daily"
+      time: "03:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "java"
+
+  - package-ecosystem: "maven"
+    directory: "/examples/multi-file-demo"
+    schedule:
+      interval: "daily"
+      time: "03:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "java"
