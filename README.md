@@ -29,8 +29,9 @@ COMET-L 是一个创新的测试生成系统，通过测试生成器和变异生
 ### 环境要求
 
 - Python 3.11+
-- Java 8+
+- Java 25+（用于运行 COMET-L 与 Java Runtime）
 - Maven 3.6+
+- 目标项目可为 Java 8+（系统默认按 Java 8 语法生成测试，以兼容 JDK8 项目）
 
 ### 安装
 
@@ -62,7 +63,7 @@ llm:
 
 # RAG 知识库配置（可选）
 knowledge:
-  enabled: true  # 启用 RAG
+  enabled: true # 启用 RAG
   embedding:
     model: "text-embedding-3-small"
 ```
@@ -113,12 +114,12 @@ uv run python main.py --project-path /path/to/project --parallel --parallel-targ
 
 系统支持多种格式的 Bug 报告用于 RAG 检索：
 
-| 格式 | 扩展名 | 说明 |
-|------|--------|------|
-| Markdown | `.md` | 支持可选的 YAML front-matter |
-| 纯文本 | `.txt` | 任意自然语言描述 |
-| Diff | `.diff` | Git diff 输出 |
-| Patch | `.patch` | 补丁文件 |
+| 格式     | 扩展名   | 说明                         |
+| -------- | -------- | ---------------------------- |
+| Markdown | `.md`    | 支持可选的 YAML front-matter |
+| 纯文本   | `.txt`   | 任意自然语言描述             |
+| Diff     | `.diff`  | Git diff 输出                |
+| Patch    | `.patch` | 补丁文件                     |
 
 示例 Bug 报告：
 
@@ -172,14 +173,7 @@ COMET-L/
 ## 技术栈
 
 - **Python 侧**：Python 3.11+, OpenAI API, SQLite, Pydantic, ChromaDB, tiktoken
-- **Java 侧**：Java 8+, Maven, JUnit5, JaCoCo, JavaParser, Mockito 5
-
-## 文档
-
-详细文档请查看 `docs/` 目录：
-
-- [系统架构](docs/LLM%20驱动的测试变异协同进化系统.md)
-- [实现计划](docs/comet-l.plan.md)
+- **Java 侧**：Java Runtime（Java 25+）, Maven, JUnit5, JaCoCo, JavaParser, Mockito（测试生成默认 Java 8 语法；示例项目使用 JUnit 5.10.3 与 Mockito 4.11.0）
 
 ## 许可
 

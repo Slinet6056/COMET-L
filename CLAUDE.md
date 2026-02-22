@@ -9,14 +9,17 @@ COMET-L（LLM 驱动的测试变异协同进化系统）是一个创新的自动
 ## 开发环境
 
 ### 环境要求
+
 - Python 3.13+ (项目使用 Python 3.14)
-- Java 8+ (使用 direnv 自动管理，默认 Java 8)
+- Java 25+ (使用 direnv 自动管理，默认 Java 25；用于运行 COMET-L 与 Java Runtime)
 - Maven 3.6+
+- 目标项目可为 Java 8+（测试生成默认使用 Java 8 语法，兼容 JDK8 项目）
 - 推荐使用 direnv + uv 自动同步 Python 依赖并激活 Python/Java 环境
 
 ### 环境设置
+
 ```bash
-# direnv 会自动执行 uv sync 并设置 Java 8
+# direnv 会自动执行 uv sync 并设置 Java 25
 # 首次使用需允许: direnv allow
 
 # 使用 uv 同步 Python 依赖（包括 ChromaDB、sentence-transformers 等）
@@ -33,6 +36,7 @@ cd ..
 ## 常用命令
 
 ### 构建和测试
+
 ```bash
 # 构建 Java 运行时模块
 cd java-runtime && mvn clean package && cd ..
@@ -54,13 +58,16 @@ uv run python main.py --project-path /path/to/project --resume output/interrupte
 ```
 
 ### 配置文件
+
 配置文件使用 YAML 格式，模板为 `config.example.yaml`。首次使用需复制并修改：
+
 ```bash
 cp config.example.yaml config.yaml
 # 编辑 config.yaml，设置 LLM API 密钥和其他参数
 ```
 
 **主要配置项**：
+
 - `llm` - LLM 相关配置（API 密钥、模型、温度等）
 - `knowledge` - RAG 知识库配置（启用开关、检索参数、嵌入模型）
 - `preprocessing` - 并行预处理配置（启用开关、工作线程数）
@@ -69,6 +76,7 @@ cp config.example.yaml config.yaml
 ## 系统架构
 
 ### 核心流程
+
 1. **并行预处理阶段**（可选，默认启用）
    - 扫描项目所有公共方法
    - 并行为每个方法生成初始测试和变异体
@@ -88,6 +96,7 @@ cp config.example.yaml config.yaml
 ### 关键组件映射
 
 **Python 侧（主控制器）**
+
 - `comet/agent/` - Agent 调度器，协调整个进化过程
   - `planner.py` - 核心调度逻辑，决策下一步操作
   - `tools.py` - Agent 工具集，封装所有操作为标准接口
@@ -125,6 +134,7 @@ cp config.example.yaml config.yaml
   - `java_formatter.py` - Java 代码格式化（调用 Java 模块）
 
 **Java 侧（运行时模块）**
+
 - `java-runtime/src/main/java/com/comet/`
   - `analyzer/` - 代码分析（JavaParser）
     - `DeepAnalyzer.java` - 深度代码分析，提取方法签名、依赖关系、控制流信息
@@ -136,29 +146,35 @@ cp config.example.yaml config.yaml
 ### 重要实现细节
 
 **代码格式化**
+
 - 系统使用 `google-java-format` 格式化生成的 Java 代码
 - 配置位于 `config.yaml` 的 `formatting` 部分
 - 格式化在测试代码写入文件前自动调用
 
 **行号系统**
+
 - 最新改动：为类代码添加行号以提高 LLM 定位准确性
 - 变异体生成时使用带行号的代码，LLM 返回具体行范围
 
 **数据库结构**
+
 - SQLite 存储变异体、测试用例、覆盖率数据
 - 变异体状态：pending（待验证）→ valid/invalid（静态验证后）→ 评估后更新 survived 字段
 - 测试用例关联目标方法，支持增量生成
 
 **并行预处理**
+
 - 使用 ThreadPoolExecutor 并发处理方法
 - 每个方法在独立的 target 沙箱中生成和验证
 - 预处理完成后清理所有临时沙箱，释放资源
 
 **Mockito 支持**
-- 系统自动识别外部依赖并使用 Mockito 5 创建隔离的单元测试
+
+- 系统自动识别外部依赖并使用 Mockito 创建隔离的单元测试（面向 JDK8 目标项目建议 4.x，示例项目锁定 4.11.0）
 - 生成的测试包含必要的 @ExtendWith(MockitoExtension.class) 和 @Mock 注解
 
 **RAG 知识库系统**（最新集成）
+
 - 使用 ChromaDB 作为向量数据库，支持语义检索
 - 智能文本分块：代码分块保留方法完整性，Bug 报告按语义段落分块
 - 混合检索策略：结合语义相似度和关键词匹配，提高检索准确性
@@ -171,15 +187,19 @@ cp config.example.yaml config.yaml
 ## 开发注意事项
 
 ### LLM 提示词修改
+
 提示词模板位于 `comet/llm/prompts/` 目录，使用 Jinja2 格式。修改后无需重新构建，直接运行即可生效。
 
 ### Java 运行时修改
+
 修改 `java-runtime/` 下的 Java 代码后，必须重新构建：
+
 ```bash
 cd java-runtime && mvn clean package && cd ..
 ```
 
 ### 调试技巧
+
 - 使用 `--debug` 标志启用详细日志
 - 日志文件：`comet.log`
 - 沙箱目录：`./sandbox/` - 保留了所有中间文件，便于调试
@@ -190,10 +210,13 @@ cd java-runtime && mvn clean package && cd ..
 - ChromaDB 向量数据：`./cache/chroma/` - 语义检索索引
 
 ### 测试输出
+
 生成的测试文件最终会导出到原项目的 `src/test/java/` 目录，命名规则：`{ClassName}_{methodName}Test.java`
 
 ### 停止条件
+
 系统会在以下情况自动停止：
+
 - 达到最大迭代次数（`max_iterations`）
 - 达到 LLM 调用预算（`budget_llm_calls`）
 - 连续 N 轮无改进（`stop_on_no_improvement_rounds`，默认 3）
@@ -201,7 +224,9 @@ cd java-runtime && mvn clean package && cd ..
 - 没有更多可选目标方法
 
 ### 代码注释语言
+
 遵循现有代码的注释语言：
+
 - Python 代码：主要使用中文注释
 - Java 代码：主要使用英文注释
 - 新文件：根据上下文决定，优先保持一致性
