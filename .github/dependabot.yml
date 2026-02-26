@@ -6,10 +6,6 @@ updates:
       interval: "daily"
       time: "03:00"
       timezone: "Asia/Shanghai"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "python"
 
   - package-ecosystem: "maven"
     directory: "/java-runtime"
@@ -17,7 +13,3 @@ updates:
       interval: "daily"
       time: "03:00"
       timezone: "Asia/Shanghai"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "java"
