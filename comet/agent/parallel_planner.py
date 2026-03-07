@@ -131,9 +131,9 @@ class ParallelPlannerAgent:
         try:
             while not self._should_stop():
                 batch_num = self.state.current_batch + 1
-                logger.info(f"\n{'='*60}")
+                logger.info(f"\n{'=' * 60}")
                 logger.info(f"批次 {batch_num}/{self.max_iterations}")
-                logger.info(f"{'='*60}")
+                logger.info(f"{'=' * 60}")
 
                 # === 批量并行阶段 ===
                 # 1. 选择一批目标
@@ -542,9 +542,13 @@ class ParallelPlannerAgent:
             # 这样变异体沙箱（从 Worker 沙箱复制）才会包含测试文件
             formatting_enabled, formatting_style = self.tools._get_formatting_config()
             for tc in test_cases:
-                write_test_file(
+                if not tc.full_code:
+                    logger.warning(f"测试用例缺少完整代码，跳过写入: {tc.id}")
+                    continue
+
+                _ = write_test_file(
                     project_path=sandbox_path,
-                    package_name=tc.package_name,
+                    package_name=tc.package_name or "",
                     test_code=tc.full_code,
                     test_class_name=tc.class_name,
                     formatting_enabled=formatting_enabled,
@@ -759,27 +763,73 @@ class ParallelPlannerAgent:
                 logger.warning("测试运行失败，跳过覆盖率收集")
                 return
 
-            # 解析 JaCoCo 报告
-            jacoco_path = (
-                Path(self.workspace_path) / "target" / "site" / "jacoco" / "jacoco.xml"
-            )
-
-            if jacoco_path.exists():
-                coverage = self.coverage_parser.aggregate_global_coverage_from_xml(
-                    str(jacoco_path)
-                )
-                if coverage:
-                    self.state.line_coverage = coverage.get("line_coverage", 0.0)
-                    self.state.branch_coverage = coverage.get("branch_coverage", 0.0)
-                    logger.info(
-                        f"全局覆盖率: 行 {self.state.line_coverage:.1%}, "
-                        f"分支 {self.state.branch_coverage:.1%}"
-                    )
-            else:
-                logger.warning(f"JaCoCo 报告不存在: {jacoco_path}")
+            self.sync_workspace_coverage()
 
         except Exception as e:
             logger.warning(f"收集覆盖率失败: {e}")
+
+    def sync_workspace_coverage(
+        self, iteration: Optional[int] = None, wait_for_report: bool = True
+    ) -> bool:
+        jacoco_path = (
+            Path(self.workspace_path) / "target" / "site" / "jacoco" / "jacoco.xml"
+        )
+        return self._sync_coverage_from_report(
+            jacoco_path, iteration=iteration, wait_for_report=wait_for_report
+        )
+
+    def _sync_coverage_from_report(
+        self,
+        jacoco_path: Path,
+        iteration: Optional[int] = None,
+        wait_for_report: bool = True,
+    ) -> bool:
+        max_wait_attempts = 5 if wait_for_report else 1
+        file_found = False
+
+        for attempt in range(max_wait_attempts):
+            if jacoco_path.exists():
+                file_found = True
+                break
+
+            if attempt < max_wait_attempts - 1:
+                logger.debug(
+                    f"等待 JaCoCo 报告生成... (尝试 {attempt + 1}/{max_wait_attempts})"
+                )
+                time.sleep(0.5)
+
+        if not file_found:
+            logger.warning(
+                f"JaCoCo 报告在等待 {max_wait_attempts * 0.5:.1f}秒 后仍不存在: {jacoco_path}"
+            )
+            return False
+
+        coverage_iteration = self.state.iteration if iteration is None else iteration
+
+        method_coverages = self.coverage_parser.parse_jacoco_xml_with_lines(
+            str(jacoco_path)
+        )
+        for cov in method_coverages:
+            self.db.save_method_coverage(cov, coverage_iteration)
+
+        logger.info(f"已保存 {len(method_coverages)} 个方法的覆盖率数据")
+        if not method_coverages:
+            logger.warning("JaCoCo 报告已生成，但未解析到任何方法级覆盖率数据")
+
+        coverage = self.coverage_parser.aggregate_global_coverage_from_xml(
+            str(jacoco_path)
+        )
+        if coverage:
+            self.state.line_coverage = coverage.get("line_coverage", 0.0)
+            self.state.branch_coverage = coverage.get("branch_coverage", 0.0)
+            logger.info(
+                f"全局覆盖率: 行 {self.state.line_coverage:.1%}, "
+                f"分支 {self.state.branch_coverage:.1%}"
+            )
+            return True
+
+        logger.warning(f"无法从 JaCoCo 报告聚合全局覆盖率: {jacoco_path}")
+        return bool(method_coverages)
 
     def _sync_global_state(self) -> None:
         """同步全局状态"""
