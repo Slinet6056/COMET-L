@@ -3,9 +3,17 @@
 import logging
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+GOOGLE_JAVA_FORMAT_JVM_ARGS = (
+    "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
+    "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED",
+)
 
 
 class JavaFormatter:
@@ -18,10 +26,10 @@ class JavaFormatter:
         style: str = "GOOGLE",
         timeout: int = 30,
     ):
-        self.java_runtime_jar = java_runtime_jar
-        self.java_cmd = java_cmd
-        self.style = style
-        self.timeout = timeout
+        self.java_runtime_jar: str = java_runtime_jar
+        self.java_cmd: str = java_cmd
+        self.style: str = style
+        self.timeout: int = timeout
 
         if not Path(java_runtime_jar).exists():
             logger.warning(f"Java runtime JAR 不存在: {java_runtime_jar}")
@@ -42,10 +50,13 @@ class JavaFormatter:
 
         cmd = [
             self.java_cmd,
-            "-cp", self.java_runtime_jar,
+            *GOOGLE_JAVA_FORMAT_JVM_ARGS,
+            "-cp",
+            self.java_runtime_jar,
             "com.comet.formatter.JavaFormatter",
             file_path,
-            "--style", self.style,
+            "--style",
+            self.style,
             "--replace",
         ]
 
@@ -71,7 +82,7 @@ class JavaFormatter:
             logger.warning(f"格式化异常: {e}")
             return False
 
-    def format_source(self, source: str, temp_file: Optional[str] = None) -> Optional[str]:
+    def format_source(self, source: str, temp_file: str | None = None) -> str | None:
         """
         格式化 Java 代码字符串
 
@@ -90,10 +101,11 @@ class JavaFormatter:
             fd, temp_path = tempfile.mkstemp(suffix=".java")
             file_path = Path(temp_path)
             import os
+
             os.close(fd)
 
         try:
-            file_path.write_text(source, encoding="utf-8")
+            _ = file_path.write_text(source, encoding="utf-8")
 
             if self.format_file(str(file_path)):
                 return file_path.read_text(encoding="utf-8")
@@ -107,7 +119,12 @@ class JavaFormatter:
 def get_java_runtime_jar() -> str:
     """获取 Java Runtime JAR 路径"""
     project_root = Path(__file__).parent.parent.parent
-    jar_path = project_root / "java-runtime" / "target" / "comet-runtime-1.0.0-jar-with-dependencies.jar"
+    jar_path = (
+        project_root
+        / "java-runtime"
+        / "target"
+        / "comet-runtime-1.0.0-jar-with-dependencies.jar"
+    )
     return str(jar_path)
 
 
