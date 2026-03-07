@@ -2,7 +2,8 @@
 
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+
 import yaml
 from pydantic import BaseModel, Field
 
@@ -22,6 +23,10 @@ class LLMConfig(BaseModel):
     reasoning_effort: Optional[str] = Field(
         default=None,
         description="推理努力程度，可选值: 'none', 'low', 'medium', 'high'",
+    )
+    reasoning_enabled: Optional[bool] = Field(
+        default=None,
+        description="是否启用推理，null 表示不下发该配置",
     )
     verbosity: Optional[str] = Field(
         default=None, description="响应详细程度，可选值: 'low', 'medium', 'high'"

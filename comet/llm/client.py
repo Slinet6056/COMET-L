@@ -1,12 +1,14 @@
 """LLM 客户端封装"""
 
-import time
 import logging
-from typing import Optional, List, Dict, Any
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from typing import Any, Dict, List, Optional
+
+import httpx
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,7 @@ class LLMClient:
         supports_json_mode: bool = True,
         timeout: float = 600.0,
         reasoning_effort: Optional[str] = None,
+        reasoning_enabled: Optional[bool] = None,
         verbosity: Optional[str] = None,
     ):
         """
@@ -40,6 +43,7 @@ class LLMClient:
             supports_json_mode: 是否支持 JSON 模式
             timeout: 请求超时时间（秒），默认 600 秒
             reasoning_effort: 推理努力程度，可选值: 'none', 'low', 'medium', 'high'
+            reasoning_enabled: 是否启用推理，None 表示不下发该配置
             verbosity: 响应详细程度，可选值: 'low', 'medium', 'high'
         """
         # 使用简单的超时配置
@@ -56,6 +60,7 @@ class LLMClient:
         self.supports_json_mode = supports_json_mode
         self.timeout = timeout
         self.reasoning_effort = reasoning_effort
+        self.reasoning_enabled = reasoning_enabled
         self.verbosity = verbosity
 
         # 统计信息
@@ -88,7 +93,7 @@ class LLMClient:
         for attempt in range(self.max_retries):
             start_time = time.time()
             try:
-                kwargs = {
+                kwargs: Dict[str, Any] = {
                     "model": self.model,
                     "messages": messages,
                     "temperature": temp,
@@ -102,6 +107,11 @@ class LLMClient:
                 # 添加 reasoning effort 配置（Chat Completions API 使用顶级参数）
                 if self.reasoning_effort is not None:
                     kwargs["reasoning_effort"] = self.reasoning_effort
+
+                if self.reasoning_enabled is not None:
+                    kwargs["extra_body"] = {
+                        "reasoning": {"enabled": self.reasoning_enabled}
+                    }
 
                 # 添加 verbosity 配置（如果模型支持）
                 if self.verbosity is not None:

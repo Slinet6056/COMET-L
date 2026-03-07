@@ -7,16 +7,16 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from comet.agent import AgentState, AgentTools, ParallelPlannerAgent, PlannerAgent
+from comet.agent.target_selector import TargetSelector
 from comet.config import Settings
+from comet.executor import JavaExecutor, MetricsCollector, MutationEvaluator
+from comet.extractors import PatternExtractor, SpecExtractor
+from comet.generators import MutantGenerator, StaticGuard, TestGenerator
+from comet.knowledge import create_knowledge_base
 from comet.llm import LLMClient
 from comet.store import Database, KnowledgeStore
-from comet.knowledge import create_knowledge_base
-from comet.extractors import SpecExtractor, PatternExtractor
-from comet.generators import MutantGenerator, TestGenerator, StaticGuard
-from comet.executor import JavaExecutor, MutationEvaluator, MetricsCollector
-from comet.agent import PlannerAgent, ParallelPlannerAgent, AgentTools, AgentState
-from comet.agent.target_selector import TargetSelector
-from comet.utils import SandboxManager, ProjectScanner
+from comet.utils import ProjectScanner, SandboxManager
 from comet.utils.log_context import ContextFilter
 
 
@@ -208,6 +208,7 @@ def initialize_system(
         supports_json_mode=config.llm.supports_json_mode,
         timeout=config.llm.timeout,
         reasoning_effort=config.llm.reasoning_effort,
+        reasoning_enabled=config.llm.reasoning_enabled,
         verbosity=config.llm.verbosity,
     )
     logger.info(f"LLM 客户端初始化: {config.llm.model} (timeout={config.llm.timeout}s)")
