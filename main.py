@@ -5,7 +5,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from comet.config import Settings
 from comet.llm import LLMClient
@@ -223,6 +223,13 @@ def initialize_system(
         llm_api_key=config.llm.api_key,
     )
 
+    if config.knowledge.enabled:
+        logger.info("预初始化 RAG 知识库...")
+        if knowledge_base.initialize():
+            logger.info("RAG 知识库预初始化完成")
+        else:
+            logger.warning("RAG 知识库预初始化失败，将在后续按需重试")
+
     # 如果提供了 Bug 报告目录，索引 Bug 报告
     if bug_reports_dir:
         bug_dir = Path(bug_reports_dir)
@@ -352,7 +359,7 @@ def initialize_system(
 
 
 def run_evolution(
-    project_path: str, components: dict, resume_state: Optional[str] = None
+    project_path: str, components: dict[str, Any], resume_state: Optional[str] = None
 ):
     """
     运行协同进化

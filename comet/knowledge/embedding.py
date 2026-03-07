@@ -3,6 +3,9 @@
 import hashlib
 import json
 import logging
+import os
+import threading
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
@@ -43,6 +46,7 @@ class EmbeddingService:
 
         # 内存缓存
         self._cache: Dict[str, List[float]] = {}
+        self._cache_lock = threading.RLock()
 
         # 确保缓存目录存在
         if self.cache_dir:
@@ -62,12 +66,22 @@ class EmbeddingService:
         cache_file = self.cache_dir / "embedding_cache.json"
         if cache_file.exists():
             try:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    self._cache = json.load(f)
+                with self._cache_lock:
+                    with open(cache_file, "r", encoding="utf-8") as f:
+                        self._cache = json.load(f)
                 logger.info(f"从缓存加载了 {len(self._cache)} 个 embedding")
             except Exception as e:
                 logger.warning(f"加载 embedding 缓存失败: {e}")
-                self._cache = {}
+                with self._cache_lock:
+                    self._cache = {}
+                corrupt_file = (
+                    self.cache_dir / f"embedding_cache.corrupt-{int(time.time())}.json"
+                )
+                try:
+                    cache_file.replace(corrupt_file)
+                    logger.warning(f"已隔离损坏的 embedding 缓存文件: {corrupt_file}")
+                except Exception as rename_error:
+                    logger.warning(f"隔离损坏的 embedding 缓存文件失败: {rename_error}")
 
     def _save_cache(self) -> None:
         """保存缓存到磁盘"""
@@ -75,13 +89,22 @@ class EmbeddingService:
             return
 
         cache_file = self.cache_dir / "embedding_cache.json"
+        temp_file = self.cache_dir / "embedding_cache.json.tmp"
         try:
-            # 复制缓存以避免迭代时字典被修改
-            cache_copy = dict(self._cache)
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(cache_copy, f)
+            with self._cache_lock:
+                cache_copy = dict(self._cache)
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    json.dump(cache_copy, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_file, cache_file)
         except Exception as e:
             logger.warning(f"保存 embedding 缓存失败: {e}")
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except OSError:
+                    pass
 
     def embed(self, text: str) -> List[float]:
         """
@@ -95,8 +118,10 @@ class EmbeddingService:
         """
         # 检查缓存
         cache_key = self._get_cache_key(text)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        with self._cache_lock:
+            cached_embedding = self._cache.get(cache_key)
+        if cached_embedding is not None:
+            return cached_embedding
 
         # 调用 API
         try:
@@ -107,7 +132,8 @@ class EmbeddingService:
             embedding = response.data[0].embedding
 
             # 更新缓存
-            self._cache[cache_key] = embedding
+            with self._cache_lock:
+                self._cache[cache_key] = embedding
             self._save_cache()
 
             return embedding
@@ -132,17 +158,19 @@ class EmbeddingService:
         texts_to_embed: List[tuple[int, str]] = []  # (index, text)
 
         # 检查缓存
-        for i, text in enumerate(texts):
-            cache_key = self._get_cache_key(text)
-            if cache_key in self._cache:
-                results[i] = self._cache[cache_key]
-            else:
-                texts_to_embed.append((i, text))
+        with self._cache_lock:
+            for i, text in enumerate(texts):
+                cache_key = self._get_cache_key(text)
+                if cache_key in self._cache:
+                    results[i] = self._cache[cache_key]
+                else:
+                    texts_to_embed.append((i, text))
 
         if not texts_to_embed:
             return [r for r in results if r is not None]
 
         # 分批处理
+        cache_updated = False
         for batch_start in range(0, len(texts_to_embed), self.batch_size):
             batch = texts_to_embed[batch_start : batch_start + self.batch_size]
             batch_texts = [t[1] for t in batch]
@@ -163,14 +191,17 @@ class EmbeddingService:
 
                     # 更新缓存
                     cache_key = self._get_cache_key(original_text)
-                    self._cache[cache_key] = embedding
+                    with self._cache_lock:
+                        self._cache[cache_key] = embedding
+                    cache_updated = True
 
             except Exception as e:
                 logger.warning(f"批量获取 embedding 失败: {e}")
                 raise
 
         # 保存缓存
-        self._save_cache()
+        if cache_updated:
+            self._save_cache()
 
         return [r for r in results if r is not None]
 

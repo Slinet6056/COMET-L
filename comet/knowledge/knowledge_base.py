@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 """知识库管理 - 整合 RAG 功能"""
 
 import logging
+import threading
+from typing import TYPE_CHECKING
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
@@ -9,6 +13,11 @@ from ..store.knowledge_store import KnowledgeStore
 from ..config.settings import KnowledgeConfig
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from .embedding import EmbeddingService
+    from .retriever import KnowledgeRetriever
+    from .vector_store import VectorStore
 
 
 class KnowledgeBase:
@@ -171,10 +180,16 @@ class KnowledgeBase:
             ),
         }
 
+    def index_bug_reports(self, bug_reports_dir: str) -> int:
+        return 0
+
     def clear_cache(self) -> None:
         """清除缓存"""
         self._contracts_cache.clear()
         self._patterns_cache = None
+
+    def initialize(self) -> bool:
+        return True
 
 
 class RAGKnowledgeBase(KnowledgeBase):
@@ -195,75 +210,110 @@ class RAGKnowledgeBase(KnowledgeBase):
             llm_api_key: LLM API 密钥（用于 Embedding）
         """
         super().__init__(store)
-        self.config = config
-        self.llm_api_key = llm_api_key
+        self.config: KnowledgeConfig | None = config
+        self.llm_api_key: str | None = llm_api_key
 
         # RAG 组件（延迟初始化）
-        self._embedding_service = None
-        self._vector_store = None
-        self._retriever = None
-        self._initialized = False
+        self._embedding_service: EmbeddingService | None = None
+        self._vector_store: VectorStore | None = None
+        self._retriever: KnowledgeRetriever | None = None
+        self._initialized: bool = False
+        self._init_lock = threading.RLock()
+
+    def initialize(self) -> bool:
+        return self._ensure_initialized()
+
+    def _require_config(self) -> KnowledgeConfig:
+        config = self.config
+        if config is None:
+            raise RuntimeError("RAG 配置未初始化")
+        return config
+
+    def _require_vector_store(self) -> VectorStore:
+        vector_store = self._vector_store
+        if vector_store is None:
+            raise RuntimeError("RAG 向量存储未初始化")
+        return vector_store
+
+    def _require_retriever(self) -> KnowledgeRetriever:
+        retriever = self._retriever
+        if retriever is None:
+            raise RuntimeError("RAG 检索器未初始化")
+        return retriever
 
     def _ensure_initialized(self) -> bool:
         """确保 RAG 组件已初始化"""
         if self._initialized:
             return True
 
-        if not self.config or not self.config.enabled:
+        config = self.config
+        if config is None or not config.enabled:
             logger.info("RAG 知识库未启用")
             return False
 
-        try:
-            from .embedding import EmbeddingService
-            from .vector_store import VectorStore
-            from .retriever import KnowledgeRetriever
+        with self._init_lock:
+            if self._initialized:
+                return True
 
-            # 初始化 Embedding 服务
-            cache_dir = str(
-                Path(self.config.vector_db.persist_directory) / "embedding_cache"
-            )
-            self._embedding_service = EmbeddingService.from_config(
-                self.config.embedding,
-                llm_api_key=self.llm_api_key,
-                cache_dir=cache_dir,
-            )
+            config = self.config
+            if config is None or not config.enabled:
+                logger.info("RAG 知识库未启用")
+                return False
 
-            # 初始化向量存储
-            self._vector_store = VectorStore.from_config(
-                self.config.vector_db,
-                self._embedding_service,
-            )
+            try:
+                from .embedding import EmbeddingService
+                from .vector_store import VectorStore
+                from .retriever import KnowledgeRetriever
 
-            # 初始化检索器
-            self._retriever = KnowledgeRetriever.from_config(
-                self.config.retrieval,
-                self._vector_store,
-            )
+                # 初始化 Embedding 服务
+                cache_dir = str(
+                    Path(config.vector_db.persist_directory) / "embedding_cache"
+                )
+                embedding_service = EmbeddingService.from_config(
+                    config.embedding,
+                    llm_api_key=self.llm_api_key,
+                    cache_dir=cache_dir,
+                )
 
-            self._initialized = True
-            logger.info("RAG 知识库初始化完成")
-            return True
+                # 初始化向量存储
+                vector_store = VectorStore.from_config(
+                    config.vector_db,
+                    embedding_service,
+                )
 
-        except Exception as e:
-            logger.warning(f"RAG 知识库初始化失败: {e}")
-            return False
+                # 初始化检索器
+                retriever = KnowledgeRetriever.from_config(
+                    config.retrieval, vector_store
+                )
+
+                self._embedding_service = embedding_service
+                self._vector_store = vector_store
+                self._retriever = retriever
+
+                self._initialized = True
+                logger.info("RAG 知识库初始化完成")
+                return True
+
+            except Exception as e:
+                logger.warning(f"RAG 知识库初始化失败: {e}")
+                return False
 
     @property
     def is_rag_enabled(self) -> bool:
         """检查 RAG 是否启用"""
-        return self._initialized or (self.config and self.config.enabled)
+        return self._initialized or bool(self.config and self.config.enabled)
 
     @property
     def vector_store(self):
         """获取向量存储"""
-        self._ensure_initialized()
-        return self._vector_store
+        _ = self._ensure_initialized()
+        return self._require_vector_store()
 
     @property
     def retriever(self):
         """获取检索器"""
-        self._ensure_initialized()
-        return self._retriever
+        _ = self._ensure_initialized()
+        return self._require_retriever()
 
     def add_contract(self, contract: Contract) -> None:
         """添加契约到知识库（同时更新向量存储）"""
@@ -300,7 +350,7 @@ class RAGKnowledgeBase(KnowledgeBase):
             },
         )
 
-        self._vector_store.add_single(KnowledgeType.CONTRACTS, doc)
+        self.vector_store.add_single(KnowledgeType.CONTRACTS, doc)
 
     def _index_pattern(self, pattern: Pattern) -> None:
         """将模式索引到向量存储"""
@@ -320,7 +370,7 @@ class RAGKnowledgeBase(KnowledgeBase):
             },
         )
 
-        self._vector_store.add_single(KnowledgeType.PATTERNS, doc)
+        self.vector_store.add_single(KnowledgeType.PATTERNS, doc)
 
     def _format_contract_for_indexing(self, contract: Contract) -> str:
         """格式化契约用于索引"""
@@ -380,11 +430,12 @@ class RAGKnowledgeBase(KnowledgeBase):
         from .vector_store import KnowledgeType
 
         # 使用向量检索
-        results = self._vector_store.search(
+        config = self._require_config()
+        results = self.vector_store.search(
             KnowledgeType.PATTERNS,
             f"defect patterns for code: {class_code[:500]}",
             top_k=max_patterns,
-            score_threshold=self.config.retrieval.score_threshold,
+            score_threshold=config.retrieval.score_threshold,
         )
 
         # 获取完整的 Pattern 对象
@@ -426,7 +477,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         if not self._ensure_initialized():
             return ""
 
-        return self._retriever.retrieve_for_test_generation(
+        return self.retriever.retrieve_for_test_generation(
             class_name, method_name, method_signature, source_code
         )
 
@@ -450,7 +501,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         if not self._ensure_initialized():
             return ""
 
-        return self._retriever.retrieve_for_mutation_generation(
+        return self.retriever.retrieve_for_mutation_generation(
             class_name, method_name, source_code
         )
 
@@ -485,7 +536,7 @@ class RAGKnowledgeBase(KnowledgeBase):
                     content=chunk.content,
                     metadata=chunk.metadata,
                 )
-                self._vector_store.add_single(KnowledgeType.SOURCE_ANALYSIS, doc)
+                self.vector_store.add_single(KnowledgeType.SOURCE_ANALYSIS, doc)
 
         logger.info(f"索引了 {class_name} 的 {len(methods)} 个方法分析结果")
 
@@ -517,7 +568,7 @@ class RAGKnowledgeBase(KnowledgeBase):
                     "file_type": report.file_type,
                 },
             )
-            self._vector_store.add_single(KnowledgeType.BUG_REPORTS, doc)
+            self.vector_store.add_single(KnowledgeType.BUG_REPORTS, doc)
 
         logger.info(f"索引了 {len(reports)} 个 Bug 报告")
         return len(reports)
