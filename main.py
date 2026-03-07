@@ -369,10 +369,10 @@ def run_evolution(
         components: 系统组件
         resume_state: 恢复状态文件路径
     """
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
     logger.info("开始协同进化")
     logger.info(f"原项目路径: {project_path}")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
 
     config = components["config"]
     sandbox_manager = components["sandbox_manager"]
@@ -511,6 +511,14 @@ def run_evolution(
 
                             if coverage_result.get("success"):
                                 logger.info("初始覆盖率测试成功")
+                                if planner_type == "parallel":
+                                    synced = planner.sync_workspace_coverage(
+                                        wait_for_report=True
+                                    )
+                                    if not synced:
+                                        logger.warning(
+                                            "初始覆盖率报告同步失败，首批目标可能回退到默认选择策略"
+                                        )
                                 break
                             else:
                                 # 提取详细错误信息
