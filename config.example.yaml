@@ -17,7 +17,6 @@ execution:
   max_retries: 3
   runtime_java_home: null
   target_java_home: null
-  java_home: null
   maven_home: null # 留空使用系统默认
 
 paths:
