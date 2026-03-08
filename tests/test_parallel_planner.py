@@ -1,11 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 
 from comet.agent.parallel_planner import ParallelPlannerAgent
 from comet.agent.state import ParallelAgentState
-from comet.executor.coverage_parser import MethodCoverage
-from comet.executor.coverage_parser import CoverageParser
+from comet.executor.coverage_parser import CoverageParser, MethodCoverage
+from comet.llm.client import LLMClient
 from comet.store.database import Database
 
 
@@ -87,6 +88,41 @@ class ParallelPlannerCoverageSyncTest(unittest.TestCase):
 
             self.assertFalse(synced)
             self.assertEqual(fake_db.saved, [])
+
+
+class FakeLLMCounter:
+    def __init__(self, total_calls: int = 0):
+        self.total_calls = total_calls
+
+    def get_total_calls(self) -> int:
+        return self.total_calls
+
+
+class ParallelPlannerLLMCallSyncTest(unittest.TestCase):
+    def _make_planner(self, base_calls: int, budget: int) -> ParallelPlannerAgent:
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.llm = cast(LLMClient, cast(object, FakeLLMCounter(base_calls)))
+        planner._llm_calls_base = base_calls
+        planner.state = ParallelAgentState()
+        planner.budget = budget
+        planner.max_iterations = 100
+        planner._interrupted = False
+        return planner
+
+    def test_should_stop_syncs_llm_calls_and_respects_budget(self):
+        planner = self._make_planner(base_calls=10, budget=3)
+
+        planner.llm.total_calls = 12
+        should_stop = planner._should_stop()
+
+        self.assertFalse(should_stop)
+        self.assertEqual(planner.state.llm_calls, 2)
+
+        planner.llm.total_calls = 13
+        should_stop = planner._should_stop()
+
+        self.assertTrue(should_stop)
+        self.assertEqual(planner.state.llm_calls, 3)
 
 
 if __name__ == "__main__":

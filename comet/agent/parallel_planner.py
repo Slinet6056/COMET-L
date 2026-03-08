@@ -1,21 +1,20 @@
 """并行 Agent 调度器 - 批量并行处理 + 集中同步"""
 
 import logging
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
-from .state import ParallelAgentState, WorkerResult
-from .tools import AgentTools
-from .target_selector import TargetSelector
-from ..llm.client import LLMClient
-from ..executor.java_executor import JavaExecutor
 from ..executor.coverage_parser import CoverageParser
+from ..executor.java_executor import JavaExecutor
+from ..llm.client import LLMClient
 from ..store.database import Database
-from ..utils.sandbox import SandboxManager
 from ..utils.log_context import log_context
+from ..utils.sandbox import SandboxManager
+from .state import ParallelAgentState, WorkerResult
+from .target_selector import TargetSelector
+from .tools import AgentTools
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +98,8 @@ class ParallelPlannerAgent:
 
         # 中断标志
         self._interrupted = False
+
+        self._llm_calls_base = self.llm.get_total_calls()
 
     def run(
         self,
@@ -900,6 +901,10 @@ class ParallelPlannerAgent:
 
     def _should_stop(self) -> bool:
         """检查是否应该停止"""
+        current_llm_calls = self.llm.get_total_calls() - self._llm_calls_base
+        if current_llm_calls > self.state.llm_calls:
+            _ = self.state.increment_llm_calls(current_llm_calls - self.state.llm_calls)
+
         if self._interrupted:
             return True
 

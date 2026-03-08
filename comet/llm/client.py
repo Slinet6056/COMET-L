@@ -1,6 +1,7 @@
 """LLM 客户端封装"""
 
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -64,6 +65,7 @@ class LLMClient:
         self.verbosity = verbosity
 
         # 统计信息
+        self._stats_lock = threading.Lock()
         self.total_calls = 0
         self.total_tokens = 0
         self.total_cost = 0.0
@@ -141,10 +143,10 @@ class LLMClient:
                 elapsed = time.time() - start_time
                 logger.debug(f"LLM 请求完成，耗时: {elapsed:.2f}s")
 
-                # 更新统计
-                self.total_calls += 1
-                if response.usage:
-                    self.total_tokens += response.usage.total_tokens
+                with self._stats_lock:
+                    self.total_calls += 1
+                    if response.usage:
+                        self.total_tokens += response.usage.total_tokens
 
                 content = response.choices[0].message.content
                 finish_reason = response.choices[0].finish_reason
@@ -226,17 +228,27 @@ class LLMClient:
 
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
+        with self._stats_lock:
+            total_calls = self.total_calls
+            total_tokens = self.total_tokens
+            total_cost = self.total_cost
+
         return {
-            "total_calls": self.total_calls,
-            "total_tokens": self.total_tokens,
-            "total_cost": self.total_cost,
+            "total_calls": total_calls,
+            "total_tokens": total_tokens,
+            "total_cost": total_cost,
             "avg_tokens_per_call": (
-                self.total_tokens / self.total_calls if self.total_calls > 0 else 0
+                total_tokens / total_calls if total_calls > 0 else 0
             ),
         }
 
+    def get_total_calls(self) -> int:
+        with self._stats_lock:
+            return self.total_calls
+
     def reset_stats(self) -> None:
         """重置统计信息"""
-        self.total_calls = 0
-        self.total_tokens = 0
-        self.total_cost = 0.0
+        with self._stats_lock:
+            self.total_calls = 0
+            self.total_tokens = 0
+            self.total_cost = 0.0
