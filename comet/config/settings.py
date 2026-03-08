@@ -49,7 +49,120 @@ class ExecutionConfig(BaseModel):
         default=300, ge=1, description="覆盖率收集超时时间（秒）"
     )
     max_retries: int = Field(default=3, ge=0, description="最大重试次数")
+    runtime_java_home: Optional[str] = Field(
+        default=None, description="运行 COMET-L Java Runtime 使用的 Java 安装路径"
+    )
+    target_java_home: Optional[str] = Field(
+        default=None, description="运行被测项目构建、测试与编译使用的 Java 安装路径"
+    )
+    java_home: Optional[str] = Field(
+        default=None,
+        description="兼容旧配置的 Java 安装路径，同时作用于 runtime 和 target",
+    )
     maven_home: Optional[str] = Field(default=None, description="Maven 安装路径")
+
+    def _resolve_home(self, home: Optional[str], name: str) -> Optional[Path]:
+        if not home:
+            return None
+
+        resolved = Path(home).expanduser().resolve()
+        if not resolved.is_dir():
+            raise ValueError(f"{name} 不存在或不是目录: {resolved}")
+        return resolved
+
+    def _resolve_bin_command(self, home: Optional[Path], command: str) -> str:
+        if home is None:
+            return command
+
+        command_path = home / "bin" / command
+        if not command_path.is_file():
+            raise ValueError(f"未找到 {command} 可执行文件: {command_path}")
+        return str(command_path)
+
+    def _resolve_runtime_java_home(self) -> Optional[Path]:
+        return self._resolve_home(
+            self.runtime_java_home or self.java_home,
+            "RUNTIME_JAVA_HOME",
+        )
+
+    def _resolve_target_java_home(self) -> Optional[Path]:
+        return self._resolve_home(
+            self.target_java_home or self.java_home,
+            "TARGET_JAVA_HOME",
+        )
+
+    def _build_subprocess_env(
+        self,
+        java_home: Optional[Path],
+        base_env: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        env = dict(base_env) if base_env is not None else os.environ.copy()
+        path_entries: list[str] = []
+
+        if java_home is not None:
+            env["JAVA_HOME"] = str(java_home)
+            path_entries.append(str(java_home / "bin"))
+
+        maven_home = self._resolve_home(self.maven_home, "MAVEN_HOME")
+        if maven_home is not None:
+            env["MAVEN_HOME"] = str(maven_home)
+            env["M2_HOME"] = str(maven_home)
+            path_entries.append(str(maven_home / "bin"))
+
+        current_path = env.get("PATH", "")
+        if path_entries:
+            deduped_entries: list[str] = []
+            for entry in path_entries:
+                if entry not in deduped_entries:
+                    deduped_entries.append(entry)
+
+            if current_path:
+                deduped_entries.append(current_path)
+            env["PATH"] = os.pathsep.join(deduped_entries)
+
+        return env
+
+    def build_runtime_subprocess_env(
+        self, base_env: Optional[Dict[str, str]] = None
+    ) -> Dict[str, str]:
+        return self._build_subprocess_env(self._resolve_runtime_java_home(), base_env)
+
+    def build_target_subprocess_env(
+        self, base_env: Optional[Dict[str, str]] = None
+    ) -> Dict[str, str]:
+        return self._build_subprocess_env(self._resolve_target_java_home(), base_env)
+
+    def build_subprocess_env(
+        self, base_env: Optional[Dict[str, str]] = None
+    ) -> Dict[str, str]:
+        return self.build_target_subprocess_env(base_env)
+
+    def resolve_runtime_java_cmd(self) -> str:
+        return self._resolve_bin_command(self._resolve_runtime_java_home(), "java")
+
+    def resolve_target_java_cmd(self) -> str:
+        return self._resolve_bin_command(self._resolve_target_java_home(), "java")
+
+    def resolve_java_cmd(self) -> str:
+        return self.resolve_runtime_java_cmd()
+
+    def resolve_javac_cmd(self) -> str:
+        return self.resolve_target_javac_cmd()
+
+    def resolve_target_javac_cmd(self) -> str:
+        return self._resolve_bin_command(self._resolve_target_java_home(), "javac")
+
+    def get_runtime_java_home(self) -> Optional[str]:
+        java_home = self._resolve_runtime_java_home()
+        return str(java_home) if java_home is not None else None
+
+    def get_target_java_home(self) -> Optional[str]:
+        java_home = self._resolve_target_java_home()
+        return str(java_home) if java_home is not None else None
+
+    def resolve_mvn_cmd(self) -> str:
+        maven_home = self._resolve_home(self.maven_home, "MAVEN_HOME")
+        return self._resolve_bin_command(maven_home, "mvn")
 
 
 class PathsConfig(BaseModel):

@@ -66,7 +66,13 @@ knowledge:
   enabled: true # 启用 RAG
   embedding:
     model: "text-embedding-3-small"
+
+execution:
+  runtime_java_home: "/usr/lib/jvm/java-25-openjdk"
+  target_java_home: "/usr/lib/jvm/java-8-openjdk"
 ```
+
+`execution.runtime_java_home` 用于指定 COMET-L 的 `java-runtime` 与格式化器所使用的 JDK，`execution.target_java_home` 用于指定被测项目的 Maven、测试和 `javac` 所使用的 JDK。`execution.java_home` 仍保留为兼容旧配置的回退项；如果未设置新的两个字段，它会同时作用于 runtime 和 target。
 
 ### 运行
 

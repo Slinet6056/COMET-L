@@ -1,0 +1,97 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from comet.config.settings import ExecutionConfig
+
+
+class ExecutionConfigTests(unittest.TestCase):
+    def test_defaults_use_system_commands(self) -> None:
+        config = ExecutionConfig()
+
+        runtime_env = config.build_runtime_subprocess_env(base_env={})
+        target_env = config.build_target_subprocess_env(base_env={})
+
+        self.assertEqual(config.resolve_runtime_java_cmd(), "java")
+        self.assertEqual(config.resolve_target_java_cmd(), "java")
+        self.assertEqual(config.resolve_target_javac_cmd(), "javac")
+        self.assertEqual(config.resolve_mvn_cmd(), "mvn")
+        self.assertNotIn("JAVA_HOME", runtime_env)
+        self.assertNotIn("JAVA_HOME", target_env)
+        self.assertNotIn("MAVEN_HOME", runtime_env)
+        self.assertNotIn("MAVEN_HOME", target_env)
+
+    def test_runtime_and_target_java_home_are_independent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            runtime_home = Path(tmp_dir) / "runtime-java-home"
+            runtime_bin = runtime_home / "bin"
+            runtime_bin.mkdir(parents=True)
+            (runtime_bin / "java").write_text("", encoding="utf-8")
+
+            target_home = Path(tmp_dir) / "target-java-home"
+            target_bin = target_home / "bin"
+            target_bin.mkdir(parents=True)
+            (target_bin / "java").write_text("", encoding="utf-8")
+            (target_bin / "javac").write_text("", encoding="utf-8")
+
+            config = ExecutionConfig(
+                runtime_java_home=str(runtime_home),
+                target_java_home=str(target_home),
+            )
+            runtime_env = config.build_runtime_subprocess_env(
+                base_env={"PATH": "/usr/bin"}
+            )
+            target_env = config.build_target_subprocess_env(
+                base_env={"PATH": "/usr/bin"}
+            )
+
+            self.assertEqual(
+                config.resolve_runtime_java_cmd(), str(runtime_bin / "java")
+            )
+            self.assertEqual(config.resolve_target_java_cmd(), str(target_bin / "java"))
+            self.assertEqual(
+                config.resolve_target_javac_cmd(), str(target_bin / "javac")
+            )
+            self.assertEqual(runtime_env["JAVA_HOME"], str(runtime_home.resolve()))
+            self.assertEqual(target_env["JAVA_HOME"], str(target_home.resolve()))
+            self.assertEqual(runtime_env["PATH"], f"{runtime_bin.resolve()}:/usr/bin")
+            self.assertEqual(target_env["PATH"], f"{target_bin.resolve()}:/usr/bin")
+
+    def test_legacy_java_home_falls_back_for_runtime_and_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            java_home = Path(tmp_dir) / "java-home"
+            bin_dir = java_home / "bin"
+            bin_dir.mkdir(parents=True)
+            (bin_dir / "java").write_text("", encoding="utf-8")
+            (bin_dir / "javac").write_text("", encoding="utf-8")
+
+            config = ExecutionConfig(java_home=str(java_home))
+
+            self.assertEqual(config.resolve_runtime_java_cmd(), str(bin_dir / "java"))
+            self.assertEqual(config.resolve_target_java_cmd(), str(bin_dir / "java"))
+            self.assertEqual(config.resolve_target_javac_cmd(), str(bin_dir / "javac"))
+
+    def test_maven_home_updates_env_and_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            maven_home = Path(tmp_dir) / "maven-home"
+            bin_dir = maven_home / "bin"
+            bin_dir.mkdir(parents=True)
+            (bin_dir / "mvn").write_text("", encoding="utf-8")
+
+            config = ExecutionConfig(maven_home=str(maven_home))
+            env = config.build_subprocess_env(base_env={"PATH": "/usr/bin"})
+
+            self.assertEqual(config.resolve_mvn_cmd(), str(bin_dir / "mvn"))
+            self.assertEqual(env["MAVEN_HOME"], str(maven_home.resolve()))
+            self.assertEqual(env["M2_HOME"], str(maven_home.resolve()))
+            self.assertEqual(env["PATH"], f"{bin_dir.resolve()}:/usr/bin")
+
+    def test_invalid_java_home_raises_error(self) -> None:
+        config = ExecutionConfig(target_java_home="/path/that/does/not/exist")
+
+        with self.assertRaisesRegex(ValueError, "TARGET_JAVA_HOME"):
+            config.resolve_target_java_cmd()
+
+
+if __name__ == "__main__":
+    unittest.main()

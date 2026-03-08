@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -116,6 +117,17 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+def configure_runtime_environment(config: Settings) -> dict[str, str]:
+    execution = config.execution
+    env = execution.build_runtime_subprocess_env()
+
+    for key in ("JAVA_HOME", "MAVEN_HOME", "M2_HOME", "PATH"):
+        if key in env:
+            os.environ[key] = env[key]
+
+    return env
+
+
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
@@ -197,6 +209,26 @@ def initialize_system(
     # 确保目录存在
     config.ensure_directories()
 
+    runtime_env = configure_runtime_environment(config)
+    target_env = config.execution.build_target_subprocess_env()
+    runtime_java_cmd = config.execution.resolve_runtime_java_cmd()
+    target_javac_cmd = config.execution.resolve_target_javac_cmd()
+    mvn_cmd = config.execution.resolve_mvn_cmd()
+    target_java_home = config.execution.get_target_java_home()
+
+    runtime_java_home = config.execution.get_runtime_java_home()
+    if runtime_java_home:
+        logger.info(f"使用 runtime Java: {runtime_java_home}")
+        logger.info(f"使用 runtime Java 可执行文件: {runtime_java_cmd}")
+
+    if target_java_home:
+        logger.info(f"使用 target Java: {target_java_home}")
+        logger.info(f"使用 target javac 可执行文件: {target_javac_cmd}")
+
+    if config.execution.maven_home:
+        logger.info(f"使用配置的 MAVEN_HOME: {target_env['MAVEN_HOME']}")
+        logger.info(f"使用 Maven 可执行文件: {mvn_cmd}")
+
     # 初始化 LLM 客户端
     llm_client = LLMClient(
         api_key=config.llm.api_key,
@@ -267,10 +299,18 @@ def initialize_system(
 
     java_executor = JavaExecutor(
         java_runtime_jar,
+        java_cmd=runtime_java_cmd,
         test_timeout=config.execution.test_timeout,
         coverage_timeout=config.execution.coverage_timeout,
+        env=runtime_env,
+        target_java_home=target_java_home,
     )
-    static_guard = StaticGuard(java_runtime_jar)
+    static_guard = StaticGuard(
+        java_runtime_jar,
+        javac_cmd=target_javac_cmd,
+        mvn_cmd=mvn_cmd,
+        env=target_env,
+    )
 
     # 初始化沙箱和执行器
     sandbox_manager = SandboxManager(config.paths.sandbox)
