@@ -55,10 +55,6 @@ class ExecutionConfig(BaseModel):
     target_java_home: Optional[str] = Field(
         default=None, description="运行被测项目构建、测试与编译使用的 Java 安装路径"
     )
-    java_home: Optional[str] = Field(
-        default=None,
-        description="兼容旧配置的 Java 安装路径，同时作用于 runtime 和 target",
-    )
     maven_home: Optional[str] = Field(default=None, description="Maven 安装路径")
 
     def _resolve_home(self, home: Optional[str], name: str) -> Optional[Path]:
@@ -80,16 +76,10 @@ class ExecutionConfig(BaseModel):
         return str(command_path)
 
     def _resolve_runtime_java_home(self) -> Optional[Path]:
-        return self._resolve_home(
-            self.runtime_java_home or self.java_home,
-            "RUNTIME_JAVA_HOME",
-        )
+        return self._resolve_home(self.runtime_java_home, "RUNTIME_JAVA_HOME")
 
     def _resolve_target_java_home(self) -> Optional[Path]:
-        return self._resolve_home(
-            self.target_java_home or self.java_home,
-            "TARGET_JAVA_HOME",
-        )
+        return self._resolve_home(self.target_java_home, "TARGET_JAVA_HOME")
 
     def _build_subprocess_env(
         self,

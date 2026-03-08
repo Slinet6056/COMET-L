@@ -57,19 +57,35 @@ class ExecutionConfigTests(unittest.TestCase):
             self.assertEqual(runtime_env["PATH"], f"{runtime_bin.resolve()}:/usr/bin")
             self.assertEqual(target_env["PATH"], f"{target_bin.resolve()}:/usr/bin")
 
-    def test_legacy_java_home_falls_back_for_runtime_and_target(self) -> None:
+    def test_runtime_and_target_can_be_set_independently(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            java_home = Path(tmp_dir) / "java-home"
-            bin_dir = java_home / "bin"
-            bin_dir.mkdir(parents=True)
-            (bin_dir / "java").write_text("", encoding="utf-8")
-            (bin_dir / "javac").write_text("", encoding="utf-8")
+            runtime_home = Path(tmp_dir) / "runtime-java-home"
+            runtime_bin = runtime_home / "bin"
+            runtime_bin.mkdir(parents=True)
+            (runtime_bin / "java").write_text("", encoding="utf-8")
 
-            config = ExecutionConfig(java_home=str(java_home))
+            target_home = Path(tmp_dir) / "target-java-home"
+            target_bin = target_home / "bin"
+            target_bin.mkdir(parents=True)
+            (target_bin / "java").write_text("", encoding="utf-8")
+            (target_bin / "javac").write_text("", encoding="utf-8")
 
-            self.assertEqual(config.resolve_runtime_java_cmd(), str(bin_dir / "java"))
-            self.assertEqual(config.resolve_target_java_cmd(), str(bin_dir / "java"))
-            self.assertEqual(config.resolve_target_javac_cmd(), str(bin_dir / "javac"))
+            runtime_only = ExecutionConfig(runtime_java_home=str(runtime_home))
+            target_only = ExecutionConfig(target_java_home=str(target_home))
+
+            self.assertEqual(
+                runtime_only.resolve_runtime_java_cmd(), str(runtime_bin / "java")
+            )
+            self.assertEqual(runtime_only.resolve_target_java_cmd(), "java")
+            self.assertEqual(runtime_only.resolve_target_javac_cmd(), "javac")
+
+            self.assertEqual(target_only.resolve_runtime_java_cmd(), "java")
+            self.assertEqual(
+                target_only.resolve_target_java_cmd(), str(target_bin / "java")
+            )
+            self.assertEqual(
+                target_only.resolve_target_javac_cmd(), str(target_bin / "javac")
+            )
 
     def test_maven_home_updates_env_and_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
