@@ -23,9 +23,15 @@ import com.google.gson.JsonObject;
 public class MavenExecutor {
 
     private final Invoker invoker;
+    private final File javaHome;
 
     public MavenExecutor() {
+        this(null);
+    }
+
+    public MavenExecutor(String javaHomePath) {
         this.invoker = new DefaultInvoker();
+        this.javaHome = javaHomePath == null || javaHomePath.isBlank() ? null : new File(javaHomePath);
 
         // 尝试找到 Maven 安装路径
         String mavenHome = System.getenv("M2_HOME");
@@ -156,6 +162,9 @@ public class MavenExecutor {
             request.setPomFile(new File(projectPath, "pom.xml"));
             request.setGoals(goals);
             request.setBatchMode(true);
+            if (javaHome != null) {
+                request.setJavaHome(javaHome);
+            }
 
             // 设置输出处理器
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
@@ -190,6 +199,9 @@ public class MavenExecutor {
         InvocationRequest request = new DefaultInvocationRequest();
         request.setPomFile(new File(projectPath, "pom.xml"));
         request.setGoals(Arrays.asList("test"));
+        if (javaHome != null) {
+            request.setJavaHome(javaHome);
+        }
 
         Properties properties = new Properties();
         properties.setProperty("test", testClassName);
@@ -220,8 +232,26 @@ public class MavenExecutor {
 
         String command = args[0];
         String projectPath = args[1];
+        String testClassName = null;
+        String javaHome = null;
 
-        MavenExecutor executor = new MavenExecutor();
+        for (int i = 2; i < args.length; i++) {
+            String arg = args[i];
+            if ("--java-home".equals(arg)) {
+                if (i + 1 >= args.length) {
+                    System.err.println("--java-home requires a path");
+                    System.exit(1);
+                }
+                javaHome = args[++i];
+                continue;
+            }
+
+            if (testClassName == null) {
+                testClassName = arg;
+            }
+        }
+
+        MavenExecutor executor = new MavenExecutor(javaHome);
         JsonObject result;
 
         try {
@@ -239,11 +269,11 @@ public class MavenExecutor {
                     result = executor.runTestsWithCoverage(projectPath);
                     break;
                 case "singleTest":
-                    if (args.length < 3) {
+                    if (testClassName == null) {
                         System.err.println("Test class name required for singleTest command");
                         System.exit(1);
                     }
-                    result = executor.runSingleTest(projectPath, args[2]);
+                    result = executor.runSingleTest(projectPath, testClassName);
                     break;
                 default:
                     System.err.println("Unknown command: " + command);
