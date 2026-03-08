@@ -66,7 +66,10 @@ class EvolutionConfig(BaseModel):
 
     max_iterations: int = Field(default=10, ge=1, description="最大迭代次数")
     min_improvement_threshold: float = Field(
-        default=0.01, ge=0.0, le=1.0, description="最小改进阈值"
+        default=0.01,
+        ge=0.0,
+        le=1.0,
+        description="最小改进绝对阈值（比例值，0.01 表示提升 1 个百分点）",
     )
     budget_llm_calls: int = Field(default=1000, ge=1, description="LLM 调用预算")
     stop_on_no_improvement_rounds: int = Field(

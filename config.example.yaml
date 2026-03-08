@@ -25,7 +25,7 @@ paths:
 
 evolution:
   max_iterations: 10
-  min_improvement_threshold: 0.01
+  min_improvement_threshold: 0.01 # 绝对增量阈值，0.01 表示提升 1 个百分点
   budget_llm_calls: 1000
   stop_on_no_improvement_rounds: 3
   # 优秀水平阈值（达到后可提前停止，可根据项目调整）

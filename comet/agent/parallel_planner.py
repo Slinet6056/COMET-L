@@ -111,13 +111,14 @@ class ParallelPlannerAgent:
 
         Args:
             stop_on_no_improvement_rounds: 无改进时停止的轮数
-            min_improvement_threshold: 最小改进阈值
+            min_improvement_threshold: 最小改进绝对阈值（0.01 表示提升 1 个百分点）
 
         Returns:
             最终状态
         """
         logger.info("=" * 60)
         logger.info("开始并行协同进化循环")
+        logger.info(f"改进判定阈值（绝对增量）: {min_improvement_threshold:.2%}")
         logger.info(f"最大并行目标数: {self.max_parallel_targets}")
         logger.info(f"变异体评估并行度: {self.max_eval_workers}")
         logger.info("=" * 60)
@@ -866,7 +867,7 @@ class ParallelPlannerAgent:
         prev_line_coverage: float,
         threshold: float,
     ) -> bool:
-        """检查是否有显著改进"""
+        """检查是否有显著改进（绝对增量阈值）"""
         mutation_delta = self.state.global_mutation_score - prev_mutation_score
         coverage_delta = self.state.line_coverage - prev_line_coverage
 
@@ -877,6 +878,13 @@ class ParallelPlannerAgent:
                 f"检测到改进: "
                 f"变异分数 Δ{mutation_delta:+.1%}, "
                 f"覆盖率 Δ{coverage_delta:+.1%}"
+            )
+        else:
+            logger.debug(
+                f"未达到显著改进阈值（绝对增量）: "
+                f"变异分数Δ{mutation_delta:+.1%}, "
+                f"覆盖率Δ{coverage_delta:+.1%}, "
+                f"阈值 {threshold:.1%}"
             )
 
         return has_improvement

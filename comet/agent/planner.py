@@ -62,12 +62,13 @@ class PlannerAgent:
 
         Args:
             stop_on_no_improvement_rounds: 无改进时停止的轮数
-            min_improvement_threshold: 最小改进阈值
+            min_improvement_threshold: 最小改进绝对阈值（0.01 表示提升 1 个百分点）
 
         Returns:
             最终状态
         """
         logger.info("开始协同进化循环")
+        logger.info(f"改进判定阈值（绝对增量）: {min_improvement_threshold:.2%}")
         no_improvement_count = 0
 
         # 记录上一轮的关键指标
@@ -75,9 +76,9 @@ class PlannerAgent:
         prev_line_coverage = 0.0
 
         while not self._should_stop():
-            logger.info(f"{'='*60}")
+            logger.info(f"{'=' * 60}")
             logger.info(f"迭代 {self.state.iteration + 1}/{self.max_iterations}")
-            logger.info(f"{'='*60}")
+            logger.info(f"{'=' * 60}")
 
             # 从数据库同步状态
             self._sync_state_from_db()
@@ -251,7 +252,7 @@ class PlannerAgent:
         Args:
             prev_mutation_score: 上一轮的全局变异分数
             prev_line_coverage: 上一轮的全局行覆盖率
-            threshold: 改进阈值
+            threshold: 改进绝对阈值（比例值）
 
         Returns:
             是否有显著改进
@@ -268,6 +269,13 @@ class PlannerAgent:
                 f"检测到改进（全局指标）: "
                 f"变异分数 {prev_mutation_score:.1%} -> {self.state.global_mutation_score:.1%} (Δ{mutation_score_delta:+.1%}), "
                 f"行覆盖率 {prev_line_coverage:.1%} -> {self.state.line_coverage:.1%} (Δ{coverage_delta:+.1%})"
+            )
+        else:
+            logger.debug(
+                f"未达到显著改进阈值（绝对增量）: "
+                f"变异分数Δ{mutation_score_delta:+.1%}, "
+                f"行覆盖率Δ{coverage_delta:+.1%}, "
+                f"阈值 {threshold:.1%}"
             )
 
         return has_improvement
@@ -298,9 +306,9 @@ class PlannerAgent:
 
     def _log_final_summary(self) -> None:
         """记录最终总结"""
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
         logger.info("协同进化最终总结")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
         logger.info(f"总迭代次数: {self.state.iteration}")
         logger.info(f"LLM 调用次数: {self.state.llm_calls}/{self.budget}")
         logger.info("")
@@ -325,7 +333,7 @@ class PlannerAgent:
                     f"变异分数 Δ{imp.get('mutation_score_delta', 0):+.1%}, "
                     f"覆盖率 Δ{imp.get('coverage_delta', 0):+.1%}"
                 )
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
 
     def _sync_state_from_db(self) -> None:
         """从数据库同步状态信息"""
@@ -693,9 +701,9 @@ class PlannerAgent:
             logger.debug("目标信息不完整，跳过自动化流程")
             return
 
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
         logger.info(f"开始新目标自动化流程: {class_name}.{method_name}")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
 
         # 标记是否需要评估
         need_evaluation = False
@@ -790,9 +798,9 @@ class PlannerAgent:
             except Exception as e:
                 logger.warning(f"  ✗ 自动评估失败: {e}")
 
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
         logger.info("新目标自动化流程完成")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
 
     def _auto_workflow_for_refine(self, refine_action: str) -> None:
         """
@@ -803,9 +811,9 @@ class PlannerAgent:
         Args:
             refine_action: 完善操作名称（refine_tests 或 refine_mutants）
         """
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
         logger.info(f"{refine_action} 完成，自动执行评估")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
 
         logger.info("→ 自动执行: run_evaluation")
         try:
@@ -826,7 +834,7 @@ class PlannerAgent:
         except Exception as e:
             logger.warning(f"  ✗ 自动评估失败: {e}")
 
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
 
     def _simplify_result(self, result: Any) -> Any:
         """简化结果用于记录（避免过大的对象）"""
