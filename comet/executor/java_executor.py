@@ -7,7 +7,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,8 @@ class JavaExecutor:
         java_cmd: str = "java",
         test_timeout: int = 30,
         coverage_timeout: int = 300,
+        env: Optional[Dict[str, str]] = None,
+        target_java_home: Optional[str] = None,
     ):
         """
         初始化 Java 执行器
@@ -35,6 +37,8 @@ class JavaExecutor:
         self.java_cmd = java_cmd
         self.test_timeout = test_timeout
         self.coverage_timeout = coverage_timeout
+        self.env = env
+        self.target_java_home = target_java_home
 
         # 检查 JAR 文件是否存在
         if not Path(java_runtime_jar).exists():
@@ -64,6 +68,9 @@ class JavaExecutor:
             main_class,
         ] + args
 
+        if main_class == "com.comet.executor.MavenExecutor" and self.target_java_home:
+            cmd.extend(["--java-home", self.target_java_home])
+
         process = None
         try:
             # 使用 Popen 代替 run，以便更好地控制进程
@@ -73,6 +80,7 @@ class JavaExecutor:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=self.env,
                 start_new_session=True,  # 创建新的会话，避免子进程成为孤儿
             )
 
@@ -142,14 +150,14 @@ class JavaExecutor:
             parsed.setdefault("stderr", result.get("stderr", ""))
         return parsed if isinstance(parsed, dict) else None
 
-    def _kill_process_tree(self, process: subprocess.Popen) -> None:
+    def _kill_process_tree(self, process: subprocess.Popen[str]) -> None:
         """
         杀死进程及其所有子进程
 
         Args:
             process: 要终止的进程
         """
-        if process is None or process.poll() is not None:
+        if process.poll() is not None:
             return
 
         try:
@@ -212,7 +220,7 @@ class JavaExecutor:
                 return None
         return None
 
-    def get_public_methods(self, file_path: str) -> Optional[list]:
+    def get_public_methods(self, file_path: str) -> Optional[list[Any]]:
         """
         获取类的所有 public 方法
 

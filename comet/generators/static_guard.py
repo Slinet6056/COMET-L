@@ -15,7 +15,13 @@ logger = logging.getLogger(__name__)
 class StaticGuard:
     """静态守护 - 验证变异体是否可以编译"""
 
-    def __init__(self, java_runtime_jar: str):
+    def __init__(
+        self,
+        java_runtime_jar: str,
+        javac_cmd: str = "javac",
+        mvn_cmd: str = "mvn",
+        env: Optional[dict[str, str]] = None,
+    ):
         """
         初始化静态守护
 
@@ -23,6 +29,9 @@ class StaticGuard:
             java_runtime_jar: Java 运行时 JAR 路径
         """
         self.java_runtime_jar = java_runtime_jar
+        self.javac_cmd = javac_cmd
+        self.mvn_cmd = mvn_cmd
+        self.env = env
 
     def validate_mutant(self, mutant: Mutant, original_file: str) -> bool:
         """
@@ -107,7 +116,7 @@ class StaticGuard:
             logger.debug(f"创建临时文件: {tmp_path}")
 
             # 尝试编译
-            javac_cmd = ["javac"]
+            javac_cmd = [self.javac_cmd]
             if classpath:
                 javac_cmd.extend(["-cp", classpath])
             javac_cmd.append(str(tmp_path))
@@ -117,6 +126,7 @@ class StaticGuard:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=self.env,
             )
 
             # 清理临时文件和目录
@@ -156,7 +166,7 @@ class StaticGuard:
         valid_mutants = []
         invalid_count = 0
         for idx, mutant in enumerate(mutants):
-            logger.debug(f"处理变异体 {idx+1}/{len(mutants)}")
+            logger.debug(f"处理变异体 {idx + 1}/{len(mutants)}")
             if self.validate_mutant(mutant, original_file):
                 valid_mutants.append(mutant)
             else:
@@ -247,11 +257,12 @@ class StaticGuard:
         try:
             logger.info(f"开始编译项目: {project_root}")
             result = subprocess.run(
-                ["mvn", "compile", "-q"],
+                [self.mvn_cmd, "compile", "-q"],
                 cwd=str(project_root),
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5分钟超时
+                env=self.env,
             )
 
             if result.returncode == 0:
