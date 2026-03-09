@@ -20,7 +20,6 @@ execution:
   maven_home: null # 留空使用系统默认
 
 paths:
-  workspace: "./workspace"
   cache: "./cache"
   output: "./output"
   sandbox: "./sandbox"
