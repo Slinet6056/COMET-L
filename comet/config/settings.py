@@ -158,7 +158,6 @@ class ExecutionConfig(BaseModel):
 class PathsConfig(BaseModel):
     """路径配置"""
 
-    workspace: str = Field(default="./workspace", description="工作目录")
     cache: str = Field(default="./cache", description="缓存目录")
     output: str = Field(default="./output", description="输出目录")
     sandbox: str = Field(default="./sandbox", description="沙箱目录")
@@ -360,7 +359,7 @@ class Settings(BaseModel):
 
     def ensure_directories(self) -> None:
         """确保所有配置的目录存在"""
-        for path_name in ["workspace", "cache", "output", "sandbox"]:
+        for path_name in ["cache", "output", "sandbox"]:
             path = Path(getattr(self.paths, path_name))
             path.mkdir(parents=True, exist_ok=True)
 
