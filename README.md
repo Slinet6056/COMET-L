@@ -88,6 +88,45 @@ uv run python main.py --project-path /path/to/your/java/project
 uv run python main.py --project-path examples/calculator-demo
 ```
 
+## Web 控制台
+
+### 本地启动方式
+
+Web 控制台当前采用“前端先构建、后端托管静态资源”的本地工作流。请在仓库根目录执行：
+
+```bash
+pnpm --dir web install
+pnpm --dir web build
+uv run uvicorn comet.web.app:app --reload
+```
+
+启动后访问 `http://127.0.0.1:8000/`，后端会在生产形态下自动挂载 `web/dist`，并同时继续提供 `/api/*` 接口。
+
+如果只想单独调试前端组件，也可以运行 `pnpm --dir web dev`；但当前仓库默认没有为 Vite dev server 配置 API 代理，因此完整联调仍建议以上述“build + backend”方式进行。
+
+### Web 测试命令
+
+```bash
+# 结果页定向回归
+pnpm --dir web test -- --run ResultsPage.test.tsx
+
+# 前端生产构建
+pnpm --dir web build
+```
+
+如需运行后端 API 测试，可使用：
+
+```bash
+uv run python -m unittest tests.test_web_api
+```
+
+### 当前本地限制
+
+- Web 控制台当前按单用户本地场景设计，不包含多用户隔离与权限控制。
+- 同一时刻只允许一个 active run；若已有运行中的任务，新的 `POST /api/runs` 会返回冲突错误。
+- 项目路径输入必须是本机可访问的 Maven 项目绝对路径或可解析本地路径，后端不会代理远程文件系统。
+- 结果页只暴露 `final_state.json` 与 `run.log` 下载入口，不提供原始数据库文件下载。
+
 ## 使用示例
 
 ```bash
