@@ -14,6 +14,7 @@ import {
 import { LogViewer } from '../components/LogViewer';
 
 type ConnectionState = 'idle' | 'connecting' | 'live' | 'unavailable' | 'error';
+const SNAPSHOT_POLL_MS = 1500;
 
 type ActionEntry = {
   id: string;
@@ -521,7 +522,7 @@ function ParallelRunView(props: {
             )}
           </section>
 
-          <LogViewer runId={runId} />
+          <LogViewer runId={runId} runStatus={snapshot.status} />
         </div>
 
         <aside className="run-layout__sidebar">
@@ -658,6 +659,46 @@ export function RunPage() {
       teardown?.();
     };
   }, [runId]);
+
+  useEffect(() => {
+    if (
+      snapshot === null ||
+      snapshot.status === 'completed' ||
+      snapshot.status === 'failed' ||
+      connectionState === 'live'
+    ) {
+      return;
+    }
+
+    let active = true;
+
+    async function refreshSnapshot() {
+      try {
+        const nextSnapshot = await fetchRunSnapshot(runId);
+        if (!active) {
+          return;
+        }
+
+        setSnapshot(nextSnapshot);
+        setPageError(null);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        setPageError(error instanceof Error ? error.message : 'Unable to refresh run snapshot.');
+      }
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshSnapshot();
+    }, SNAPSHOT_POLL_MS);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [connectionState, runId, snapshot]);
 
   const improvementSummary = useMemo(
     () => (snapshot ? buildImprovementSummary(snapshot) : []),

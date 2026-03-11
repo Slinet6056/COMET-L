@@ -97,6 +97,7 @@ describe('Run page standard mode', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -180,5 +181,45 @@ describe('Run page standard mode', () => {
     expect(screen.getByRole('heading', { name: 'Core Metrics' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Action History Summary' })).toBeInTheDocument();
     expect(screen.queryByText('Current batch')).not.toBeInTheDocument();
+  });
+
+  it('falls back to snapshot polling when live events are unavailable', async () => {
+    let fetchCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        fetchCalls += 1;
+        return jsonResponse(
+          fetchCalls === 1
+            ? buildSnapshot()
+            : buildSnapshot({
+                iteration: 4,
+                phase: {
+                  key: 'preprocessing',
+                  label: 'Preprocessing',
+                },
+                decisionReasoning: 'Collect preprocessing artifacts before resuming target selection.',
+              }),
+        );
+      }),
+    );
+    vi.stubGlobal('EventSource', undefined);
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Phase: Running')).toBeInTheDocument();
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1600));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Collect preprocessing artifacts before resuming target selection.')).toBeInTheDocument();
+      expect(screen.getByText('Phase: Preprocessing')).toBeInTheDocument();
+    });
   });
 });
