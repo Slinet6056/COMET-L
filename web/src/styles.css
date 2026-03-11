@@ -500,11 +500,24 @@ code {
   font-weight: 600;
 }
 
+.run-log-viewer__toolbar {
+  display: grid;
+  gap: 0.75rem;
+}
+
 .run-log-viewer__meta,
 .run-log-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
+}
+
+.run-log-viewer__meta {
+  align-items: center;
+}
+
+.run-log-viewer__hint {
+  margin: 0;
 }
 
 .run-log-tab {
@@ -524,26 +537,57 @@ code {
   font-weight: 600;
 }
 
-.run-log-list {
+.run-log-terminal {
   display: grid;
-  gap: 0.75rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.run-log-entry,
-.run-log-empty {
-  display: grid;
-  gap: 0.45rem;
-  padding: 0.95rem;
+  gap: 0.35rem;
+  max-height: 24rem;
+  overflow: auto;
+  padding: 0.85rem 0.95rem;
   border-radius: 12px;
-  background: #f8fbff;
+  border: 1px solid #1f2937;
+  background: #111827;
+  color: #e5edf7;
+  font-family: "SFMono-Regular", monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
-.run-log-entry code {
+.run-log-terminal--empty {
+  gap: 0.4rem;
+  align-content: start;
+}
+
+.run-log-terminal--empty .muted-copy {
+  color: #9fb3c8;
+}
+
+.run-log-line {
+  display: grid;
+  grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.run-log-line__meta {
+  color: #9fb3c8;
+  white-space: nowrap;
+}
+
+.run-log-line code {
+  color: inherit;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .run-log-line {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
+  }
+
+  .run-log-line__meta {
+    white-space: normal;
+  }
 }
 
 @media (max-width: 640px) {
