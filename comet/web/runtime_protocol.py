@@ -72,6 +72,9 @@ def build_run_snapshot(
     log_router: Optional[RunLogRouter] = None,
 ) -> dict[str, Any]:
     improvement_summary = state.improvement_summary or {"count": 0, "latest": None}
+    if log_router is not None and isinstance(state, ParallelAgentState):
+        log_router.sync_parallel_state(state)
+
     snapshot: dict[str, Any] = {
         "runId": run_id,
         "status": status,
@@ -111,6 +114,7 @@ def build_run_snapshot(
             "currentBatch": state.current_batch,
             "parallelStats": dict(state.parallel_stats),
             "activeTargets": state.get_active_target_details(),
+            "targetLifecycle": state.get_task_lifecycle_details(),
             "workerCards": state.get_worker_cards(),
             "batchResults": batch_results,
         }

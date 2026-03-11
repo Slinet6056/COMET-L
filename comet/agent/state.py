@@ -404,6 +404,8 @@ class ParallelAgentState(AgentState):
         # 多目标追踪
         self._active_targets: Dict[str, Dict[str, Any]] = {}  # {target_id: target_info}
         self._active_targets_lock = threading.Lock()
+        self._target_lifecycle: Dict[str, Dict[str, Any]] = {}
+        self._target_order_counter: int = 1
 
         # 批次管理
         self.current_batch: int = 0
@@ -445,18 +447,29 @@ class ParallelAgentState(AgentState):
                 return False
 
             target_metadata = dict(metadata or {})
+            order = self._target_order_counter
+            self._target_order_counter += 1
             target_metadata.update(
                 {
                     "target_id": target_id,
                     "class_name": class_name,
                     "method_name": method_name,
                     "started_at": datetime.now(),
+                    "order": order,
+                    "status": "running",
                 }
             )
             self._active_targets[target_id] = target_metadata
+            self._target_lifecycle[target_id] = dict(target_metadata)
             return True
 
-    def release_target(self, class_name: str, method_name: str, success: bool) -> None:
+    def release_target(
+        self,
+        class_name: str,
+        method_name: str,
+        success: bool,
+        result: Optional[WorkerResult] = None,
+    ) -> None:
         """
         释放目标（Worker 完成处理后调用）
 
@@ -467,6 +480,27 @@ class ParallelAgentState(AgentState):
         """
         target_id = f"{class_name}.{method_name}"
         with self._active_targets_lock:
+            ended_at = datetime.now()
+            lifecycle: Dict[str, Any] | None = self._target_lifecycle.get(target_id)
+            if lifecycle is None:
+                lifecycle = {
+                    "target_id": target_id,
+                    "class_name": class_name,
+                    "method_name": method_name,
+                    "order": self._target_order_counter,
+                    "started_at": ended_at,
+                }
+                self._target_order_counter += 1
+                self._target_lifecycle[target_id] = lifecycle
+
+            lifecycle["status"] = "completed" if success else "failed"
+            lifecycle["ended_at"] = ended_at
+            lifecycle["completed_at"] = ended_at if success else None
+            if result is not None:
+                lifecycle["duration_seconds"] = result.processing_time
+                if result.error:
+                    lifecycle["error"] = result.error
+
             if target_id in self._active_targets:
                 del self._active_targets[target_id]
             if success:
@@ -483,6 +517,17 @@ class ParallelAgentState(AgentState):
                 self._serialize_active_target(target)
                 for target in self._active_targets.values()
             ]
+
+    def get_task_lifecycle_details(self) -> List[Dict[str, Any]]:
+        with self._active_targets_lock:
+            ordered_targets = sorted(
+                self._target_lifecycle.values(),
+                key=lambda target: (
+                    int(target.get("order", 0)),
+                    str(target.get("target_id", target.get("targetId", ""))),
+                ),
+            )
+            return [self._serialize_active_target(target) for target in ordered_targets]
 
     def get_active_target_count(self) -> int:
         """获取当前活跃目标数量"""
@@ -545,6 +590,19 @@ class ParallelAgentState(AgentState):
         serialized.setdefault("targetId", serialized.get("target_id"))
         serialized.setdefault("className", serialized.get("class_name"))
         serialized.setdefault("methodName", serialized.get("method_name"))
+        serialized.setdefault("startedAt", serialized.get("started_at"))
+
+        ended_at = serialized.get("ended_at")
+        if isinstance(ended_at, datetime):
+            serialized["ended_at"] = ended_at.isoformat()
+        serialized.setdefault("endedAt", serialized.get("ended_at"))
+
+        completed_at = serialized.get("completed_at")
+        if isinstance(completed_at, datetime):
+            serialized["completed_at"] = completed_at.isoformat()
+        serialized.setdefault("completedAt", serialized.get("completed_at"))
+
+        serialized.setdefault("durationSeconds", serialized.get("duration_seconds"))
         return serialized
 
     def get_worker_cards(self) -> List[Dict[str, Any]]:
@@ -593,15 +651,18 @@ class ParallelAgentState(AgentState):
                 [result.to_dict() for result in batch] for batch in self.batch_results
             ]
             active_targets = self.get_active_target_details()
+            target_lifecycle = self.get_task_lifecycle_details()
             data["current_batch"] = self.current_batch
             data["parallel_stats"] = self.parallel_stats
             data["batch_results"] = batch_results
             data["active_targets"] = active_targets
+            data["target_lifecycle"] = target_lifecycle
             data["worker_cards"] = self.get_worker_cards()
             data["currentBatch"] = self.current_batch
             data["parallelStats"] = self.parallel_stats
             data["batchResults"] = batch_results
             data["activeTargets"] = active_targets
+            data["targetLifecycle"] = target_lifecycle
             data["workerCards"] = data["worker_cards"]
             return data
 
@@ -675,6 +736,31 @@ class ParallelAgentState(AgentState):
             if isinstance(started_at, str):
                 restored_target["started_at"] = datetime.fromisoformat(started_at)
             state._active_targets[target_id] = restored_target
+
+        target_lifecycle = data.get("target_lifecycle", data.get("targetLifecycle", []))
+        for target in target_lifecycle:
+            target_id = target.get("target_id", target.get("targetId"))
+            if not target_id:
+                continue
+            restored_target = dict(target)
+            started_at = restored_target.get(
+                "started_at", restored_target.get("startedAt")
+            )
+            if isinstance(started_at, str):
+                restored_target["started_at"] = datetime.fromisoformat(started_at)
+            ended_at = restored_target.get("ended_at", restored_target.get("endedAt"))
+            if isinstance(ended_at, str):
+                restored_target["ended_at"] = datetime.fromisoformat(ended_at)
+            completed_at = restored_target.get(
+                "completed_at", restored_target.get("completedAt")
+            )
+            if isinstance(completed_at, str):
+                restored_target["completed_at"] = datetime.fromisoformat(completed_at)
+            state._target_lifecycle[target_id] = restored_target
+            state._target_order_counter = max(
+                state._target_order_counter,
+                int(restored_target.get("order", 0)) + 1,
+            )
 
         return state
 

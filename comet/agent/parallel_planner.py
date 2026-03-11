@@ -313,16 +313,19 @@ class ParallelPlannerAgent:
                         )
                     )
                 finally:
+                    target_id = (
+                        f"{target.get('class_name')}.{target.get('method_name')}"
+                    )
+                    matched_result = next(
+                        (r for r in results if r.target_id == target_id),
+                        None,
+                    )
                     # 释放目标
                     self.state.release_target(
                         target.get("class_name", ""),
                         target.get("method_name", ""),
-                        success=any(
-                            r.success
-                            and r.target_id
-                            == f"{target.get('class_name')}.{target.get('method_name')}"
-                            for r in results
-                        ),
+                        success=bool(matched_result and matched_result.success),
+                        result=matched_result,
                     )
 
         return results
