@@ -159,6 +159,7 @@ class SnapshotTests(unittest.TestCase):
                     mutants_killed=2,
                     local_mutation_score=2 / 3,
                     processing_time=1.5,
+                    method_coverage=0.4,
                 )
             ]
         )
@@ -172,6 +173,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["parallelStats"]["total_batches"], 1)
         self.assertEqual(len(snapshot["workerCards"]), 1)
         self.assertEqual(snapshot["workerCards"][0]["targetId"], "Calculator.add")
+        self.assertEqual(snapshot["workerCards"][0]["methodCoverage"], 0.4)
         self.assertEqual(len(snapshot["activeTargets"]), 1)
         self.assertEqual(snapshot["activeTargets"][0]["targetId"], "Calculator.add")
         self.assertEqual(snapshot["activeTargets"][0]["method_coverage"], 0.4)

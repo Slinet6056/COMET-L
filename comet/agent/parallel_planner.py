@@ -310,6 +310,7 @@ class ParallelPlannerAgent:
                             method_name=target.get("method_name", ""),
                             success=False,
                             error=str(e),
+                            method_coverage=target.get("method_coverage"),
                         )
                     )
                 finally:
@@ -364,6 +365,7 @@ class ParallelPlannerAgent:
             target_id=target_id,
             class_name=class_name,
             method_name=method_name,
+            method_coverage=target.get("method_coverage"),
         )
 
         # 为此目标创建独立沙箱
@@ -413,6 +415,9 @@ class ParallelPlannerAgent:
                 result.test_files = test_result.get("test_files", {})
 
             if result.tests_generated == 0:
+                coverage = self.db.get_method_coverage(class_name, method_name)
+                if coverage is not None:
+                    result.method_coverage = coverage.line_coverage_rate
                 result.error = "测试生成失败"
                 logger.warning(f"测试生成失败")
                 return result
@@ -422,6 +427,9 @@ class ParallelPlannerAgent:
                 result.mutants_generated = mutant_result.get("generated", 0)
 
             if result.mutants_generated == 0:
+                coverage = self.db.get_method_coverage(class_name, method_name)
+                if coverage is not None:
+                    result.method_coverage = coverage.line_coverage_rate
                 # 没有变异体也算成功（可能方法太简单）
                 logger.info(f"没有生成变异体")
                 result.success = True
@@ -435,6 +443,10 @@ class ParallelPlannerAgent:
                 result.mutants_evaluated = eval_result.get("evaluated", 0)
                 result.mutants_killed = eval_result.get("killed", 0)
                 result.local_mutation_score = eval_result.get("mutation_score", 0.0)
+
+            coverage = self.db.get_method_coverage(class_name, method_name)
+            if coverage is not None:
+                result.method_coverage = coverage.line_coverage_rate
 
             result.success = True
             result.processing_time = time.time() - start_time

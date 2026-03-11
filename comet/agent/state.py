@@ -325,6 +325,8 @@ class WorkerResult:
     # 处理时间
     processing_time: float = 0.0
 
+    method_coverage: Optional[float] = None
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "target_id": self.target_id,
@@ -339,6 +341,7 @@ class WorkerResult:
             "local_mutation_score": self.local_mutation_score,
             "test_files": self.test_files,
             "processing_time": self.processing_time,
+            "method_coverage": self.method_coverage,
             "targetId": self.target_id,
             "className": self.class_name,
             "methodName": self.method_name,
@@ -348,6 +351,7 @@ class WorkerResult:
             "mutantsKilled": self.mutants_killed,
             "localMutationScore": self.local_mutation_score,
             "processingTime": self.processing_time,
+            "methodCoverage": self.method_coverage,
         }
 
     def to_worker_card(self) -> Dict[str, Any]:
@@ -363,6 +367,7 @@ class WorkerResult:
             "mutantsKilled": self.mutants_killed,
             "localMutationScore": self.local_mutation_score,
             "processingTime": self.processing_time,
+            "methodCoverage": self.method_coverage,
         }
 
     @classmethod
@@ -388,6 +393,7 @@ class WorkerResult:
             processing_time=data.get(
                 "processing_time", data.get("processingTime", 0.0)
             ),
+            method_coverage=data.get("method_coverage", data.get("methodCoverage")),
         )
 
 
