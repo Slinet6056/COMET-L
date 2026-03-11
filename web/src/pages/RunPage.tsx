@@ -88,16 +88,46 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
-function formatDuration(seconds: number | null | undefined): string {
-  if (typeof seconds !== 'number' || Number.isNaN(seconds)) {
-    return 'N/A';
-  }
-
-  return `${seconds.toFixed(1)}s`;
-}
-
 function formatWorkerStatusLabel(success: boolean): string {
   return success ? 'Completed' : 'Failed';
+}
+
+function toCoverageValue(value: unknown): number | null {
+  if (typeof value === 'number' && !Number.isNaN(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+
+  return null;
+}
+
+function buildWorkerCoverageLookup(parallel: ParallelSnapshotData): Map<string, number> {
+  const coverageByTarget = new Map<string, number>();
+
+  parallel.batchResults.forEach((batch) => {
+    batch.forEach((result) => {
+      const targetId = typeof result.targetId === 'string' ? result.targetId : null;
+      const coverage = toCoverageValue(result.method_coverage ?? result.methodCoverage);
+
+      if (targetId && coverage !== null) {
+        coverageByTarget.set(targetId, coverage);
+      }
+    });
+  });
+
+  parallel.activeTargets.forEach((target) => {
+    const coverage = toCoverageValue(target.method_coverage ?? target.methodCoverage);
+
+    if (coverage !== null) {
+      coverageByTarget.set(formatTargetId(target), coverage);
+    }
+  });
+
+  return coverageByTarget;
 }
 
 function getParallelSnapshot(snapshot: RunSnapshot): ParallelSnapshotData {
@@ -421,6 +451,7 @@ function ParallelRunView(props: {
   const parallel = getParallelSnapshot(snapshot);
   const parallelStatsSummary = buildParallelStatsSummary(parallel.parallelStats);
   const activeTargetSummary = buildActiveTargetSummary(parallel.activeTargets);
+  const workerCoverageLookup = useMemo(() => buildWorkerCoverageLookup(parallel), [parallel]);
   const isPreprocessingPhase = snapshot.phase.key === 'preprocessing';
 
   return (
@@ -528,74 +559,72 @@ function ParallelRunView(props: {
       ) : null}
 
       {!isPreprocessingPhase ? (
-        <>
-          <section className="run-card" aria-labelledby="run-worker-panel">
-            <div className="run-card__header run-card__header--compact">
-              <div>
-                <p className="eyebrow">Workers</p>
-                <h3 id="run-worker-panel">Worker Output</h3>
-              </div>
-              <span className="run-badge">Live: {connectionState}</span>
+        <section className="run-card" aria-labelledby="run-worker-panel">
+          <div className="run-card__header run-card__header--compact">
+            <div>
+              <p className="eyebrow">Workers</p>
+              <h3 id="run-worker-panel">Worker Output</h3>
             </div>
-            {parallel.workerCards.length > 0 ? (
-              <table className="worker-output-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Target</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Tests</th>
-                    <th scope="col">Mutants</th>
-                    <th scope="col">Killed</th>
-                    <th scope="col">Score</th>
-                    <th scope="col">Runtime</th>
+            <span className="run-badge">Live: {connectionState}</span>
+          </div>
+          {parallel.workerCards.length > 0 ? (
+            <table className="worker-output-table">
+              <thead>
+                <tr>
+                  <th scope="col">Target</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Tests</th>
+                  <th scope="col">Mutants</th>
+                  <th scope="col">Killed</th>
+                  <th scope="col">Score</th>
+                  <th scope="col">Coverage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {parallel.workerCards.map((worker) => (
+                  <tr key={worker.targetId} className="worker-output-row">
+                    <td className="worker-output-row__target">
+                      <strong title={worker.targetId}>{worker.targetId}</strong>
+                      <span>
+                        {worker.className}.{worker.methodName}
+                      </span>
+                      {worker.error ? <p className="worker-output-row__error">{worker.error}</p> : null}
+                    </td>
+                    <td>
+                      <span
+                        className={
+                          worker.success
+                            ? 'worker-pill worker-pill--success'
+                            : 'worker-pill worker-pill--error'
+                        }
+                      >
+                        {formatWorkerStatusLabel(worker.success)}
+                      </span>
+                    </td>
+                    <td>{worker.testsGenerated}</td>
+                    <td>{worker.mutantsGenerated}</td>
+                    <td>{worker.mutantsKilled}</td>
+                    <td>{formatPercent(worker.localMutationScore)}</td>
+                    <td>{formatPercent(workerCoverageLookup.get(worker.targetId))}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {parallel.workerCards.map((worker) => (
-                    <tr key={worker.targetId} className="worker-output-row">
-                      <td className="worker-output-row__target">
-                        <strong title={worker.targetId}>{worker.targetId}</strong>
-                        <span>
-                          {worker.className}.{worker.methodName}
-                        </span>
-                        {worker.error ? <p className="worker-output-row__error">{worker.error}</p> : null}
-                      </td>
-                      <td>
-                        <span
-                          className={
-                            worker.success
-                              ? 'worker-pill worker-pill--success'
-                              : 'worker-pill worker-pill--error'
-                          }
-                        >
-                          {formatWorkerStatusLabel(worker.success)}
-                        </span>
-                      </td>
-                      <td>{worker.testsGenerated}</td>
-                      <td>{worker.mutantsGenerated}</td>
-                      <td>{worker.mutantsKilled}</td>
-                      <td>{formatPercent(worker.localMutationScore)}</td>
-                      <td>{formatDuration(worker.processingTime)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <p className="muted-copy">Waiting for the first worker batch to finish.</p>
-            )}
-          </section>
-
-          <LogViewer runId={runId} runStatus={snapshot.status} />
-        </>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="muted-copy">Waiting for the first worker batch to finish.</p>
+          )}
+        </section>
       ) : (
         <section className="run-card" aria-labelledby="run-preprocessing-panel">
           <p className="eyebrow">Preparation</p>
           <h3 id="run-preprocessing-panel">Parallel Preprocessing</h3>
           <p className="muted-copy">
-            Worker output and detailed target activity will appear after preprocessing completes.
+            Worker output will appear after preprocessing completes. Live logs remain available below.
           </p>
         </section>
       )}
+
+      <LogViewer runId={runId} runStatus={snapshot.status} />
 
       <Link to={`/runs/${runId}/results`}>Go to results skeleton</Link>
     </>

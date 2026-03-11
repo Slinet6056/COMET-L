@@ -72,6 +72,7 @@ function buildParallelSnapshot(overrides: Record<string, unknown> = {}) {
         {
           targetId: 'Calculator.add',
           success: true,
+          method_coverage: 0.42,
         },
       ],
     ],
@@ -203,6 +204,8 @@ describe('Run page parallel mode', () => {
     expect(screen.getByRole('heading', { name: 'Worker Output' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Log Timeline' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Batch Summary' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Coverage' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Runtime' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Parallel Stats' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Active Targets' })).not.toBeInTheDocument();
     expect(screen.getByText('Current batch: 2')).toBeInTheDocument();
@@ -317,6 +320,6 @@ describe('Run page parallel mode', () => {
     expect(await screen.findByRole('heading', { name: 'Parallel Preprocessing' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Batch Summary' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Worker Output' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Log Viewer' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Log Timeline' })).toBeInTheDocument();
   });
 });
