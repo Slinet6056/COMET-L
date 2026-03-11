@@ -347,8 +347,7 @@ class ParallelPlannerAgent:
         method_name = target.get("method_name", "")
         target_id = f"{class_name}.{method_name}"
 
-        # 设置日志上下文，便于在多线程日志中区分不同 Worker
-        with log_context(f"Worker:{target_id}"):
+        with log_context(target_id):
             return self._process_single_target_impl(
                 target, class_name, method_name, target_id
             )

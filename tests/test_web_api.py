@@ -191,6 +191,34 @@ class SnapshotTests(unittest.TestCase):
             "running",
         )
 
+    def test_parallel_snapshot_merges_worker_logs_into_target_stream(self) -> None:
+        state = ParallelAgentState()
+        log_router = RunLogRouter()
+        self.assertTrue(state.acquire_target("Calculator", "add"))
+
+        logger = logging.getLogger("test.web.api.parallel_logs")
+        logger.setLevel(logging.INFO)
+        logger.addHandler(log_router)
+        self.addCleanup(logger.removeHandler, log_router)
+
+        with log_context("Calculator.add"):
+            logger.info("worker log line")
+
+        snapshot = build_run_snapshot(
+            "run-logs-merge", "running", state, log_router=log_router
+        )
+
+        self.assertEqual(snapshot["logStreams"]["taskIds"], ["main", "Calculator.add"])
+        self.assertEqual(
+            snapshot["logStreams"]["byTaskId"]["Calculator.add"]["bufferedEntryCount"],
+            1,
+        )
+        self.assertEqual(
+            snapshot["logStreams"]["byTaskId"]["Calculator.add"]["totalEntryCount"],
+            1,
+        )
+        self.assertNotIn("Worker:Calculator.add", snapshot["logStreams"]["byTaskId"])
+
 
 class EventBusTests(unittest.TestCase):
     def test_event_bus_keeps_ordered_snapshot_events(self) -> None:
