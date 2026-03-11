@@ -1064,6 +1064,8 @@ def run_request(
         components = system_initializer(config, bug_reports_dir, parallel_mode)
         if isinstance(components, dict) and runtime_snapshot_publisher is not None:
             components["runtime_snapshot_publisher"] = runtime_snapshot_publisher
+        if isinstance(components, dict) and log_router is not None:
+            components["log_router"] = log_router
         evolution_runner(project_path, components, request.resume_state)
     except Exception as exc:
         emit_event(

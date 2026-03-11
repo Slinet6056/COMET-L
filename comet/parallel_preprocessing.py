@@ -6,6 +6,7 @@ import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -37,6 +38,8 @@ class ParallelPreprocessor:
         self.mutation_evaluator = components["mutation_evaluator"]
         self.db = components["db"]
         self.project_scanner = components["project_scanner"]
+        self.log_router = components.get("log_router")
+        self.runtime_snapshot_publisher = components.get("runtime_snapshot_publisher")
 
         # RAG 相关组件（可选）
         self.knowledge_base = components.get("knowledge_base")
@@ -81,6 +84,48 @@ class ParallelPreprocessor:
             self.max_workers = cpu_count
 
         logger.info(f"并行预处理器初始化完成，最大并发数: {self.max_workers}")
+
+    def _task_id(self, class_name: str, method_name: str) -> str:
+        return f"Pre:{class_name}.{method_name}"
+
+    def _publish_runtime_snapshot(self) -> None:
+        if callable(self.runtime_snapshot_publisher):
+            self.runtime_snapshot_publisher(
+                phase={"key": "preprocessing", "label": "Preprocessing"}
+            )
+
+    def _mark_task_started(self, task_id: str, started_at: str) -> None:
+        if self.log_router is None:
+            return
+
+        self.log_router.ensure_stream(
+            task_id,
+            status="running",
+            started_at=started_at,
+        )
+        self._publish_runtime_snapshot()
+
+    def _mark_task_finished(
+        self,
+        task_id: str,
+        *,
+        success: bool,
+        started_at: str,
+        ended_at: str,
+        duration_seconds: float,
+    ) -> None:
+        if self.log_router is None:
+            return
+
+        self.log_router.ensure_stream(
+            task_id,
+            status="completed" if success else "failed",
+            started_at=started_at,
+            ended_at=ended_at,
+            completed_at=ended_at if success else None,
+            duration_seconds=duration_seconds,
+        )
+        self._publish_runtime_snapshot()
 
     def _get_formatting_config(self) -> tuple:
         """
@@ -401,12 +446,13 @@ class ParallelPreprocessor:
         Returns:
             处理结果
         """
-        from datetime import datetime
-
         # 设置日志上下文，便于在多线程日志中区分不同任务
-        with log_context(f"Pre:{class_name}.{method_name}"):
+        task_id = self._task_id(class_name, method_name)
+        with log_context(task_id):
             # 记录开始时间，用于后续清理
             start_time = datetime.now()
+            started_at_iso = start_time.astimezone(timezone.utc).isoformat()
+            self._mark_task_started(task_id, started_at_iso)
 
             # 直接调用处理方法（不使用额外的线程池包装）
             # 超时控制在 _process_method 内部通过检查时间来实现
@@ -414,11 +460,33 @@ class ParallelPreprocessor:
                 result = self._process_method(
                     class_name, method_name, method_info, start_time
                 )
+                elapsed = result.get("elapsed")
+                duration_seconds = (
+                    float(elapsed)
+                    if isinstance(elapsed, (int, float))
+                    else max((datetime.now() - start_time).total_seconds(), 0.0)
+                )
+                self._mark_task_finished(
+                    task_id,
+                    success=bool(result.get("success")),
+                    started_at=started_at_iso,
+                    ended_at=datetime.now(timezone.utc).isoformat(),
+                    duration_seconds=duration_seconds,
+                )
                 return result
             except Exception as e:
                 logger.warning(f"方法处理异常: {e}")
                 with self._stats_lock:
                     self._stats["failed"] += 1
+                self._mark_task_finished(
+                    task_id,
+                    success=False,
+                    started_at=started_at_iso,
+                    ended_at=datetime.now(timezone.utc).isoformat(),
+                    duration_seconds=max(
+                        (datetime.now() - start_time).total_seconds(), 0.0
+                    ),
+                )
                 return {"success": False, "error": str(e)}
 
     def _cleanup_timeout_data(
