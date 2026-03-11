@@ -134,6 +134,10 @@ describe('Log viewer', () => {
     expect(screen.queryByText(/^Start:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Duration:/)).not.toBeInTheDocument();
 
+    const buttons = screen.getAllByRole('button');
+    expect(buttons[0]).toHaveTextContent('main');
+    expect(buttons[1]).toHaveTextContent('task-7');
+
     const workerButton = screen.getByRole('button', { name: /task-7/i });
     const mainButton = screen.getByRole('button', { name: /main/i });
 
@@ -471,4 +475,261 @@ describe('Log viewer', () => {
 
     expect(await screen.findByText('Worker failed before logs were captured.')).toBeInTheDocument();
   });
+
+  it('keeps active streams ahead of finished streams during live runs', async () => {
+    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
+      runId: 'run-logs-5',
+      streams: {
+        taskIds: ['task-done', 'main', 'task-pending', 'task-failed'],
+        counts: { main: 0, 'task-pending': 0, 'task-done': 0, 'task-failed': 0 },
+        maxEntriesPerStream: 50,
+        items: [
+          {
+            taskId: 'task-done',
+            order: 1,
+            status: 'completed',
+            startedAt: '2026-03-10T10:00:01Z',
+            completedAt: '2026-03-10T10:00:03Z',
+            endedAt: '2026-03-10T10:00:03Z',
+            durationSeconds: 2,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+          {
+            taskId: 'main',
+            order: 0,
+            status: 'running',
+            startedAt: '2026-03-10T10:00:00Z',
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+          {
+            taskId: 'task-pending',
+            order: 2,
+            status: 'pending',
+            startedAt: null,
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+          {
+            taskId: 'task-failed',
+            order: 3,
+            status: 'failed',
+            startedAt: '2026-03-10T10:00:04Z',
+            completedAt: null,
+            endedAt: '2026-03-10T10:00:05Z',
+            durationSeconds: 1,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+        ],
+        byTaskId: {
+          'task-done': {
+            taskId: 'task-done',
+            order: 1,
+            status: 'completed',
+            startedAt: '2026-03-10T10:00:01Z',
+            completedAt: '2026-03-10T10:00:03Z',
+            endedAt: '2026-03-10T10:00:03Z',
+            durationSeconds: 2,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+          main: {
+            taskId: 'main',
+            order: 0,
+            status: 'running',
+            startedAt: '2026-03-10T10:00:00Z',
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+          'task-pending': {
+            taskId: 'task-pending',
+            order: 2,
+            status: 'pending',
+            startedAt: null,
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+          'task-failed': {
+            taskId: 'task-failed',
+            order: 3,
+            status: 'failed',
+            startedAt: '2026-03-10T10:00:04Z',
+            completedAt: null,
+            endedAt: '2026-03-10T10:00:05Z',
+            durationSeconds: 1,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+        },
+      },
+    });
+
+    render(<LogViewer runId="run-logs-5" runStatus="running" />);
+
+    const buttons = await screen.findAllByRole('button');
+    expect(buttons[0]).toHaveTextContent('main');
+    expect(buttons[1]).toHaveTextContent('task-pending');
+    expect(buttons[2]).toHaveTextContent('task-done');
+    expect(buttons[3]).toHaveTextContent('task-failed');
+  });
+
+  it.each(['completed', 'failed'] as const)(
+    'keeps pure appearance order after a %s run ends',
+    async (runStatus) => {
+      vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
+        runId: `run-logs-${runStatus}`,
+        streams: {
+          taskIds: ['task-done', 'main', 'task-pending', 'task-failed'],
+          counts: { main: 0, 'task-pending': 0, 'task-done': 0, 'task-failed': 0 },
+          maxEntriesPerStream: 50,
+          items: [
+            {
+              taskId: 'task-done',
+              order: 1,
+              status: 'completed',
+              startedAt: '2026-03-10T10:00:01Z',
+              completedAt: '2026-03-10T10:00:03Z',
+              endedAt: '2026-03-10T10:00:03Z',
+              durationSeconds: 2,
+              firstEntryAt: null,
+              lastEntryAt: null,
+              bufferedEntryCount: 0,
+              totalEntryCount: 0,
+            },
+            {
+              taskId: 'main',
+              order: 0,
+              status: 'running',
+              startedAt: '2026-03-10T10:00:00Z',
+              completedAt: null,
+              endedAt: null,
+              durationSeconds: null,
+              firstEntryAt: null,
+              lastEntryAt: null,
+              bufferedEntryCount: 0,
+              totalEntryCount: 0,
+            },
+            {
+              taskId: 'task-pending',
+              order: 2,
+              status: 'pending',
+              startedAt: null,
+              completedAt: null,
+              endedAt: null,
+              durationSeconds: null,
+              firstEntryAt: null,
+              lastEntryAt: null,
+              bufferedEntryCount: 0,
+              totalEntryCount: 0,
+            },
+            {
+              taskId: 'task-failed',
+              order: 3,
+              status: 'failed',
+              startedAt: '2026-03-10T10:00:04Z',
+              completedAt: null,
+              endedAt: '2026-03-10T10:00:05Z',
+              durationSeconds: 1,
+              firstEntryAt: null,
+              lastEntryAt: null,
+              bufferedEntryCount: 0,
+              totalEntryCount: 0,
+            },
+          ],
+          byTaskId: {
+            'task-done': {
+              taskId: 'task-done',
+              order: 1,
+              status: 'completed',
+              startedAt: '2026-03-10T10:00:01Z',
+              completedAt: '2026-03-10T10:00:03Z',
+              endedAt: '2026-03-10T10:00:03Z',
+              durationSeconds: 2,
+              firstEntryAt: null,
+              lastEntryAt: null,
+              bufferedEntryCount: 0,
+              totalEntryCount: 0,
+            },
+            main: {
+              taskId: 'main',
+              order: 0,
+              status: 'running',
+              startedAt: '2026-03-10T10:00:00Z',
+              completedAt: null,
+              endedAt: null,
+              durationSeconds: null,
+              firstEntryAt: null,
+              lastEntryAt: null,
+              bufferedEntryCount: 0,
+              totalEntryCount: 0,
+            },
+            'task-pending': {
+              taskId: 'task-pending',
+              order: 2,
+              status: 'pending',
+              startedAt: null,
+              completedAt: null,
+              endedAt: null,
+              durationSeconds: null,
+              firstEntryAt: null,
+              lastEntryAt: null,
+              bufferedEntryCount: 0,
+              totalEntryCount: 0,
+            },
+            'task-failed': {
+              taskId: 'task-failed',
+              order: 3,
+              status: 'failed',
+              startedAt: '2026-03-10T10:00:04Z',
+              completedAt: null,
+              endedAt: '2026-03-10T10:00:05Z',
+              durationSeconds: 1,
+              firstEntryAt: null,
+              lastEntryAt: null,
+              bufferedEntryCount: 0,
+              totalEntryCount: 0,
+            },
+          },
+        },
+      });
+
+      render(<LogViewer runId={`run-logs-${runStatus}`} runStatus={runStatus} />);
+
+      const buttons = await screen.findAllByRole('button');
+      expect(buttons[0]).toHaveTextContent('main');
+      expect(buttons[1]).toHaveTextContent('task-done');
+      expect(buttons[2]).toHaveTextContent('task-pending');
+      expect(buttons[3]).toHaveTextContent('task-failed');
+    },
+  );
 });

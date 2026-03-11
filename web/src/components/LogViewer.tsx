@@ -122,6 +122,14 @@ function normalizeStreamStatus(stream: RunLogStream, runStatus: string): string 
   return stream.status;
 }
 
+function getStreamStatusBucket(status: string, runStatus: string): number {
+  if (runStatus === 'completed' || runStatus === 'failed') {
+    return 0;
+  }
+
+  return status === 'completed' || status === 'failed' ? 1 : 0;
+}
+
 function getStreamLogStateLabel(stream: RunLogStream, runStatus: string): string {
   if (stream.totalEntryCount > 0) {
     return `${stream.totalEntryCount} ${stream.totalEntryCount === 1 ? 'entry' : 'entries'}`;
@@ -283,8 +291,37 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
   }, [streams]);
 
   const streamItems = useMemo(() => {
-    return taskIds.map((taskId) => streams?.byTaskId[taskId] ?? buildFallbackStream(taskId, streams));
-  }, [streams, taskIds]);
+    return taskIds
+      .map((taskId, index) => {
+        const stream = streams?.byTaskId[taskId] ?? buildFallbackStream(taskId, streams);
+        const normalizedStatus = normalizeStreamStatus(stream, runStatus);
+        return {
+          taskId,
+          index,
+          sortOrder: typeof stream.order === 'number' ? stream.order : index,
+          stream: {
+            ...stream,
+            status: normalizedStatus,
+          },
+        };
+      })
+      .sort((left, right) => {
+        const bucketDiff =
+          getStreamStatusBucket(left.stream.status, runStatus) -
+          getStreamStatusBucket(right.stream.status, runStatus);
+
+        if (bucketDiff !== 0) {
+          return bucketDiff;
+        }
+
+        if (left.sortOrder !== right.sortOrder) {
+          return left.sortOrder - right.sortOrder;
+        }
+
+        return left.index - right.index;
+      })
+      .map((item) => item.stream);
+  }, [runStatus, streams, taskIds]);
 
   const expandedStreamIds = useMemo(
     () => taskIds.filter((taskId) => expandedTaskIds[taskId]),
