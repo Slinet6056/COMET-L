@@ -60,6 +60,15 @@ config.yaml
 # Logs
 *.log
 
+# Node / web
+node_modules/
+web/node_modules/
+web/dist/
+web/.vite/
+web/coverage/
+web/test-results/
+*.tsbuildinfo
+
 # OS
 .DS_Store
 Thumbs.db
@@ -68,3 +77,6 @@ TODO.md
 
 # Dolt database files (added by bd init)
 .dolt/
+
+# OMO
+.sisyphus/
