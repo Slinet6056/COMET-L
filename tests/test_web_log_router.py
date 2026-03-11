@@ -79,6 +79,56 @@ class LogRouterTests(unittest.TestCase):
         ]
         self.assertEqual(messages, ["second", "third"])
 
+        snapshot = router.snapshot()
+        stream = snapshot["byTaskId"]["Worker:Calculator.add"]
+        self.assertEqual(stream["bufferedEntryCount"], 2)
+        self.assertEqual(stream["totalEntryCount"], 3)
+        self.assertIsNotNone(stream["firstEntryAt"])
+        self.assertEqual(
+            stream["lastEntryAt"],
+            router.get_logs("Worker:Calculator.add")[-1]["timestamp"],
+        )
+
+    def test_snapshot_uses_stream_order_instead_of_alphabetical_task_ids(self) -> None:
+        router = RunLogRouter(max_entries_per_stream=5)
+        router.ensure_stream(
+            "task-z", status="running", started_at="2026-01-01T00:00:01+00:00"
+        )
+        router.ensure_stream(
+            "task-a", status="running", started_at="2026-01-01T00:00:02+00:00"
+        )
+
+        snapshot = router.snapshot()
+
+        self.assertEqual(snapshot["taskIds"], ["main", "task-z", "task-a"])
+
+    def test_zero_log_stream_metadata_can_be_registered_and_completed(self) -> None:
+        router = RunLogRouter(max_entries_per_stream=5)
+        router.ensure_stream(
+            "task-1",
+            status="running",
+            started_at="2026-01-01T00:00:00+00:00",
+        )
+        router.ensure_stream(
+            "task-1",
+            status="completed",
+            started_at="2026-01-01T00:00:00+00:00",
+            ended_at="2026-01-01T00:00:05+00:00",
+            completed_at="2026-01-01T00:00:05+00:00",
+            duration_seconds=5.0,
+        )
+
+        snapshot = router.snapshot()
+        stream = snapshot["byTaskId"]["task-1"]
+
+        self.assertEqual(stream["status"], "completed")
+        self.assertEqual(stream["startedAt"], "2026-01-01T00:00:00+00:00")
+        self.assertEqual(stream["completedAt"], "2026-01-01T00:00:05+00:00")
+        self.assertEqual(stream["endedAt"], "2026-01-01T00:00:05+00:00")
+        self.assertEqual(stream["durationSeconds"], 5.0)
+        self.assertEqual(stream["bufferedEntryCount"], 0)
+        self.assertEqual(router.get_logs("task-1"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
