@@ -84,6 +84,7 @@ export function HomePage() {
   const navigate = useNavigate();
   const [config, setConfig] = useState<ConfigValue | null>(null);
   const [projectPath, setProjectPath] = useState('');
+  const [bugReportsDir, setBugReportsDir] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [pageError, setPageError] = useState<string | null>(null);
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
@@ -175,7 +176,7 @@ export function HomePage() {
     setPageError(null);
 
     try {
-      const response = await createRun({ projectPath, config });
+      const response = await createRun({ projectPath, bugReportsDir, config });
       navigate(`/runs/${response.runId}`);
     } catch (error) {
       if (error instanceof ApiError) {
@@ -276,6 +277,34 @@ export function HomePage() {
           {fieldErrors.projectPath ? (
             <span className="field__error" role="alert">
               {fieldErrors.projectPath}
+            </span>
+          ) : null}
+        </label>
+
+        <label className="field" htmlFor="bug-reports-dir">
+          <span className="field__label">Bug reports directory</span>
+          <input
+            id="bug-reports-dir"
+            name="bugReportsDir"
+            type="text"
+            aria-label="Bug reports directory"
+            value={bugReportsDir}
+            placeholder="examples/calculator-demo/bug-reports"
+            onChange={(event) => {
+              setBugReportsDir(event.target.value);
+              setFieldErrors((current) => {
+                const nextErrors = { ...current };
+                delete nextErrors.bugReportsDir;
+                return nextErrors;
+              });
+            }}
+          />
+          <span className="field__hint">
+            Optional directory of Markdown bug reports to index for the run knowledge base.
+          </span>
+          {fieldErrors.bugReportsDir ? (
+            <span className="field__error" role="alert">
+              {fieldErrors.bugReportsDir}
             </span>
           ) : null}
         </label>

@@ -217,10 +217,16 @@ describe('Config page', () => {
 
     await screen.findByLabelText('Project path');
     await user.click(screen.getByRole('button', { name: 'Calculator demo' }));
+    await user.type(screen.getByLabelText('Bug reports directory'), 'examples/calculator-demo/bug-reports');
     await user.click(screen.getByRole('button', { name: 'Start run' }));
 
     await waitFor(() => {
-      expect(createRunSpy).toHaveBeenCalled();
+      expect(createRunSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectPath: 'examples/calculator-demo',
+          bugReportsDir: 'examples/calculator-demo/bug-reports',
+        }),
+      );
       expect(fetchRunSnapshotSpy).toHaveBeenCalledWith('run-123');
     });
 
