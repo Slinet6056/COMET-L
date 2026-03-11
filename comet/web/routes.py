@@ -505,14 +505,13 @@ def get_run_logs(
     run_service: RunLifecycleService = Depends(get_run_service),
 ) -> JSONResponse:
     try:
-        log_router = run_service.get_log_router(run_id)
         run_service.get_session(run_id)
     except KeyError:
         return _run_not_found_response(run_id)
 
     payload = {
         "runId": run_id,
-        "streams": log_router.snapshot(),
+        "streams": run_service.get_log_streams_snapshot(run_id),
     }
     return JSONResponse(status_code=200, content=payload)
 
@@ -524,22 +523,15 @@ def get_run_logs_for_task(
     run_service: RunLifecycleService = Depends(get_run_service),
 ) -> JSONResponse:
     try:
-        log_router = run_service.get_log_router(run_id)
         run_service.get_session(run_id)
     except KeyError:
         return _run_not_found_response(run_id)
 
-    available_task_ids = log_router.get_available_task_ids()
-    if task_id != "main" and task_id not in available_task_ids:
+    try:
+        payload = run_service.get_task_log_payload(run_id, task_id)
+    except KeyError:
         return _log_stream_not_found_response(run_id, task_id)
 
-    payload = {
-        "runId": run_id,
-        "taskId": task_id,
-        "availableTaskIds": available_task_ids,
-        "maxEntriesPerStream": log_router.max_entries_per_stream,
-        "entries": log_router.get_logs(task_id),
-    }
     return JSONResponse(status_code=200, content=payload)
 
 

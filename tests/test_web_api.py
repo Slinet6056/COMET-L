@@ -139,6 +139,7 @@ class SnapshotTests(unittest.TestCase):
 
     def test_parallel_snapshot_includes_worker_cards(self) -> None:
         state = ParallelAgentState()
+        log_router = RunLogRouter()
         acquired = state.acquire_target(
             "Calculator",
             "add",
@@ -162,7 +163,9 @@ class SnapshotTests(unittest.TestCase):
             ]
         )
 
-        snapshot = build_run_snapshot("run-002", "running", state)
+        snapshot = build_run_snapshot(
+            "run-002", "running", state, log_router=log_router
+        )
 
         self.assertEqual(snapshot["mode"], "parallel")
         self.assertEqual(snapshot["currentBatch"], 1)
@@ -174,6 +177,17 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["activeTargets"][0]["method_coverage"], 0.4)
         self.assertEqual(len(snapshot["batchResults"]), 1)
         self.assertEqual(snapshot["batchResults"][0][0]["targetId"], "Calculator.add")
+        self.assertEqual(len(snapshot["targetLifecycle"]), 1)
+        self.assertEqual(snapshot["targetLifecycle"][0]["status"], "running")
+        self.assertEqual(snapshot["logStreams"]["taskIds"], ["main", "Calculator.add"])
+        self.assertEqual(
+            snapshot["logStreams"]["byTaskId"]["Calculator.add"]["bufferedEntryCount"],
+            0,
+        )
+        self.assertEqual(
+            snapshot["logStreams"]["byTaskId"]["Calculator.add"]["status"],
+            "running",
+        )
 
 
 class EventBusTests(unittest.TestCase):
@@ -303,13 +317,41 @@ class StreamingApiTests(unittest.TestCase):
             logger.info("worker-2")
             logger.info("worker-3")
 
+        state = ParallelAgentState()
+        self.assertTrue(state.acquire_target("Task", "zeroLogs"))
+        self.run_service.publish_runtime_snapshot(run_id, state=state)
+
         summary = self.client.get(f"/api/runs/{run_id}/logs")
         self.assertEqual(summary.status_code, 200)
         summary_payload = summary.json()
         self.assertEqual(summary_payload["runId"], run_id)
-        self.assertEqual(summary_payload["streams"]["taskIds"], ["main", "task-1"])
-        self.assertEqual(summary_payload["streams"]["counts"], {"main": 2, "task-1": 2})
+        self.assertEqual(
+            summary_payload["streams"]["taskIds"],
+            ["main", "task-1", "Task.zeroLogs"],
+        )
+        self.assertEqual(
+            summary_payload["streams"]["counts"],
+            {"main": 2, "task-1": 2, "Task.zeroLogs": 0},
+        )
         self.assertEqual(summary_payload["streams"]["maxEntriesPerStream"], 2)
+        self.assertEqual(
+            summary_payload["streams"]["byTaskId"]["task-1"]["bufferedEntryCount"],
+            2,
+        )
+        self.assertEqual(
+            summary_payload["streams"]["byTaskId"]["task-1"]["totalEntryCount"],
+            3,
+        )
+        self.assertEqual(
+            summary_payload["streams"]["byTaskId"]["Task.zeroLogs"]["status"],
+            "running",
+        )
+        self.assertEqual(
+            summary_payload["streams"]["byTaskId"]["Task.zeroLogs"][
+                "bufferedEntryCount"
+            ],
+            0,
+        )
 
         main_logs = self.client.get(f"/api/runs/{run_id}/logs/main")
         self.assertEqual(main_logs.status_code, 200)
@@ -321,11 +363,24 @@ class StreamingApiTests(unittest.TestCase):
         worker_logs = self.client.get(f"/api/runs/{run_id}/logs/task-1")
         self.assertEqual(worker_logs.status_code, 200)
         worker_payload = worker_logs.json()
-        self.assertEqual(worker_payload["availableTaskIds"], ["main", "task-1"])
+        self.assertEqual(
+            worker_payload["availableTaskIds"],
+            ["main", "task-1", "Task.zeroLogs"],
+        )
+        self.assertEqual(worker_payload["stream"]["taskId"], "task-1")
+        self.assertEqual(worker_payload["stream"]["status"], "running")
         self.assertEqual(
             [entry["message"] for entry in worker_payload["entries"]],
             ["worker-2", "worker-3"],
         )
+
+        zero_log_task = self.client.get(f"/api/runs/{run_id}/logs/Task.zeroLogs")
+        self.assertEqual(zero_log_task.status_code, 200)
+        zero_log_payload = zero_log_task.json()
+        self.assertEqual(zero_log_payload["entries"], [])
+        self.assertEqual(zero_log_payload["stream"]["taskId"], "Task.zeroLogs")
+        self.assertEqual(zero_log_payload["stream"]["bufferedEntryCount"], 0)
+        self.assertEqual(zero_log_payload["stream"]["status"], "running")
 
 
 class RunApiTests(unittest.TestCase):
@@ -498,6 +553,13 @@ class RunApiTests(unittest.TestCase):
         self.assertIn("mutationScore", current_payload["metrics"])
         self.assertEqual(current_payload["metrics"]["mutationScore"], 0.5)
         self.assertTrue(current_payload["artifacts"]["resolvedConfig"]["exists"])
+        self.assertEqual(current_payload["logStreams"]["taskIds"], ["main"])
+        self.assertEqual(
+            current_payload["logStreams"]["byTaskId"]["main"]["status"], "running"
+        )
+        self.assertIsNotNone(
+            current_payload["logStreams"]["byTaskId"]["main"]["startedAt"]
+        )
 
         by_id_response = self.client.get(f"/api/runs/{run_id}")
         self.assertEqual(by_id_response.status_code, 200)
@@ -531,6 +593,16 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(completed_payload["phase"]["key"], "completed")
         self.assertEqual(completed_payload["iteration"], 2)
         self.assertEqual(completed_payload["metrics"]["totalTests"], 4)
+        self.assertEqual(
+            completed_payload["logStreams"]["byTaskId"]["main"]["status"],
+            "completed",
+        )
+        self.assertIsNotNone(
+            completed_payload["logStreams"]["byTaskId"]["main"]["completedAt"]
+        )
+        self.assertIsNotNone(
+            completed_payload["logStreams"]["byTaskId"]["main"]["durationSeconds"]
+        )
 
         no_current = self.client.get("/api/runs/current")
         self.assertEqual(no_current.status_code, 404)

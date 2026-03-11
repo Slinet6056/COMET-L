@@ -165,6 +165,9 @@ class RunLifecycleService:
             self._requests[run_id] = scoped_request
             self._event_buses[run_id] = RuntimeEventBus()
             self._log_routers[run_id] = RunLogRouter()
+            self._log_routers[run_id].ensure_stream(
+                "main", status="pending", started_at=session.created_at
+            )
             self._runtime_snapshots[run_id] = self._build_runtime_snapshot(run_id)
             self._active_run_id = run_id
             return session
@@ -228,8 +231,57 @@ class RunLifecycleService:
         snapshot["phase"] = merged_phase
         snapshot["status"] = session.status
         snapshot["artifacts"] = self._build_artifacts(session)
-        snapshot["logStreams"] = self._log_routers[run_id].snapshot()
+        snapshot["logStreams"] = self.get_log_streams_snapshot(run_id)
         return snapshot
+
+    def get_log_streams_snapshot(self, run_id: str) -> dict[str, Any]:
+        session = self._sessions[run_id]
+        log_router = self._log_routers[run_id]
+        state = self._load_state_snapshot(run_id)
+        if isinstance(state, ParallelAgentState):
+            log_router.sync_parallel_state(state)
+
+        main_duration: float | None = None
+        if session.started_at and (session.completed_at or session.failed_at):
+            started_at = datetime.fromisoformat(session.started_at)
+            ended_at = datetime.fromisoformat(
+                session.completed_at or session.failed_at or ""
+            )
+            main_duration = max((ended_at - started_at).total_seconds(), 0.0)
+
+        main_status = "running"
+        if session.status == "created":
+            main_status = "pending"
+        elif session.status == "completed":
+            main_status = "completed"
+        elif session.status == "failed":
+            main_status = "failed"
+
+        log_router.ensure_stream(
+            "main",
+            status=main_status,
+            started_at=session.started_at or session.created_at,
+            ended_at=session.completed_at or session.failed_at,
+            completed_at=session.completed_at,
+            duration_seconds=main_duration,
+        )
+        return log_router.snapshot()
+
+    def get_task_log_payload(self, run_id: str, task_id: str) -> dict[str, Any]:
+        log_router = self._log_routers[run_id]
+        streams = self.get_log_streams_snapshot(run_id)
+        stream = streams["byTaskId"].get(task_id)
+        if stream is None:
+            raise KeyError(task_id)
+
+        return {
+            "runId": run_id,
+            "taskId": task_id,
+            "availableTaskIds": streams["taskIds"],
+            "maxEntriesPerStream": log_router.max_entries_per_stream,
+            "stream": stream,
+            "entries": log_router.get_logs(task_id),
+        }
 
     def publish_runtime_snapshot(
         self,
@@ -281,7 +333,7 @@ class RunLifecycleService:
 
             snapshot["status"] = session.status
             snapshot["artifacts"] = self._build_artifacts(session)
-            snapshot["logStreams"] = log_router.snapshot()
+            snapshot["logStreams"] = self.get_log_streams_snapshot(run_id)
 
             for key, value in snapshot_updates.items():
                 snapshot[key] = value
@@ -390,6 +442,9 @@ class RunLifecycleService:
             session = self._sessions[run_id]
             session.status = "running"
             session.started_at = _utc_now_iso()
+            self._log_routers[run_id].ensure_stream(
+                "main", status="running", started_at=session.started_at
+            )
         self.publish_runtime_snapshot(run_id)
 
     def mark_completed(self, run_id: str) -> None:
@@ -397,6 +452,23 @@ class RunLifecycleService:
             session = self._sessions[run_id]
             session.status = "completed"
             session.completed_at = _utc_now_iso()
+            duration_seconds: float | None = None
+            if session.started_at is not None:
+                duration_seconds = max(
+                    (
+                        datetime.fromisoformat(session.completed_at)
+                        - datetime.fromisoformat(session.started_at)
+                    ).total_seconds(),
+                    0.0,
+                )
+            self._log_routers[run_id].ensure_stream(
+                "main",
+                status="completed",
+                started_at=session.started_at or session.created_at,
+                ended_at=session.completed_at,
+                completed_at=session.completed_at,
+                duration_seconds=duration_seconds,
+            )
             if self._active_run_id == run_id:
                 self._active_run_id = None
         self.publish_runtime_snapshot(run_id, state=self._load_state_snapshot(run_id))
@@ -406,6 +478,22 @@ class RunLifecycleService:
             session = self._sessions[run_id]
             session.status = "failed"
             session.failed_at = _utc_now_iso()
+            duration_seconds: float | None = None
+            if session.started_at is not None:
+                duration_seconds = max(
+                    (
+                        datetime.fromisoformat(session.failed_at)
+                        - datetime.fromisoformat(session.started_at)
+                    ).total_seconds(),
+                    0.0,
+                )
+            self._log_routers[run_id].ensure_stream(
+                "main",
+                status="failed",
+                started_at=session.started_at or session.created_at,
+                ended_at=session.failed_at,
+                duration_seconds=duration_seconds,
+            )
             session.error = error
             if self._active_run_id == run_id:
                 self._active_run_id = None
