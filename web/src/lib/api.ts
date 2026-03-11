@@ -63,6 +63,7 @@ export type RunWorkerCard = {
   mutantsKilled: number;
   localMutationScore: number;
   processingTime: number;
+  methodCoverage?: number | null;
 };
 
 export type RunActiveTarget = Record<string, unknown> & {

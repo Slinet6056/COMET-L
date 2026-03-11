@@ -65,6 +65,7 @@ function buildParallelSnapshot(overrides: Record<string, unknown> = {}) {
         mutantsKilled: 2,
         localMutationScore: 2 / 3,
         processingTime: 1.4,
+        methodCoverage: 0.42,
       },
     ],
     batchResults: [
@@ -72,7 +73,6 @@ function buildParallelSnapshot(overrides: Record<string, unknown> = {}) {
         {
           targetId: 'Calculator.add',
           success: true,
-          method_coverage: 0.42,
         },
       ],
     ],
@@ -250,6 +250,7 @@ describe('Run page parallel mode', () => {
               mutantsKilled: 1,
               localMutationScore: 0.25,
               processingTime: 2.7,
+              methodCoverage: 0.5,
             },
           ],
           activeTargets: [

@@ -108,6 +108,14 @@ function toCoverageValue(value: unknown): number | null {
 function buildWorkerCoverageLookup(parallel: ParallelSnapshotData): Map<string, number> {
   const coverageByTarget = new Map<string, number>();
 
+  parallel.workerCards.forEach((worker) => {
+    const coverage = toCoverageValue(worker.methodCoverage);
+
+    if (coverage !== null) {
+      coverageByTarget.set(worker.targetId, coverage);
+    }
+  });
+
   parallel.batchResults.forEach((batch) => {
     batch.forEach((result) => {
       const targetId = typeof result.targetId === 'string' ? result.targetId : null;
