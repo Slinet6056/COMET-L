@@ -15,7 +15,7 @@ describe('Log viewer', () => {
     vi.restoreAllMocks();
   });
 
-  it('switches between main and worker streams using the logs API', async () => {
+  it('expands per-stream inline log panels on demand', async () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
       runId: 'run-logs-1',
@@ -127,25 +127,36 @@ describe('Log viewer', () => {
 
     render(<LogViewer runId="run-logs-1" runStatus="running" />);
 
-    expect(await screen.findByText('main log line')).toBeInTheDocument();
-    expect(screen.getByText('Selected: main')).toBeInTheDocument();
-    expect(screen.getByText('Visible: 1')).toBeInTheDocument();
-    expect(screen.getByText('Buffered: 2 / 50')).toBeInTheDocument();
-    expect(screen.getByRole('log', { name: 'Log entries for main' })).toBeInTheDocument();
-    const rows = screen.getAllByRole('button');
-    expect(rows[0]).toHaveTextContent('task-7');
-    expect(rows[1]).toHaveTextContent('main');
+    expect(await screen.findByText('Expand any stream row to inspect its buffered log output.')).toBeInTheDocument();
+    expect(screen.queryByText('main log line')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Selected:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Status:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Start:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Duration:/)).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /task-7/i }));
+    const workerButton = screen.getByRole('button', { name: /task-7/i });
+    const mainButton = screen.getByRole('button', { name: /main/i });
+
+    expect(workerButton).toHaveAttribute('aria-expanded', 'false');
+    expect(mainButton).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(mainButton);
+
+    expect(await screen.findByText('main log line')).toBeInTheDocument();
+    expect(mainButton).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('log', { name: 'Log entries for main' })).toBeInTheDocument();
+
+    await user.click(workerButton);
 
     expect(await screen.findByText('worker log line')).toBeInTheDocument();
-    expect(screen.getByText('Selected: task-7')).toBeInTheDocument();
-    expect(screen.getByText('Status: completed')).toBeInTheDocument();
+    expect(screen.getByText('main log line')).toBeInTheDocument();
+    expect(workerButton).toHaveAttribute('aria-expanded', 'true');
     expect(fetchRunLogsForTaskSpy).toHaveBeenNthCalledWith(1, 'run-logs-1', 'main');
     expect(fetchRunLogsForTaskSpy).toHaveBeenNthCalledWith(2, 'run-logs-1', 'task-7');
   });
 
   it('gracefully degrades when only the main stream exists and it is empty', async () => {
+    const user = userEvent.setup();
     vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
       runId: 'run-logs-2',
       streams: {
@@ -207,18 +218,19 @@ describe('Log viewer', () => {
 
     render(<LogViewer runId="run-logs-2" runStatus="completed" />);
 
-    expect(await screen.findByText('Only the main log stream is available for this run.')).toBeInTheDocument();
+    const mainButton = await screen.findByRole('button', { name: /main/i });
+    expect(mainButton).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('No logs captured')).toBeInTheDocument();
+
+    await user.click(mainButton);
+
     await waitFor(() => {
       expect(screen.queryByText('Loading log entries...')).not.toBeInTheDocument();
     });
-    expect(screen.getByText('No log entries yet.')).toBeInTheDocument();
-    expect(screen.getByText('The coordinator stream has not written any messages yet.')).toBeInTheDocument();
-    expect(screen.getByText('Selected: main')).toBeInTheDocument();
-    expect(screen.getByText('Visible: 0')).toBeInTheDocument();
-    expect(screen.getByText('Buffered: 0 / 200')).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.queryByText('task-9')).not.toBeInTheDocument();
-    });
+    expect(screen.getByText('No coordinator logs were captured.')).toBeInTheDocument();
+    expect(
+      screen.getByText('The run finished before the coordinator stream produced buffered log output.'),
+    ).toBeInTheDocument();
   });
 
   it('discovers new worker streams while the run is still active', async () => {
@@ -373,7 +385,8 @@ describe('Log viewer', () => {
 
     render(<LogViewer runId="run-logs-3" runStatus="running" />);
 
-    expect(await screen.findByText('main log line')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /main/i })).toBeInTheDocument();
+    expect(screen.queryByText('main log line')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /task-9/i })).not.toBeInTheDocument();
 
     await act(async () => {
@@ -383,5 +396,79 @@ describe('Log viewer', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /task-9/i })).toBeInTheDocument();
     });
+  });
+
+  it('normalizes ended failed runs so stale worker streams do not look live', async () => {
+    const user = userEvent.setup();
+
+    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
+      runId: 'run-logs-4',
+      streams: {
+        taskIds: ['task-4'],
+        counts: { 'task-4': 0 },
+        maxEntriesPerStream: 50,
+        items: [
+          {
+            taskId: 'task-4',
+            order: 0,
+            status: 'running',
+            startedAt: '2026-03-10T10:00:01Z',
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+        ],
+        byTaskId: {
+          'task-4': {
+            taskId: 'task-4',
+            order: 0,
+            status: 'running',
+            startedAt: '2026-03-10T10:00:01Z',
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: null,
+            lastEntryAt: null,
+            bufferedEntryCount: 0,
+            totalEntryCount: 0,
+          },
+        },
+      },
+    });
+    vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue({
+      runId: 'run-logs-4',
+      taskId: 'task-4',
+      availableTaskIds: ['task-4'],
+      maxEntriesPerStream: 50,
+      stream: {
+        taskId: 'task-4',
+        order: 0,
+        status: 'running',
+        startedAt: '2026-03-10T10:00:01Z',
+        completedAt: null,
+        endedAt: null,
+        durationSeconds: null,
+        firstEntryAt: null,
+        lastEntryAt: null,
+        bufferedEntryCount: 0,
+        totalEntryCount: 0,
+      },
+      entries: [],
+    });
+
+    render(<LogViewer runId="run-logs-4" runStatus="failed" />);
+
+    const workerButton = await screen.findByRole('button', { name: /task-4/i });
+    expect(workerButton).toHaveTextContent('Failed');
+    expect(workerButton).toHaveTextContent('Failed before logs');
+    expect(workerButton).toHaveTextContent('ended');
+
+    await user.click(workerButton);
+
+    expect(await screen.findByText('Worker failed before logs were captured.')).toBeInTheDocument();
   });
 });

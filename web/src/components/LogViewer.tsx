@@ -5,6 +5,7 @@ import {
   fetchRunLogsForTask,
   type RunLogEntry,
   type RunLogStream,
+  type RunLogsStreamResponse,
   type RunLogStreamsSummary,
 } from '../lib/api';
 
@@ -14,9 +15,16 @@ type LogViewerProps = {
 };
 
 const LIVE_LOG_POLL_MS = 1000;
-
 function formatTaskLabel(taskId: string): string {
   return taskId === 'main' ? 'main' : taskId;
+}
+
+function formatStatusLabel(value: string): string {
+  if (value.length === 0) {
+    return 'Unknown';
+  }
+
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function formatTimestamp(value: string): string {
@@ -48,6 +56,22 @@ function formatDuration(value: number | null | undefined): string {
   return `${value.toFixed(value >= 10 ? 0 : 1)}s`;
 }
 
+function formatStreamDuration(stream: RunLogStream, runStatus: string): string {
+  if (typeof stream.durationSeconds === 'number' && !Number.isNaN(stream.durationSeconds)) {
+    return formatDuration(stream.durationSeconds);
+  }
+
+  if (stream.endedAt || stream.completedAt || stream.failedAt) {
+    return 'ended';
+  }
+
+  if ((runStatus === 'completed' || runStatus === 'failed') && stream.status !== 'pending') {
+    return 'ended';
+  }
+
+  return 'live';
+}
+
 function toMillis(value: string | null | undefined): number | null {
   if (!value) {
     return null;
@@ -74,6 +98,117 @@ function buildFallbackStream(taskId: string, summary: RunLogStreamsSummary | nul
   };
 }
 
+function getStreamStatusTone(status: string): 'success' | 'error' | 'running' {
+  if (status === 'completed') {
+    return 'success';
+  }
+
+  if (status === 'failed') {
+    return 'error';
+  }
+
+  return 'running';
+}
+
+function normalizeStreamStatus(stream: RunLogStream, runStatus: string): string {
+  if (runStatus === 'completed' && stream.status === 'running') {
+    return 'completed';
+  }
+
+  if (runStatus === 'failed' && stream.status === 'running') {
+    return 'failed';
+  }
+
+  return stream.status;
+}
+
+function getStreamLogStateLabel(stream: RunLogStream, runStatus: string): string {
+  if (stream.totalEntryCount > 0) {
+    return `${stream.totalEntryCount} ${stream.totalEntryCount === 1 ? 'entry' : 'entries'}`;
+  }
+
+  if (stream.status === 'pending') {
+    return 'Waiting for start';
+  }
+
+  if (stream.status === 'completed') {
+    return 'No logs captured';
+  }
+
+  if (stream.status === 'failed') {
+    return 'Failed before logs';
+  }
+
+  if (runStatus === 'completed' || runStatus === 'failed') {
+    return 'Run finished without logs';
+  }
+
+  return 'Awaiting first log';
+}
+
+function getEmptyStateCopy(stream: RunLogStream, runStatus: string): { title: string; detail: string } {
+  if (stream.taskId === 'main') {
+    if (stream.totalEntryCount > 0) {
+      return {
+        title: 'No buffered log lines available.',
+        detail: 'This stream reported activity, but the current buffer is empty.',
+      };
+    }
+
+    if (runStatus === 'completed' || runStatus === 'failed') {
+      return {
+        title: 'No coordinator logs were captured.',
+        detail: 'The run finished before the coordinator stream produced buffered log output.',
+      };
+    }
+
+    return {
+      title: 'No coordinator logs yet.',
+      detail: 'The coordinator stream has not emitted any buffered log output yet.',
+    };
+  }
+
+  if (stream.totalEntryCount > 0) {
+    return {
+      title: 'No buffered worker log lines available.',
+      detail: `Worker ${stream.taskId} reported activity, but the current buffer is empty.`,
+    };
+  }
+
+  if (stream.status === 'pending') {
+    return {
+      title: 'Worker has not started logging.',
+      detail: `Worker ${stream.taskId} has not started yet, so there is no buffered output to show.`,
+    };
+  }
+
+  if (stream.status === 'completed') {
+    return {
+      title: 'Worker completed without buffered logs.',
+      detail: `Worker ${stream.taskId} finished its work without emitting buffered log output.`,
+    };
+  }
+
+  if (stream.status === 'failed') {
+    return {
+      title: 'Worker failed before logs were captured.',
+      detail: `Worker ${stream.taskId} stopped before any buffered log output was recorded.`,
+    };
+  }
+
+  if (runStatus === 'completed' || runStatus === 'failed') {
+    return {
+      title: 'Run finished before worker logs were captured.',
+      detail: `Worker ${stream.taskId} did not leave buffered log output before the run finished.`,
+    };
+  }
+
+  return {
+    title: 'Worker is waiting to emit logs.',
+    detail: `Worker ${stream.taskId} is active, but it has not emitted buffered log output yet.`,
+  };
+}
+
 function getStreamEnd(stream: RunLogStream, now: number): number | null {
   return (
     toMillis(stream.endedAt) ??
@@ -85,13 +220,14 @@ function getStreamEnd(stream: RunLogStream, now: number): number | null {
 
 export function LogViewer({ runId, runStatus }: LogViewerProps) {
   const [streams, setStreams] = useState<RunLogStreamsSummary | null>(null);
-  const [selectedTaskId, setSelectedTaskId] = useState('main');
-  const [entries, setEntries] = useState<RunLogEntry[]>([]);
-  const [selectedStream, setSelectedStream] = useState<RunLogStream | null>(null);
   const [isSummaryLoading, setIsSummaryLoading] = useState(true);
-  const [isEntriesLoading, setIsEntriesLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const logPanelRef = useRef<HTMLDivElement | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Record<string, boolean>>({});
+  const [entriesByTaskId, setEntriesByTaskId] = useState<Record<string, RunLogEntry[]>>({});
+  const [streamByTaskId, setStreamByTaskId] = useState<Record<string, RunLogStream | null>>({});
+  const [loadingByTaskId, setLoadingByTaskId] = useState<Record<string, boolean>>({});
+  const [errorByTaskId, setErrorByTaskId] = useState<Record<string, string | null>>({});
+  const logPanelRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const isLiveRun = runStatus !== 'completed' && runStatus !== 'failed';
 
   useEffect(() => {
@@ -110,17 +246,15 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
         }
 
         const nextStreams = response.streams;
-        const nextTaskIds = nextStreams.taskIds.length > 0 ? nextStreams.taskIds : ['main'];
 
         setStreams(nextStreams);
-        setSelectedTaskId((current) => (nextTaskIds.includes(current) ? current : nextTaskIds[0]));
-        setError(null);
+        setSummaryError(null);
       } catch (loadError) {
         if (!active) {
           return;
         }
 
-        setError(loadError instanceof Error ? loadError.message : 'Unable to load run logs.');
+        setSummaryError(loadError instanceof Error ? loadError.message : 'Unable to load run logs.');
       } finally {
         if (active && showLoading) {
           setIsSummaryLoading(false);
@@ -144,59 +278,6 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
     };
   }, [isLiveRun, runId]);
 
-  useEffect(() => {
-    let active = true;
-    let intervalId: number | null = null;
-
-    async function loadEntries(showLoading = false) {
-      if (isSummaryLoading || error) {
-        return;
-      }
-
-      if (showLoading) {
-        setIsEntriesLoading(true);
-      }
-
-      try {
-        const response = await fetchRunLogsForTask(runId, selectedTaskId);
-        if (!active) {
-          return;
-        }
-
-        setEntries(response.entries);
-        setSelectedStream(response.stream ?? streams?.byTaskId[selectedTaskId] ?? null);
-        setError(null);
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-
-        setError(loadError instanceof Error ? loadError.message : 'Unable to load selected log stream.');
-        setEntries([]);
-        setSelectedStream(streams?.byTaskId[selectedTaskId] ?? null);
-      } finally {
-        if (active && showLoading) {
-          setIsEntriesLoading(false);
-        }
-      }
-    }
-
-    void loadEntries(true);
-
-    if (isLiveRun && !isSummaryLoading && !error) {
-      intervalId = window.setInterval(() => {
-        void loadEntries(false);
-      }, LIVE_LOG_POLL_MS);
-    }
-
-    return () => {
-      active = false;
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-      }
-    };
-  }, [error, isLiveRun, isSummaryLoading, runId, selectedTaskId, streams]);
-
   const taskIds = useMemo(() => {
     return streams?.taskIds.length ? streams.taskIds : ['main'];
   }, [streams]);
@@ -204,6 +285,11 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
   const streamItems = useMemo(() => {
     return taskIds.map((taskId) => streams?.byTaskId[taskId] ?? buildFallbackStream(taskId, streams));
   }, [streams, taskIds]);
+
+  const expandedStreamIds = useMemo(
+    () => taskIds.filter((taskId) => expandedTaskIds[taskId]),
+    [expandedTaskIds, taskIds],
+  );
 
   const now = Date.now();
   const axisRange = useMemo(() => {
@@ -222,17 +308,118 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
     return { min, max, span: Math.max(max - min, 1) };
   }, [now, streamItems]);
 
-  const hasWorkerStreams = taskIds.some((taskId) => taskId !== 'main');
-  const entryCount = selectedStream?.bufferedEntryCount ?? streams?.counts[selectedTaskId] ?? entries.length;
-  const maxEntriesPerStream = streams?.maxEntriesPerStream ?? 0;
-
   useEffect(() => {
-    if (!logPanelRef.current || isEntriesLoading) {
+    if (isSummaryLoading || summaryError || expandedStreamIds.length === 0) {
       return;
     }
 
-    logPanelRef.current.scrollTop = logPanelRef.current.scrollHeight;
-  });
+    let active = true;
+    let intervalId: number | null = null;
+
+    async function loadExpandedEntries(showLoading = false) {
+      if (showLoading) {
+        setLoadingByTaskId((current) => {
+          const next = { ...current };
+          expandedStreamIds.forEach((taskId) => {
+            next[taskId] = true;
+          });
+          return next;
+        });
+      }
+
+      const responses: Array<
+        | { taskId: string; response: RunLogsStreamResponse }
+        | { taskId: string; error: string }
+      > = await Promise.all(
+        expandedStreamIds.map(async (taskId) => {
+          try {
+            const response = await fetchRunLogsForTask(runId, taskId);
+            return { taskId, response };
+          } catch (loadError) {
+            return {
+              taskId,
+              error:
+                loadError instanceof Error
+                  ? loadError.message
+                  : 'Unable to load log stream details.',
+            };
+          }
+        }),
+      );
+
+      if (!active) {
+        return;
+      }
+
+      setEntriesByTaskId((current) => {
+        const next = { ...current };
+        responses.forEach((result) => {
+          if ('response' in result) {
+            next[result.taskId] = result.response.entries;
+          }
+        });
+        return next;
+      });
+
+      setStreamByTaskId((current) => {
+        const next = { ...current };
+        responses.forEach((result) => {
+          if ('response' in result) {
+            next[result.taskId] = result.response.stream ?? streams?.byTaskId[result.taskId] ?? null;
+          }
+        });
+        return next;
+      });
+
+      setErrorByTaskId((current) => {
+        const next = { ...current };
+        responses.forEach((result) => {
+          next[result.taskId] = 'error' in result ? result.error ?? 'Unable to load log stream details.' : null;
+        });
+        return next;
+      });
+
+      setLoadingByTaskId((current) => {
+        const next = { ...current };
+        expandedStreamIds.forEach((taskId) => {
+          next[taskId] = false;
+        });
+        return next;
+      });
+    }
+
+    void loadExpandedEntries(true);
+
+    if (isLiveRun) {
+      intervalId = window.setInterval(() => {
+        void loadExpandedEntries(false);
+      }, LIVE_LOG_POLL_MS);
+    }
+
+    return () => {
+      active = false;
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [expandedStreamIds, isLiveRun, isSummaryLoading, runId, streams, summaryError]);
+
+  useEffect(() => {
+    expandedStreamIds.forEach((taskId) => {
+      const panel = logPanelRefs.current[taskId];
+      const entryCount = entriesByTaskId[taskId]?.length ?? 0;
+      if (panel && !loadingByTaskId[taskId] && entryCount >= 0) {
+        panel.scrollTop = panel.scrollHeight;
+      }
+    });
+  }, [entriesByTaskId, expandedStreamIds, loadingByTaskId]);
+
+  function toggleTask(taskId: string) {
+    setExpandedTaskIds((current) => ({
+      ...current,
+      [taskId]: !current[taskId],
+    }));
+  }
 
   return (
     <section className="run-card" aria-labelledby="run-logs-panel">
@@ -241,56 +428,63 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
           <p className="eyebrow">Logs</p>
           <h3 id="run-logs-panel">Log Timeline</h3>
         </div>
-        <div className="run-log-viewer__meta">
-          <span className="run-badge">Selected: {formatTaskLabel(selectedTaskId)}</span>
-          <span className="run-badge">Visible: {entries.length}</span>
-          {maxEntriesPerStream > 0 ? (
-            <span className="run-badge">Buffered: {entryCount} / {maxEntriesPerStream}</span>
-          ) : null}
-        </div>
       </div>
 
+      <p className="muted-copy run-log-viewer__hint">
+        Expand any stream row to inspect its buffered log output.
+      </p>
+
       {isSummaryLoading ? <p className="muted-copy">Loading log streams...</p> : null}
-      {!isSummaryLoading && error ? <p role="alert">{error}</p> : null}
+      {!isSummaryLoading && summaryError ? <p role="alert">{summaryError}</p> : null}
 
-      {!isSummaryLoading && !error ? (
+      {!isSummaryLoading && !summaryError ? (
         <>
-          {hasWorkerStreams ? (
-            <div className="run-log-timeline">
-              <div className="run-log-timeline__axis" aria-hidden="true">
-                <span>{formatAxisTimestamp(axisRange.min)}</span>
-                <span>{formatAxisTimestamp(axisRange.min !== null ? axisRange.min + axisRange.span / 2 : null)}</span>
-                <span>{formatAxisTimestamp(axisRange.max)}</span>
-              </div>
+          <div className="run-log-timeline">
+            <div className="run-log-timeline__axis" aria-hidden="true">
+              <span>{formatAxisTimestamp(axisRange.min)}</span>
+              <span>{formatAxisTimestamp(axisRange.min !== null ? axisRange.min + axisRange.span / 2 : null)}</span>
+              <span>{formatAxisTimestamp(axisRange.max)}</span>
+            </div>
 
-              <ul className="run-log-timeline__rows">
-                {streamItems.map((stream) => {
-                  const isSelected = stream.taskId === selectedTaskId;
-                  const start = toMillis(stream.startedAt);
-                  const end = getStreamEnd(stream, now);
-                  const hasBar = axisRange.min !== null && start !== null && end !== null;
-                  const offset = hasBar ? ((start - axisRange.min) / axisRange.span) * 100 : 0;
-                  const width = hasBar ? Math.max(((end - start) / axisRange.span) * 100, 1.2) : 0;
+            <ul className="run-log-timeline__rows">
+              {streamItems.map((stream) => {
+                const isExpanded = Boolean(expandedTaskIds[stream.taskId]);
+                const panelId = `run-log-panel-${stream.taskId}`;
+                const resolvedStream = streamByTaskId[stream.taskId] ?? stream;
+                const displayStream = {
+                  ...resolvedStream,
+                  status: normalizeStreamStatus(resolvedStream, runStatus),
+                };
+                const entries = entriesByTaskId[stream.taskId] ?? [];
+                const isEntriesLoading = loadingByTaskId[stream.taskId] ?? false;
+                const entryError = errorByTaskId[stream.taskId];
+                const emptyState = getEmptyStateCopy(displayStream, runStatus);
+                const start = toMillis(displayStream.startedAt);
+                const end = getStreamEnd(displayStream, now);
+                const hasBar = axisRange.min !== null && start !== null && end !== null;
+                const offset = hasBar ? ((start - axisRange.min) / axisRange.span) * 100 : 0;
+                const width = hasBar ? Math.max(((end - start) / axisRange.span) * 100, 0.6) : 0;
 
-                  return (
-                    <li key={stream.taskId}>
-                      <button
-                        type="button"
-                        className={isSelected ? 'run-log-row run-log-row--selected' : 'run-log-row'}
-                        aria-pressed={isSelected}
-                        onClick={() => setSelectedTaskId(stream.taskId)}
-                      >
+                return (
+                  <li key={stream.taskId} className="run-log-row-group">
+                    <button
+                      type="button"
+                      className={isExpanded ? 'run-log-row run-log-row--expanded' : 'run-log-row'}
+                      aria-expanded={isExpanded}
+                      aria-controls={panelId}
+                      onClick={() => toggleTask(stream.taskId)}
+                    >
                       <span className="run-log-row__info">
                         <span className="run-log-row__title">
-                          <strong title={stream.taskId}>{formatTaskLabel(stream.taskId)}</strong>
-                          <span className={`worker-pill worker-pill--${stream.status === 'failed' ? 'error' : stream.status === 'completed' ? 'success' : 'running'}`}>
-                            {stream.status}
+                          <strong title={displayStream.taskId}>{formatTaskLabel(displayStream.taskId)}</strong>
+                          <span className={`worker-pill worker-pill--${getStreamStatusTone(displayStream.status)}`}>
+                            {formatStatusLabel(displayStream.status)}
                           </span>
                         </span>
                         <span className="run-log-row__stats">
-                          <span>{stream.totalEntryCount} entries</span>
-                          <span>{formatDuration(stream.durationSeconds)}</span>
-                          <span>{stream.taskId === 'main' ? 'coordinator' : 'worker'}</span>
+                          <span>{getStreamLogStateLabel(displayStream, runStatus)}</span>
+                          <span>{formatStreamDuration(displayStream, runStatus)}</span>
+                          <span>{displayStream.taskId === 'main' ? 'coordinator' : 'worker'}</span>
                         </span>
                       </span>
 
@@ -305,62 +499,48 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                           <span className="run-log-row__idle">No timing yet</span>
                         )}
                       </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ) : (
-            <p className="muted-copy run-log-viewer__hint">
-              Only the main log stream is available for this run.
-            </p>
-          )}
 
-          {selectedStream ? (
-            <div className="run-log-stream-meta">
-              <span className="run-badge">Status: {selectedStream.status}</span>
-              <span className="run-badge">Start: {selectedStream.startedAt ? formatTimestamp(selectedStream.startedAt) : 'pending'}</span>
-              <span className="run-badge">Duration: {formatDuration(selectedStream.durationSeconds)}</span>
-            </div>
-          ) : null}
+                      <span className="run-log-row__toggle">{isExpanded ? 'Hide logs' : 'Show logs'}</span>
+                    </button>
 
-          {isEntriesLoading ? <p className="muted-copy">Loading log entries...</p> : null}
-
-          {!isEntriesLoading ? (
-            entries.length > 0 ? (
-              <div
-                ref={logPanelRef}
-                id={`run-log-panel-${selectedTaskId}`}
-                className="run-log-terminal"
-                role="log"
-                aria-live="polite"
-                aria-label={`Log entries for ${selectedTaskId}`}
-              >
-                {entries.map((entry) => (
-                  <div key={`${entry.taskId}-${entry.sequence}`} className="run-log-line">
-                    <span className="run-log-line__time">{formatTimestamp(entry.timestamp)}</span>
-                    <span className="run-log-line__level">{entry.level}</span>
-                    <span className="run-log-line__logger">{entry.logger}</span>
-                    <code>{entry.message}</code>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div
-                ref={logPanelRef}
-                id={`run-log-panel-${selectedTaskId}`}
-                className="run-log-terminal run-log-terminal--empty"
-              >
-                <strong>No log entries yet.</strong>
-                <p className="muted-copy">
-                  {selectedTaskId === 'main'
-                    ? 'The coordinator stream has not written any messages yet.'
-                    : `Worker ${selectedTaskId} has not emitted logs yet.`}
-                </p>
-              </div>
-            )
-          ) : null}
+                    {isExpanded ? (
+                      <section id={panelId} className="run-log-row__panel" aria-label={`Logs for ${displayStream.taskId}`}>
+                        {isEntriesLoading ? <p className="muted-copy">Loading log entries...</p> : null}
+                        {!isEntriesLoading && entryError ? <p role="alert">{entryError}</p> : null}
+                        {!isEntriesLoading && !entryError ? (
+                          entries.length > 0 ? (
+                            <div
+                              ref={(node) => {
+                                logPanelRefs.current[stream.taskId] = node;
+                              }}
+                              className="run-log-terminal"
+                              role="log"
+                              aria-live="polite"
+                              aria-label={`Log entries for ${displayStream.taskId}`}
+                            >
+                              {entries.map((entry) => (
+                                <div key={`${entry.taskId}-${entry.sequence}`} className="run-log-line">
+                                  <span className="run-log-line__time">{formatTimestamp(entry.timestamp)}</span>
+                                  <span className="run-log-line__level">{entry.level}</span>
+                                  <span className="run-log-line__logger">{entry.logger}</span>
+                                  <code>{entry.message}</code>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="run-log-terminal run-log-terminal--empty">
+                              <strong>{emptyState.title}</strong>
+                              <p className="muted-copy">{emptyState.detail}</p>
+                            </div>
+                          )
+                        ) : null}
+                      </section>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         </>
       ) : null}
     </section>
