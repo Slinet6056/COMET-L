@@ -84,6 +84,34 @@ function buildModeHighlights(results: RunResultsResponse): Array<{ label: string
   ];
 }
 
+function getDisplayTotalMutants(results: RunResultsResponse): number | null | undefined {
+  if (typeof results.summary.mutants.total === 'number') {
+    return results.summary.mutants.total;
+  }
+
+  if (results.mode === 'parallel') {
+    return results.summary.metrics.globalTotalMutants ?? results.summary.metrics.totalMutants;
+  }
+
+  return results.summary.metrics.totalMutants;
+}
+
+function getDisplayMutationScore(results: RunResultsResponse): number | null | undefined {
+  const preferredScore =
+    results.mode === 'parallel'
+      ? results.summary.metrics.globalMutationScore
+      : results.summary.metrics.mutationScore;
+
+  if (
+    (preferredScore === null || preferredScore === undefined || preferredScore === 0) &&
+    results.summary.mutants.total > 0
+  ) {
+    return results.summary.mutants.killed / results.summary.mutants.total;
+  }
+
+  return preferredScore;
+}
+
 function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact }) {
   const { title, artifact } = props;
 
@@ -103,7 +131,11 @@ function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact }) {
           <h4>{title}</h4>
           <p className="muted-copy">{artifact.filename}</p>
         </div>
-        <span className={artifact.exists ? 'worker-pill worker-pill--success' : 'worker-pill worker-pill--error'}>
+        <span
+          className={
+            artifact.exists ? 'worker-pill worker-pill--success' : 'worker-pill worker-pill--error'
+          }
+        >
           {artifact.exists ? 'Available' : 'Missing'}
         </span>
       </div>
@@ -169,13 +201,23 @@ export function RunResultsPage() {
   }, [runId]);
 
   const modeHighlights = useMemo(() => (results ? buildModeHighlights(results) : []), [results]);
+  const displayTotalMutants = useMemo(
+    () => (results ? getDisplayTotalMutants(results) : null),
+    [results],
+  );
+  const displayMutationScore = useMemo(
+    () => (results ? getDisplayMutationScore(results) : null),
+    [results],
+  );
 
   if (isLoading) {
     return (
       <section className="panel run-page">
         <p className="eyebrow">Results</p>
         <h2>Run Results</h2>
-        <p>Loading final summary for <code>{runId}</code>...</p>
+        <p>
+          Loading final summary for <code>{runId}</code>...
+        </p>
       </section>
     );
   }
@@ -198,8 +240,8 @@ export function RunResultsPage() {
           <p className="eyebrow">Results</p>
           <h2>Run Results</h2>
           <p className="run-page__lead">
-            Terminal summary for <code>{results.runId}</code>. This page combines the final
-            run snapshot, database-backed aggregates, and downloadable artifacts.
+            Terminal summary for <code>{results.runId}</code>. This page combines the final run
+            snapshot, database-backed aggregates, and downloadable artifacts.
           </p>
         </div>
 
@@ -218,132 +260,127 @@ export function RunResultsPage() {
         {buildTerminalMessage(results)}
       </section>
 
-      <div className="run-layout">
-        <div className="run-layout__main">
-          <section className="run-card" aria-labelledby="results-final-stats">
-            <p className="eyebrow">Final Stats</p>
-            <h3 id="results-final-stats">Final Statistics</h3>
-            <div className="metric-grid">
-              <article>
-                <span>Mutation score</span>
-                <strong>{formatPercent(results.summary.metrics.mutationScore)}</strong>
-              </article>
-              <article>
-                <span>Line coverage</span>
-                <strong>{formatPercent(results.summary.metrics.lineCoverage)}</strong>
-              </article>
-              <article>
-                <span>Branch coverage</span>
-                <strong>{formatPercent(results.summary.metrics.branchCoverage)}</strong>
-              </article>
-              <article>
-                <span>Total tests</span>
-                <strong>{formatCount(results.summary.metrics.totalTests)}</strong>
-              </article>
-              <article>
-                <span>Total mutants</span>
-                <strong>{formatCount(results.summary.metrics.totalMutants)}</strong>
-              </article>
-              <article>
-                <span>LLM calls</span>
-                <strong>
-                  {formatCount(results.llmCalls)} / {formatCount(results.budget)}
-                </strong>
-              </article>
-            </div>
-          </section>
-
-          <section className="run-card" aria-labelledby="results-artifacts">
-            <p className="eyebrow">Artifacts</p>
-            <h3 id="results-artifacts">Artifact Downloads</h3>
-            <div className="artifact-grid">
-              <ArtifactCard title="Final State JSON" artifact={results.artifacts.finalState} />
-              <ArtifactCard title="Run Log" artifact={results.artifacts.runLog} />
-            </div>
-          </section>
+      <section className="run-card" aria-labelledby="results-final-stats">
+        <p className="eyebrow">Final Stats</p>
+        <h3 id="results-final-stats">Final Statistics</h3>
+        <div className="metric-grid metric-grid--hero">
+          <article>
+            <span>Mutation score</span>
+            <strong>{formatPercent(displayMutationScore)}</strong>
+          </article>
+          <article>
+            <span>Line coverage</span>
+            <strong>{formatPercent(results.summary.metrics.lineCoverage)}</strong>
+          </article>
+          <article>
+            <span>Branch coverage</span>
+            <strong>{formatPercent(results.summary.metrics.branchCoverage)}</strong>
+          </article>
+          <article>
+            <span>Total mutants</span>
+            <strong>{formatCount(displayTotalMutants)}</strong>
+          </article>
+          <article>
+            <span>Total tests</span>
+            <strong>{formatCount(results.summary.metrics.totalTests)}</strong>
+          </article>
+          <article>
+            <span>LLM calls</span>
+            <strong>
+              {formatCount(results.llmCalls)} / {formatCount(results.budget)}
+            </strong>
+          </article>
         </div>
+      </section>
 
-        <aside className="run-layout__sidebar">
-          <section className="run-card" aria-labelledby="results-mode-summary">
-            <p className="eyebrow">Mode</p>
-            <h3 id="results-mode-summary">Mode Summary</h3>
-            <ul className="summary-list summary-list--compact">
-              {modeHighlights.map((entry) => (
-                <li key={entry.label}>
-                  <strong>{entry.label}</strong>
-                  <span>{entry.value}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
+      <section className="run-card" aria-labelledby="results-mode-summary">
+        <p className="eyebrow">Mode</p>
+        <h3 id="results-mode-summary">Mode Summary</h3>
+        <ul className="summary-list summary-list--compact summary-list--two-column">
+          {modeHighlights.map((entry) => (
+            <li key={entry.label}>
+              <strong>{entry.label}</strong>
+              <span>{entry.value}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
 
-          <section className="run-card" aria-labelledby="results-test-summary">
-            <p className="eyebrow">Database</p>
-            <h3 id="results-test-summary">Test and Mutant Summary</h3>
-            <ul className="summary-list summary-list--compact">
-              <li>
-                <strong>Compiled cases</strong>
-                <span>
-                  {formatCount(results.summary.tests.compiledCases)} / {formatCount(results.summary.tests.totalCases)}
-                </span>
-              </li>
-              <li>
-                <strong>Generated methods</strong>
-                <span>{formatCount(results.summary.tests.totalMethods)}</span>
-              </li>
-              <li>
-                <strong>Target methods hit</strong>
-                <span>{formatCount(results.summary.tests.targetMethods)}</span>
-              </li>
-              <li>
-                <strong>Evaluated mutants</strong>
-                <span>{formatCount(results.summary.mutants.evaluated)}</span>
-              </li>
-              <li>
-                <strong>Pending mutants</strong>
-                <span>{formatCount(results.summary.mutants.pending)}</span>
-              </li>
-              <li>
-                <strong>Invalid mutants</strong>
-                <span>{formatCount(results.summary.mutants.invalid)}</span>
-              </li>
-            </ul>
-          </section>
+      <section className="run-card" aria-labelledby="results-test-summary">
+        <p className="eyebrow">Database</p>
+        <h3 id="results-test-summary">Test and Mutant Summary</h3>
+        <ul className="summary-list summary-list--compact summary-list--two-column">
+          <li>
+            <strong>Compiled cases</strong>
+            <span>
+              {formatCount(results.summary.tests.compiledCases)} /{' '}
+              {formatCount(results.summary.tests.totalCases)}
+            </span>
+          </li>
+          <li>
+            <strong>Generated methods</strong>
+            <span>{formatCount(results.summary.tests.totalMethods)}</span>
+          </li>
+          <li>
+            <strong>Target methods hit</strong>
+            <span>{formatCount(results.summary.tests.targetMethods)}</span>
+          </li>
+          <li>
+            <strong>Evaluated mutants</strong>
+            <span>{formatCount(results.summary.mutants.evaluated)}</span>
+          </li>
+          <li>
+            <strong>Pending mutants</strong>
+            <span>{formatCount(results.summary.mutants.pending)}</span>
+          </li>
+          <li>
+            <strong>Invalid mutants</strong>
+            <span>{formatCount(results.summary.mutants.invalid)}</span>
+          </li>
+        </ul>
+      </section>
 
-          <section className="run-card" aria-labelledby="results-coverage-summary">
-            <p className="eyebrow">Coverage</p>
-            <h3 id="results-coverage-summary">Coverage Summary</h3>
-            <ul className="summary-list summary-list--compact">
-              <li>
-                <strong>Latest DB iteration</strong>
-                <span>{formatCount(results.summary.coverage.latestIteration)}</span>
-              </li>
-              <li>
-                <strong>Tracked methods</strong>
-                <span>{formatCount(results.summary.coverage.methodsTracked)}</span>
-              </li>
-              <li>
-                <strong>Average line coverage</strong>
-                <span>{formatPercent(results.summary.coverage.averageLineCoverage)}</span>
-              </li>
-              <li>
-                <strong>Average branch coverage</strong>
-                <span>{formatPercent(results.summary.coverage.averageBranchCoverage)}</span>
-              </li>
-              <li>
-                <strong>Final state source</strong>
-                <span>{results.summary.sources.finalState ? 'Available' : 'Missing'}</span>
-              </li>
-              <li>
-                <strong>Run log source</strong>
-                <span>{results.summary.sources.runLog ? 'Available' : 'Missing'}</span>
-              </li>
-            </ul>
-          </section>
+      <section className="run-card" aria-labelledby="results-coverage-summary">
+        <p className="eyebrow">Coverage</p>
+        <h3 id="results-coverage-summary">Coverage Summary</h3>
+        <ul className="summary-list summary-list--compact summary-list--two-column">
+          <li>
+            <strong>Latest DB iteration</strong>
+            <span>{formatCount(results.summary.coverage.latestIteration)}</span>
+          </li>
+          <li>
+            <strong>Tracked methods</strong>
+            <span>{formatCount(results.summary.coverage.methodsTracked)}</span>
+          </li>
+          <li>
+            <strong>Average line coverage</strong>
+            <span>{formatPercent(results.summary.coverage.averageLineCoverage)}</span>
+          </li>
+          <li>
+            <strong>Average branch coverage</strong>
+            <span>{formatPercent(results.summary.coverage.averageBranchCoverage)}</span>
+          </li>
+          <li>
+            <strong>Final state source</strong>
+            <span>{results.summary.sources.finalState ? 'Available' : 'Missing'}</span>
+          </li>
+          <li>
+            <strong>Run log source</strong>
+            <span>{results.summary.sources.runLog ? 'Available' : 'Missing'}</span>
+          </li>
+        </ul>
+      </section>
 
-          <Link to={`/runs/${runId}`}>Back to run details</Link>
-        </aside>
-      </div>
+      <section className="run-card" aria-labelledby="results-artifacts">
+        <p className="eyebrow">Artifacts</p>
+        <h3 id="results-artifacts">Artifact Downloads</h3>
+        <div className="artifact-grid">
+          <ArtifactCard title="Final State JSON" artifact={results.artifacts.finalState} />
+          <ArtifactCard title="Run Log" artifact={results.artifacts.runLog} />
+        </div>
+      </section>
+
+      <Link to={`/runs/${runId}`}>Back to run details</Link>
     </section>
   );
 }

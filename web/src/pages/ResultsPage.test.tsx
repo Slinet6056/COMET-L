@@ -4,6 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
 
+function expectMetricValue(label: string, value: string) {
+  const heading = screen.getByText(label);
+  const card = heading.closest('article');
+  expect(card).not.toBeNull();
+  expect(card).toHaveTextContent(value);
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -122,6 +129,8 @@ describe('Run results page', () => {
     expect(screen.getByText('Status: completed')).toBeInTheDocument();
     expect(screen.getByText('Mutation score')).toBeInTheDocument();
     expect(screen.getByText('Line coverage')).toBeInTheDocument();
+    expectMetricValue('Mutation score', '50.0%');
+    expectMetricValue('Total mutants', '2');
     expect(screen.getByRole('link', { name: 'Download final_state.json' })).toHaveAttribute(
       'href',
       '/api/runs/run-42/artifacts/final-state',
@@ -180,5 +189,76 @@ describe('Run results page', () => {
     expect(screen.getByText('Parallel batch evolution')).toBeInTheDocument();
     expect(screen.getByText('This artifact was not generated for the run.')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Download final_state.json' })).not.toBeInTheDocument();
+  });
+
+  it('prefers global and database-backed mutant totals when local final metrics are zero', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              mode: 'parallel',
+              summary: {
+                metrics: {
+                  mutationScore: 0,
+                  globalMutationScore: 0.8,
+                  lineCoverage: 0.9,
+                  branchCoverage: 0.75,
+                  totalTests: 7,
+                  totalMutants: 0,
+                  globalTotalMutants: 5,
+                  killedMutants: 0,
+                  globalKilledMutants: 4,
+                  survivedMutants: 0,
+                  globalSurvivedMutants: 1,
+                  currentMethodCoverage: 0.75,
+                },
+                tests: {
+                  totalCases: 1,
+                  compiledCases: 1,
+                  totalMethods: 2,
+                  targetMethods: 1,
+                },
+                mutants: {
+                  total: 5,
+                  evaluated: 5,
+                  killed: 4,
+                  survived: 1,
+                  pending: 0,
+                  valid: 5,
+                  invalid: 0,
+                  outdated: 0,
+                },
+                coverage: {
+                  latestIteration: 3,
+                  methodsTracked: 1,
+                  averageLineCoverage: 0.75,
+                  averageBranchCoverage: 0.5,
+                },
+                sources: {
+                  finalState: true,
+                  database: true,
+                  runLog: true,
+                },
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Final Statistics' })).toBeInTheDocument();
+    expectMetricValue('Mutation score', '80.0%');
+    expectMetricValue('Total mutants', '5');
   });
 });
