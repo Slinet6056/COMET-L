@@ -276,11 +276,12 @@ class StreamingApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(events), 4)
         self.assertEqual(events[0]["event"], "run.snapshot")
         self.assertEqual(events[0]["data"]["snapshot"]["status"], "completed")
-        self.assertEqual(
-            [event["event"] for event in events[1:]],
-            ["run.started", "run.phase", "run.completed"],
-        )
-        self.assertEqual(events[-1]["data"]["type"], "run.completed")
+        event_names = [event["event"] for event in events[1:]]
+        self.assertIn("run.started", event_names)
+        self.assertIn("run.phase", event_names)
+        self.assertIn("run.completed", event_names)
+        self.assertEqual(events[-2]["data"]["type"], "run.completed")
+        self.assertEqual(events[-1]["event"], "run.snapshot")
 
     def test_log_endpoints_list_streams_and_return_bounded_entries(self) -> None:
         assert self.client is not None
@@ -374,16 +375,33 @@ class RunApiTests(unittest.TestCase):
             del project_path, resume_state
             assert self.run_started is not None
             assert self.release_run is not None
-            self.run_started.set()
-            released = self.release_run.wait(timeout=5)
-            if not released:
-                raise TimeoutError("run release timeout")
-
             config = components["config"]
             assert isinstance(config, Settings)
             state = (
                 ParallelAgentState() if components["parallel_mode"] else AgentState()
             )
+            state.iteration = 1
+            state.llm_calls = 3
+            state.budget = config.evolution.budget_llm_calls
+            state.total_tests = 1
+            state.total_mutants = 2
+            state.killed_mutants = 1
+            state.survived_mutants = 1
+            state.mutation_score = 0.5
+            state.line_coverage = 0.25
+            state.branch_coverage = 0.1
+            runtime_snapshot_publisher = components.get("runtime_snapshot_publisher")
+            if callable(runtime_snapshot_publisher):
+                runtime_snapshot_publisher(
+                    state=state,
+                    phase={"key": "preprocessing", "label": "Preprocessing"},
+                )
+
+            self.run_started.set()
+            released = self.release_run.wait(timeout=5)
+            if not released:
+                raise TimeoutError("run release timeout")
+
             state.iteration = 2
             state.llm_calls = 9
             state.budget = config.evolution.budget_llm_calls
@@ -473,9 +491,12 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(current_payload["runId"], run_id)
         self.assertEqual(current_payload["status"], "running")
         self.assertEqual(current_payload["mode"], "parallel")
-        self.assertEqual(current_payload["phase"]["key"], "running")
+        self.assertEqual(current_payload["phase"]["key"], "preprocessing")
+        self.assertEqual(current_payload["phase"]["label"], "Preprocessing")
+        self.assertEqual(current_payload["iteration"], 1)
         self.assertIn("metrics", current_payload)
         self.assertIn("mutationScore", current_payload["metrics"])
+        self.assertEqual(current_payload["metrics"]["mutationScore"], 0.5)
         self.assertTrue(current_payload["artifacts"]["resolvedConfig"]["exists"])
 
         by_id_response = self.client.get(f"/api/runs/{run_id}")

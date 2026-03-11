@@ -1,3 +1,4 @@
+import copy
 import logging
 import json
 import sqlite3
@@ -112,6 +113,7 @@ class RunLifecycleService:
         self._requests: dict[str, RunRequest] = {}
         self._event_buses: dict[str, RuntimeEventBus] = {}
         self._log_routers: dict[str, RunLogRouter] = {}
+        self._runtime_snapshots: dict[str, dict[str, Any]] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._active_run_id: Optional[str] = None
 
@@ -163,6 +165,7 @@ class RunLifecycleService:
             self._requests[run_id] = scoped_request
             self._event_buses[run_id] = RuntimeEventBus()
             self._log_routers[run_id] = RunLogRouter()
+            self._runtime_snapshots[run_id] = self._build_runtime_snapshot(run_id)
             self._active_run_id = run_id
             return session
 
@@ -204,19 +207,94 @@ class RunLifecycleService:
 
     def build_snapshot(self, run_id: str) -> dict[str, Any]:
         session = self._sessions[run_id]
-        state = self._load_state_snapshot(run_id)
-        if state is None:
-            state = self._new_state_for_run(run_id)
+        snapshot = copy.deepcopy(self._runtime_snapshots.get(run_id, {}))
+        if not snapshot:
+            snapshot = self._build_runtime_snapshot(run_id)
 
-        snapshot = build_run_snapshot(
-            run_id,
-            session.status,
-            state,
-            log_router=self._log_routers.get(run_id),
-        )
-        snapshot["phase"] = self._build_phase(session)
+        base_phase = self._build_phase(session)
+        runtime_phase: dict[str, Any] = {}
+        phase_value = snapshot.get("phase")
+        if isinstance(phase_value, dict):
+            for key, value in phase_value.items():
+                if isinstance(key, str):
+                    runtime_phase[key] = value
+        merged_phase: dict[str, Any] = {}
+        if session.status in {"completed", "failed"}:
+            merged_phase.update(runtime_phase)
+            merged_phase.update(base_phase)
+        else:
+            merged_phase.update(base_phase)
+            merged_phase.update(runtime_phase)
+        snapshot["phase"] = merged_phase
+        snapshot["status"] = session.status
         snapshot["artifacts"] = self._build_artifacts(session)
+        snapshot["logStreams"] = self._log_routers[run_id].snapshot()
         return snapshot
+
+    def publish_runtime_snapshot(
+        self,
+        run_id: str,
+        *,
+        state: AgentState | None = None,
+        phase: Optional[dict[str, object]] = None,
+        **snapshot_updates: object,
+    ) -> None:
+        with self._lock:
+            if run_id not in self._sessions:
+                raise KeyError(run_id)
+
+            session = self._sessions[run_id]
+            event_bus = self._event_buses[run_id]
+            log_router = self._log_routers[run_id]
+            snapshot = (
+                build_run_snapshot(run_id, session.status, state, log_router=log_router)
+                if state is not None
+                else copy.deepcopy(self._runtime_snapshots.get(run_id, {}))
+            )
+
+            if not snapshot:
+                snapshot = self._build_runtime_snapshot(run_id)
+
+            base_phase = self._build_phase(session)
+            runtime_phase: dict[str, Any] = {}
+            phase_value = snapshot.get("phase")
+            if isinstance(phase_value, dict):
+                for key, value in phase_value.items():
+                    if isinstance(key, str):
+                        runtime_phase[key] = value
+
+            phase_payload: dict[str, Any] = {}
+            if isinstance(phase, dict):
+                for key, value in phase.items():
+                    if isinstance(key, str):
+                        phase_payload[key] = value
+            merged_phase: dict[str, Any] = {}
+            if session.status in {"completed", "failed"}:
+                merged_phase.update(runtime_phase)
+                merged_phase.update(phase_payload)
+                merged_phase.update(base_phase)
+            else:
+                merged_phase.update(base_phase)
+                merged_phase.update(runtime_phase)
+                merged_phase.update(phase_payload)
+            snapshot["phase"] = merged_phase
+
+            snapshot["status"] = session.status
+            snapshot["artifacts"] = self._build_artifacts(session)
+            snapshot["logStreams"] = log_router.snapshot()
+
+            for key, value in snapshot_updates.items():
+                snapshot[key] = value
+
+            self._runtime_snapshots[run_id] = copy.deepcopy(snapshot)
+
+        event_bus.publish(
+            "run.snapshot",
+            runId=run_id,
+            status=str(snapshot["status"]),
+            mode=str(snapshot["mode"]),
+            snapshot=copy.deepcopy(snapshot),
+        )
 
     def build_results(self, run_id: str) -> dict[str, Any]:
         session = self._sessions[run_id]
@@ -312,6 +390,7 @@ class RunLifecycleService:
             session = self._sessions[run_id]
             session.status = "running"
             session.started_at = _utc_now_iso()
+        self.publish_runtime_snapshot(run_id)
 
     def mark_completed(self, run_id: str) -> None:
         with self._lock:
@@ -320,6 +399,7 @@ class RunLifecycleService:
             session.completed_at = _utc_now_iso()
             if self._active_run_id == run_id:
                 self._active_run_id = None
+        self.publish_runtime_snapshot(run_id, state=self._load_state_snapshot(run_id))
 
     def mark_failed(self, run_id: str, error: str) -> None:
         with self._lock:
@@ -329,6 +409,9 @@ class RunLifecycleService:
             session.error = error
             if self._active_run_id == run_id:
                 self._active_run_id = None
+        self.publish_runtime_snapshot(
+            run_id, state=self._load_state_snapshot(run_id), error=error
+        )
 
     def _run_in_background(
         self,
@@ -351,6 +434,9 @@ class RunLifecycleService:
                 evolution_runner=evolution_runner,
                 observer=event_bus,
                 log_router=log_router,
+                runtime_snapshot_publisher=(
+                    lambda **payload: self.publish_runtime_snapshot(run_id, **payload)
+                ),
             )
         except Exception as exc:
             self.mark_failed(run_id, str(exc))
@@ -406,6 +492,22 @@ class RunLifecycleService:
             "completedAt": session.completed_at,
             "failedAt": session.failed_at,
         }
+
+    def _build_runtime_snapshot(self, run_id: str) -> dict[str, Any]:
+        session = self._sessions[run_id]
+        state = self._load_state_snapshot(run_id)
+        if state is None:
+            state = self._new_state_for_run(run_id)
+
+        snapshot = build_run_snapshot(
+            run_id,
+            session.status,
+            state,
+            log_router=self._log_routers.get(run_id),
+        )
+        snapshot["phase"] = self._build_phase(session)
+        snapshot["artifacts"] = self._build_artifacts(session)
+        return snapshot
 
     def _build_artifacts(self, session: RunSession) -> dict[str, dict[str, object]]:
         paths = {
@@ -832,6 +934,7 @@ def run_request(
     logger: Optional[logging.Logger] = None,
     observer: Optional[Callable[[dict[str, object]], None]] = None,
     log_router: Optional[RunLogRouter] = None,
+    runtime_snapshot_publisher: Optional[Callable[..., None]] = None,
 ) -> int:
     runtime_logger = logger or logging.getLogger(__name__)
     event_sink = observer or request.observer
@@ -871,6 +974,8 @@ def run_request(
 
     try:
         components = system_initializer(config, bug_reports_dir, parallel_mode)
+        if isinstance(components, dict) and runtime_snapshot_publisher is not None:
+            components["runtime_snapshot_publisher"] = runtime_snapshot_publisher
         evolution_runner(project_path, components, request.resume_state)
     except Exception as exc:
         emit_event(

@@ -5,6 +5,8 @@ import argparse
 import logging
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -325,6 +327,7 @@ def run_evolution(
     sandbox_manager = components["sandbox_manager"]
     project_scanner = components["project_scanner"]
     planner_type = components.get("planner_type", "standard")
+    runtime_snapshot_publisher = components.get("runtime_snapshot_publisher")
 
     # 扫描项目，建立类到文件的映射
     logger.info("扫描项目，建立类到文件的映射...")
@@ -396,7 +399,43 @@ def run_evolution(
             logger.info(f"原始项目路径: {project_path}")
 
     # 运行主循环（包括预处理）
+    snapshot_stop_event = threading.Event()
+    snapshot_thread: Optional[threading.Thread] = None
+    current_phase = {"key": "running", "label": "Running"}
+
+    def publish_runtime_snapshot(
+        *, phase_key: Optional[str] = None, phase_label: Optional[str] = None
+    ) -> None:
+        if not callable(runtime_snapshot_publisher):
+            return
+
+        phase_payload = dict(current_phase)
+        if phase_key is not None:
+            phase_payload["key"] = phase_key
+        if phase_label is not None:
+            phase_payload["label"] = phase_label
+
+        runtime_snapshot_publisher(state=planner.state, phase=phase_payload)
+
+    def start_snapshot_publisher() -> None:
+        nonlocal snapshot_thread
+        if not callable(runtime_snapshot_publisher) or snapshot_thread is not None:
+            return
+
+        def publish_loop() -> None:
+            while not snapshot_stop_event.wait(1.0):
+                publish_runtime_snapshot()
+
+        snapshot_thread = threading.Thread(
+            target=publish_loop,
+            daemon=True,
+            name="comet-runtime-snapshot-publisher",
+        )
+        snapshot_thread.start()
+
     try:
+        start_snapshot_publisher()
+
         # ===== 新增：并行预处理阶段 =====
         if not resume_state:  # 只在非恢复模式下执行预处理
             # 检查是否启用预处理
@@ -406,6 +445,8 @@ def run_evolution(
                 preprocessing_enabled = True  # 默认启用
 
             if preprocessing_enabled:
+                current_phase.update({"key": "preprocessing", "label": "Preprocessing"})
+                publish_runtime_snapshot()
                 logger.info("=" * 60)
                 logger.info("开始并行预处理阶段")
                 logger.info("=" * 60)
@@ -513,14 +554,22 @@ def run_evolution(
             else:
                 logger.info("并行预处理已禁用，跳过预处理阶段")
 
+        current_phase.update({"key": "running", "label": "Running"})
+        publish_runtime_snapshot()
+
         # 恢复状态（如果有）
         if resume_state and Path(resume_state).exists():
             logger.info(f"从状态恢复: {resume_state}")
             planner.load_state(resume_state)
+            publish_runtime_snapshot()
         final_state = planner.run(
             stop_on_no_improvement_rounds=config.evolution.stop_on_no_improvement_rounds,
             min_improvement_threshold=config.evolution.min_improvement_threshold,
         )
+        _ = final_state
+
+        current_phase.update({"key": "completed", "label": "Completed"})
+        publish_runtime_snapshot()
 
         # 保存最终状态
         state_file = f"{config.paths.output}/final_state.json"
@@ -538,6 +587,7 @@ def run_evolution(
         state_file = f"{config.paths.output}/interrupted_state.json"
         planner.save_state(state_file)
         logger.info(f"状态已保存: {state_file}")
+        publish_runtime_snapshot(phase_key="failed", phase_label="Interrupted")
 
         # 即使中断也导出测试文件
         logger.info("导出当前测试文件到原项目...")
@@ -547,6 +597,7 @@ def run_evolution(
 
     except Exception as e:
         logger.error(f"运行出错: {e}", exc_info=True)
+        publish_runtime_snapshot(phase_key="failed", phase_label="Failed")
         # 出错时也尝试导出已生成的测试
         try:
             logger.info("尝试导出已生成的测试文件...")
@@ -554,6 +605,10 @@ def run_evolution(
         except:
             pass
         raise
+    finally:
+        snapshot_stop_event.set()
+        if snapshot_thread is not None:
+            snapshot_thread.join(timeout=1)
 
 
 def main():
