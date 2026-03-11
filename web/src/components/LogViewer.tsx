@@ -4,6 +4,7 @@ import {
   fetchRunLogs,
   fetchRunLogsForTask,
   type RunLogEntry,
+  type RunLogStream,
   type RunLogStreamsSummary,
 } from '../lib/api';
 
@@ -31,10 +32,62 @@ function formatTimestamp(value: string): string {
   });
 }
 
+function formatAxisTimestamp(value: number | null): string {
+  if (value === null) {
+    return '--:--:--';
+  }
+
+  return formatTimestamp(new Date(value).toISOString());
+}
+
+function formatDuration(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 'live';
+  }
+
+  return `${value.toFixed(value >= 10 ? 0 : 1)}s`;
+}
+
+function toMillis(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function buildFallbackStream(taskId: string, summary: RunLogStreamsSummary | null): RunLogStream {
+  return {
+    taskId,
+    order: summary?.taskIds.indexOf(taskId) ?? 0,
+    status: taskId === 'main' ? 'running' : 'pending',
+    startedAt: null,
+    completedAt: null,
+    failedAt: null,
+    endedAt: null,
+    durationSeconds: null,
+    firstEntryAt: null,
+    lastEntryAt: null,
+    bufferedEntryCount: summary?.counts[taskId] ?? 0,
+    totalEntryCount: summary?.counts[taskId] ?? 0,
+  };
+}
+
+function getStreamEnd(stream: RunLogStream, now: number): number | null {
+  return (
+    toMillis(stream.endedAt) ??
+    toMillis(stream.completedAt) ??
+    toMillis(stream.lastEntryAt) ??
+    (toMillis(stream.startedAt) !== null ? now : null)
+  );
+}
+
 export function LogViewer({ runId, runStatus }: LogViewerProps) {
   const [streams, setStreams] = useState<RunLogStreamsSummary | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState('main');
   const [entries, setEntries] = useState<RunLogEntry[]>([]);
+  const [selectedStream, setSelectedStream] = useState<RunLogStream | null>(null);
   const [isSummaryLoading, setIsSummaryLoading] = useState(true);
   const [isEntriesLoading, setIsEntriesLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +164,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
         }
 
         setEntries(response.entries);
+        setSelectedStream(response.stream ?? streams?.byTaskId[selectedTaskId] ?? null);
         setError(null);
       } catch (loadError) {
         if (!active) {
@@ -119,6 +173,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
 
         setError(loadError instanceof Error ? loadError.message : 'Unable to load selected log stream.');
         setEntries([]);
+        setSelectedStream(streams?.byTaskId[selectedTaskId] ?? null);
       } finally {
         if (active && showLoading) {
           setIsEntriesLoading(false);
@@ -140,18 +195,35 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
         window.clearInterval(intervalId);
       }
     };
-  }, [error, isLiveRun, isSummaryLoading, runId, selectedTaskId]);
+  }, [error, isLiveRun, isSummaryLoading, runId, selectedTaskId, streams]);
 
   const taskIds = useMemo(() => {
-    if (streams?.taskIds.length) {
-      return streams.taskIds;
-    }
-
-    return ['main'];
+    return streams?.taskIds.length ? streams.taskIds : ['main'];
   }, [streams]);
 
-  const hasWorkerTabs = taskIds.some((taskId) => taskId !== 'main');
-  const entryCount = streams?.counts[selectedTaskId] ?? entries.length;
+  const streamItems = useMemo(() => {
+    return taskIds.map((taskId) => streams?.byTaskId[taskId] ?? buildFallbackStream(taskId, streams));
+  }, [streams, taskIds]);
+
+  const now = Date.now();
+  const axisRange = useMemo(() => {
+    const starts = streamItems.map((stream) => toMillis(stream.startedAt)).filter((value) => value !== null);
+    const ends = streamItems
+      .map((stream) => getStreamEnd(stream, now))
+      .filter((value) => value !== null);
+
+    const min = starts.length > 0 ? Math.min(...starts) : null;
+    const max = ends.length > 0 ? Math.max(...ends) : min;
+
+    if (min === null || max === null) {
+      return { min: null, max: null, span: 1 };
+    }
+
+    return { min, max, span: Math.max(max - min, 1) };
+  }, [now, streamItems]);
+
+  const hasWorkerStreams = taskIds.some((taskId) => taskId !== 'main');
+  const entryCount = selectedStream?.bufferedEntryCount ?? streams?.counts[selectedTaskId] ?? entries.length;
   const maxEntriesPerStream = streams?.maxEntriesPerStream ?? 0;
 
   useEffect(() => {
@@ -164,10 +236,17 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
 
   return (
     <section className="run-card" aria-labelledby="run-logs-panel">
-      <div className="run-card__header">
+      <div className="run-card__header run-card__header--compact">
         <div>
           <p className="eyebrow">Logs</p>
-          <h3 id="run-logs-panel">Log Viewer</h3>
+          <h3 id="run-logs-panel">Log Timeline</h3>
+        </div>
+        <div className="run-log-viewer__meta">
+          <span className="run-badge">Selected: {formatTaskLabel(selectedTaskId)}</span>
+          <span className="run-badge">Visible: {entries.length}</span>
+          {maxEntriesPerStream > 0 ? (
+            <span className="run-badge">Buffered: {entryCount} / {maxEntriesPerStream}</span>
+          ) : null}
         </div>
       </div>
 
@@ -176,39 +255,75 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
 
       {!isSummaryLoading && !error ? (
         <>
-          <div className="run-log-viewer__toolbar">
-            {hasWorkerTabs ? (
-              <div className="run-log-tabs" role="tablist" aria-label="Log streams">
-                {taskIds.map((taskId) => {
-                  const isSelected = taskId === selectedTaskId;
+          {hasWorkerStreams ? (
+            <div className="run-log-timeline">
+              <div className="run-log-timeline__axis" aria-hidden="true">
+                <span>{formatAxisTimestamp(axisRange.min)}</span>
+                <span>{formatAxisTimestamp(axisRange.min !== null ? axisRange.min + axisRange.span / 2 : null)}</span>
+                <span>{formatAxisTimestamp(axisRange.max)}</span>
+              </div>
+
+              <ul className="run-log-timeline__rows">
+                {streamItems.map((stream) => {
+                  const isSelected = stream.taskId === selectedTaskId;
+                  const start = toMillis(stream.startedAt);
+                  const end = getStreamEnd(stream, now);
+                  const hasBar = axisRange.min !== null && start !== null && end !== null;
+                  const offset = hasBar ? ((start - axisRange.min) / axisRange.span) * 100 : 0;
+                  const width = hasBar ? Math.max(((end - start) / axisRange.span) * 100, 1.2) : 0;
+
                   return (
-                    <button
-                      key={taskId}
-                      type="button"
-                      role="tab"
-                      aria-selected={isSelected}
-                      className={isSelected ? 'run-log-tab run-log-tab--active' : 'run-log-tab'}
-                      onClick={() => setSelectedTaskId(taskId)}
-                    >
-                      {formatTaskLabel(taskId)}
-                    </button>
+                    <li key={stream.taskId}>
+                      <button
+                        type="button"
+                        className={isSelected ? 'run-log-row run-log-row--selected' : 'run-log-row'}
+                        aria-pressed={isSelected}
+                        onClick={() => setSelectedTaskId(stream.taskId)}
+                      >
+                      <span className="run-log-row__info">
+                        <span className="run-log-row__title">
+                          <strong title={stream.taskId}>{formatTaskLabel(stream.taskId)}</strong>
+                          <span className={`worker-pill worker-pill--${stream.status === 'failed' ? 'error' : stream.status === 'completed' ? 'success' : 'running'}`}>
+                            {stream.status}
+                          </span>
+                        </span>
+                        <span className="run-log-row__stats">
+                          <span>{stream.totalEntryCount} entries</span>
+                          <span>{formatDuration(stream.durationSeconds)}</span>
+                          <span>{stream.taskId === 'main' ? 'coordinator' : 'worker'}</span>
+                        </span>
+                      </span>
+
+                      <span className="run-log-row__timeline" aria-hidden="true">
+                        <span className="run-log-row__track" />
+                        {hasBar ? (
+                          <span
+                            className="run-log-row__bar"
+                            style={{ left: `${offset}%`, width: `${Math.min(width, 100 - offset)}%` }}
+                          />
+                        ) : (
+                          <span className="run-log-row__idle">No timing yet</span>
+                        )}
+                      </span>
+                      </button>
+                    </li>
                   );
                 })}
-              </div>
-            ) : (
-              <p className="muted-copy run-log-viewer__hint">
-                Only the main log stream is available for this run.
-              </p>
-            )}
-
-            <div className="run-log-viewer__meta">
-              <span className="run-badge">Selected: {formatTaskLabel(selectedTaskId)}</span>
-              <span className="run-badge">Visible: {entries.length}</span>
-              {maxEntriesPerStream > 0 ? (
-                <span className="run-badge">Buffered: {entryCount} / {maxEntriesPerStream}</span>
-              ) : null}
+              </ul>
             </div>
-          </div>
+          ) : (
+            <p className="muted-copy run-log-viewer__hint">
+              Only the main log stream is available for this run.
+            </p>
+          )}
+
+          {selectedStream ? (
+            <div className="run-log-stream-meta">
+              <span className="run-badge">Status: {selectedStream.status}</span>
+              <span className="run-badge">Start: {selectedStream.startedAt ? formatTimestamp(selectedStream.startedAt) : 'pending'}</span>
+              <span className="run-badge">Duration: {formatDuration(selectedStream.durationSeconds)}</span>
+            </div>
+          ) : null}
 
           {isEntriesLoading ? <p className="muted-copy">Loading log entries...</p> : null}
 
@@ -216,6 +331,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
             entries.length > 0 ? (
               <div
                 ref={logPanelRef}
+                id={`run-log-panel-${selectedTaskId}`}
                 className="run-log-terminal"
                 role="log"
                 aria-live="polite"
@@ -223,9 +339,9 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
               >
                 {entries.map((entry) => (
                   <div key={`${entry.taskId}-${entry.sequence}`} className="run-log-line">
-                    <span className="run-log-line__meta">
-                      {formatTimestamp(entry.timestamp)} {entry.level} {entry.logger}
-                    </span>
+                    <span className="run-log-line__time">{formatTimestamp(entry.timestamp)}</span>
+                    <span className="run-log-line__level">{entry.level}</span>
+                    <span className="run-log-line__logger">{entry.logger}</span>
                     <code>{entry.message}</code>
                   </div>
                 ))}
@@ -233,6 +349,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
             ) : (
               <div
                 ref={logPanelRef}
+                id={`run-log-panel-${selectedTaskId}`}
                 className="run-log-terminal run-log-terminal--empty"
               >
                 <strong>No log entries yet.</strong>
