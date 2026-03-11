@@ -549,11 +549,13 @@ class PlannerAgent:
             # 解析决策
             cleaned_response = extract_json_from_response(response)
             decision = json.loads(cleaned_response)
+            self.state.set_decision_reasoning(decision.get("reasoning"))
             logger.info(f"决策: {decision.get('action')} - {decision.get('reasoning')}")
 
             return decision
 
         except Exception as e:
+            self.state.set_decision_reasoning(None)
             logger.warning(f"决策失败: {e}")
             return None
 

@@ -4,7 +4,7 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Set
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 from dataclasses import dataclass, field
 
@@ -41,15 +41,17 @@ class AgentState:
         # 当前目标和上一个目标
         self.current_target: Optional[Dict[str, Any]] = None
         self.previous_target: Optional[Dict[str, Any]] = None  # 追踪目标切换
+        self.decision_reasoning: Optional[str] = None
 
         # 历史记录
         self.action_history: List[Dict[str, Any]] = []  # 操作历史
         self.recent_improvements: List[Dict[str, Any]] = []
+        self.improvement_summary: Dict[str, Any] = {"count": 0, "latest": None}
         self.processed_targets: List[str] = []
         self.available_targets: List[Dict[str, Any]] = []
-        self.failed_targets: List[Dict[str, Any]] = (
-            []
-        )  # 失败的目标（黑名单），包含类名、方法名和失败原因
+        self.failed_targets: List[
+            Dict[str, Any]
+        ] = []  # 失败的目标（黑名单），包含类名、方法名和失败原因
 
         # 时间戳
         self.start_time: Optional[datetime] = None
@@ -79,6 +81,19 @@ class AgentState:
         self.recent_improvements.append(improvement)
         # 只保留最近 5 次
         self.recent_improvements = self.recent_improvements[-5:]
+        self.improvement_summary = self._build_improvement_summary()
+
+    def set_decision_reasoning(self, reasoning: Optional[str]) -> None:
+        self.decision_reasoning = reasoning
+
+    def _build_improvement_summary(self) -> Dict[str, Any]:
+        if not self.recent_improvements:
+            return {"count": 0, "latest": None}
+
+        return {
+            "count": len(self.recent_improvements),
+            "latest": dict(self.recent_improvements[-1]),
+        }
 
     def mark_target_processed(self, target: str) -> None:
         """标记目标已处理"""
@@ -203,13 +218,20 @@ class AgentState:
             "budget": self.budget,
             "current_target": self.current_target,
             "previous_target": self.previous_target,
+            "decision_reasoning": self.decision_reasoning,
             "action_history": self.action_history,
             "recent_improvements": self.recent_improvements,
+            "improvement_summary": self.improvement_summary,
             "processed_targets": self.processed_targets,
             "available_targets": self.available_targets,
             "failed_targets": self.failed_targets,
             "start_time": self.start_time.isoformat() if self.start_time else None,
             "last_update": self.last_update.isoformat() if self.last_update else None,
+            "currentTarget": self.current_target,
+            "previousTarget": self.previous_target,
+            "decisionReasoning": self.decision_reasoning,
+            "recentImprovements": self.recent_improvements,
+            "improvementSummary": self.improvement_summary,
         }
 
     @classmethod
@@ -234,10 +256,19 @@ class AgentState:
         state.current_method_coverage = data.get("current_method_coverage")
         state.llm_calls = data.get("llm_calls", 0)
         state.budget = data.get("budget", 1000)
-        state.current_target = data.get("current_target")
-        state.previous_target = data.get("previous_target")
+        state.current_target = data.get("current_target", data.get("currentTarget"))
+        state.previous_target = data.get("previous_target", data.get("previousTarget"))
+        state.decision_reasoning = data.get(
+            "decision_reasoning", data.get("decisionReasoning")
+        )
         state.action_history = data.get("action_history", [])
-        state.recent_improvements = data.get("recent_improvements", [])
+        state.recent_improvements = data.get(
+            "recent_improvements", data.get("recentImprovements", [])
+        )
+        state.improvement_summary = (
+            data.get("improvement_summary", data.get("improvementSummary"))
+            or state._build_improvement_summary()
+        )
         state.processed_targets = data.get("processed_targets", [])
         state.available_targets = data.get("available_targets", [])
         state.failed_targets = data.get("failed_targets", [])
@@ -294,6 +325,71 @@ class WorkerResult:
     # 处理时间
     processing_time: float = 0.0
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "target_id": self.target_id,
+            "class_name": self.class_name,
+            "method_name": self.method_name,
+            "success": self.success,
+            "error": self.error,
+            "tests_generated": self.tests_generated,
+            "mutants_generated": self.mutants_generated,
+            "mutants_evaluated": self.mutants_evaluated,
+            "mutants_killed": self.mutants_killed,
+            "local_mutation_score": self.local_mutation_score,
+            "test_files": self.test_files,
+            "processing_time": self.processing_time,
+            "targetId": self.target_id,
+            "className": self.class_name,
+            "methodName": self.method_name,
+            "testsGenerated": self.tests_generated,
+            "mutantsGenerated": self.mutants_generated,
+            "mutantsEvaluated": self.mutants_evaluated,
+            "mutantsKilled": self.mutants_killed,
+            "localMutationScore": self.local_mutation_score,
+            "processingTime": self.processing_time,
+        }
+
+    def to_worker_card(self) -> Dict[str, Any]:
+        return {
+            "targetId": self.target_id,
+            "className": self.class_name,
+            "methodName": self.method_name,
+            "success": self.success,
+            "error": self.error,
+            "testsGenerated": self.tests_generated,
+            "mutantsGenerated": self.mutants_generated,
+            "mutantsEvaluated": self.mutants_evaluated,
+            "mutantsKilled": self.mutants_killed,
+            "localMutationScore": self.local_mutation_score,
+            "processingTime": self.processing_time,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WorkerResult":
+        return cls(
+            target_id=data.get("target_id", data.get("targetId", "")),
+            class_name=data.get("class_name", data.get("className", "")),
+            method_name=data.get("method_name", data.get("methodName", "")),
+            success=data.get("success", False),
+            error=data.get("error"),
+            tests_generated=data.get("tests_generated", data.get("testsGenerated", 0)),
+            mutants_generated=data.get(
+                "mutants_generated", data.get("mutantsGenerated", 0)
+            ),
+            mutants_evaluated=data.get(
+                "mutants_evaluated", data.get("mutantsEvaluated", 0)
+            ),
+            mutants_killed=data.get("mutants_killed", data.get("mutantsKilled", 0)),
+            local_mutation_score=data.get(
+                "local_mutation_score", data.get("localMutationScore", 0.0)
+            ),
+            test_files=data.get("test_files", {}),
+            processing_time=data.get(
+                "processing_time", data.get("processingTime", 0.0)
+            ),
+        )
+
 
 class ParallelAgentState(AgentState):
     """并行 Agent 状态 - 支持多目标追踪和线程安全"""
@@ -322,7 +418,12 @@ class ParallelAgentState(AgentState):
             "merge_conflicts": 0,
         }
 
-    def acquire_target(self, class_name: str, method_name: str) -> bool:
+    def acquire_target(
+        self,
+        class_name: str,
+        method_name: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """
         原子地获取目标（避免多个 Worker 选择同一目标）
 
@@ -343,11 +444,16 @@ class ParallelAgentState(AgentState):
             if any(ft.get("target") == target_id for ft in self.failed_targets):
                 return False
 
-            self._active_targets[target_id] = {
-                "class_name": class_name,
-                "method_name": method_name,
-                "started_at": datetime.now(),
-            }
+            target_metadata = dict(metadata or {})
+            target_metadata.update(
+                {
+                    "target_id": target_id,
+                    "class_name": class_name,
+                    "method_name": method_name,
+                    "started_at": datetime.now(),
+                }
+            )
+            self._active_targets[target_id] = target_metadata
             return True
 
     def release_target(self, class_name: str, method_name: str, success: bool) -> None:
@@ -370,6 +476,13 @@ class ParallelAgentState(AgentState):
         """获取当前活跃的目标列表"""
         with self._active_targets_lock:
             return list(self._active_targets.keys())
+
+    def get_active_target_details(self) -> List[Dict[str, Any]]:
+        with self._active_targets_lock:
+            return [
+                self._serialize_active_target(target)
+                for target in self._active_targets.values()
+            ]
 
     def get_active_target_count(self) -> int:
         """获取当前活跃目标数量"""
@@ -423,6 +536,23 @@ class ParallelAgentState(AgentState):
                 1 for r in batch_results if not r.success
             )
 
+    def _serialize_active_target(self, target: Dict[str, Any]) -> Dict[str, Any]:
+        serialized = dict(target)
+        started_at = serialized.get("started_at")
+        if isinstance(started_at, datetime):
+            serialized["started_at"] = started_at.isoformat()
+
+        serialized.setdefault("targetId", serialized.get("target_id"))
+        serialized.setdefault("className", serialized.get("class_name"))
+        serialized.setdefault("methodName", serialized.get("method_name"))
+        return serialized
+
+    def get_worker_cards(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            if not self.batch_results:
+                return []
+            return [result.to_worker_card() for result in self.batch_results[-1]]
+
     def update_global_stats_from_batch(
         self,
         total_mutants: int,
@@ -459,9 +589,20 @@ class ParallelAgentState(AgentState):
         """转换为字典（线程安全）"""
         with self._lock:
             data = super().to_dict()
+            batch_results = [
+                [result.to_dict() for result in batch] for batch in self.batch_results
+            ]
+            active_targets = self.get_active_target_details()
             data["current_batch"] = self.current_batch
             data["parallel_stats"] = self.parallel_stats
-            data["active_targets"] = list(self._active_targets.keys())
+            data["batch_results"] = batch_results
+            data["active_targets"] = active_targets
+            data["worker_cards"] = self.get_worker_cards()
+            data["currentBatch"] = self.current_batch
+            data["parallelStats"] = self.parallel_stats
+            data["batchResults"] = batch_results
+            data["activeTargets"] = active_targets
+            data["workerCards"] = data["worker_cards"]
             return data
 
     @classmethod
@@ -484,10 +625,19 @@ class ParallelAgentState(AgentState):
         state.current_method_coverage = data.get("current_method_coverage")
         state.llm_calls = data.get("llm_calls", 0)
         state.budget = data.get("budget", 1000)
-        state.current_target = data.get("current_target")
-        state.previous_target = data.get("previous_target")
+        state.current_target = data.get("current_target", data.get("currentTarget"))
+        state.previous_target = data.get("previous_target", data.get("previousTarget"))
+        state.decision_reasoning = data.get(
+            "decision_reasoning", data.get("decisionReasoning")
+        )
         state.action_history = data.get("action_history", [])
-        state.recent_improvements = data.get("recent_improvements", [])
+        state.recent_improvements = data.get(
+            "recent_improvements", data.get("recentImprovements", [])
+        )
+        state.improvement_summary = (
+            data.get("improvement_summary", data.get("improvementSummary"))
+            or state._build_improvement_summary()
+        )
         state.processed_targets = data.get("processed_targets", [])
         state.available_targets = data.get("available_targets", [])
         state.failed_targets = data.get("failed_targets", [])
@@ -498,17 +648,33 @@ class ParallelAgentState(AgentState):
             state.last_update = datetime.fromisoformat(data["last_update"])
 
         # 并行特有字段
-        state.current_batch = data.get("current_batch", 0)
+        state.current_batch = data.get("current_batch", data.get("currentBatch", 0))
         state.parallel_stats = data.get(
-            "parallel_stats",
-            {
-                "total_batches": 0,
-                "total_workers_spawned": 0,
-                "total_targets_processed": 0,
-                "failed_targets_in_parallel": 0,
-                "merge_conflicts": 0,
-            },
-        )
+            "parallel_stats", data.get("parallelStats")
+        ) or {
+            "total_batches": 0,
+            "total_workers_spawned": 0,
+            "total_targets_processed": 0,
+            "failed_targets_in_parallel": 0,
+            "merge_conflicts": 0,
+        }
+
+        serialized_batches = data.get("batch_results", data.get("batchResults", []))
+        state.batch_results = [
+            [WorkerResult.from_dict(result) for result in batch]
+            for batch in serialized_batches
+        ]
+
+        active_targets = data.get("active_targets", data.get("activeTargets", []))
+        for target in active_targets:
+            target_id = target.get("target_id", target.get("targetId"))
+            if not target_id:
+                continue
+            restored_target = dict(target)
+            started_at = restored_target.get("started_at")
+            if isinstance(started_at, str):
+                restored_target["started_at"] = datetime.fromisoformat(started_at)
+            state._active_targets[target_id] = restored_target
 
         return state
 

@@ -265,7 +265,7 @@ class ParallelPlannerAgent:
             target_id = f"{class_name}.{method_name}"
 
             # 尝试获取目标（原子操作）
-            if self.state.acquire_target(class_name, method_name):
+            if self.state.acquire_target(class_name, method_name, metadata=target):
                 targets.append(target)
                 active_targets.add(target_id)
             else:

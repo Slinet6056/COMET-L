@@ -18,101 +18,7 @@ from comet.knowledge import create_knowledge_base
 from comet.llm import LLMClient
 from comet.store import Database, KnowledgeStore
 from comet.utils import ProjectScanner, SandboxManager
-from comet.utils.log_context import ContextFilter
-
-
-class ColoredFormatter(logging.Formatter):
-    """为终端输出添加 ANSI 颜色的格式化器"""
-
-    # ANSI 颜色代码
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-
-    # 基础颜色
-    BLACK = "\033[30m"
-    RED = "\033[31m"
-    GREEN = "\033[32m"
-    YELLOW = "\033[33m"
-    BLUE = "\033[34m"
-    MAGENTA = "\033[35m"
-    CYAN = "\033[36m"
-    WHITE = "\033[37m"
-
-    # 亮色（用于时间戳等）
-    BRIGHT_BLACK = "\033[90m"
-
-    # 日志级别颜色
-    LEVEL_COLORS = {
-        logging.DEBUG: CYAN,
-        logging.INFO: GREEN,
-        logging.WARNING: YELLOW,
-        logging.ERROR: RED,
-        logging.CRITICAL: f"{BOLD}{RED}",
-    }
-
-    def format(self, record: logging.LogRecord) -> str:
-        # 保存原始值
-        original_levelname = record.levelname
-        original_name = record.name
-        original_task_id = getattr(record, "task_id", "main")
-
-        # 获取颜色
-        level_color = self.LEVEL_COLORS.get(record.levelno, "")
-
-        # 应用颜色
-        # 日志级别：使用级别对应的颜色
-        if level_color:
-            record.levelname = f"{level_color}{record.levelname}{self.RESET}"
-
-        # task_id：使用洋红色
-        record.task_id = f"{self.MAGENTA}{original_task_id}{self.RESET}"
-
-        # 模块名：使用蓝色
-        record.name = f"{self.BLUE}{record.name}{self.RESET}"
-
-        try:
-            # 格式化基础消息
-            formatted = super().format(record)
-
-            # 时间戳部分使用暗色（替换开头的时间戳）
-            # 格式: "2026-01-26 10:30:45,123"
-            if formatted and len(formatted) > 23:
-                timestamp = formatted[:23]
-                rest = formatted[23:]
-                formatted = f"{self.BRIGHT_BLACK}{timestamp}{self.RESET}{rest}"
-
-            return formatted
-        finally:
-            # 恢复原始值，避免影响其他 handler
-            record.levelname = original_levelname
-            record.name = original_name
-            record.task_id = original_task_id
-
-
-LOG_FORMAT = "%(asctime)s - [%(task_id)s] %(name)s - %(levelname)s - %(message)s"
-
-# 配置日志：文件使用纯文本，终端使用彩色输出
-# 添加上下文过滤器，为多线程日志提供任务标识
-context_filter = ContextFilter()
-
-file_handler = logging.FileHandler("comet.log", encoding="utf-8")
-file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-file_handler.addFilter(context_filter)
-
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(ColoredFormatter(LOG_FORMAT))
-console_handler.addFilter(context_filter)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format=LOG_FORMAT,
-    handlers=[file_handler, console_handler],
-)
-
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("openai").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+from comet.web import run_cli
 
 logger = logging.getLogger(__name__)
 
@@ -655,61 +561,14 @@ def main():
     args = parse_args()
 
     # 如果启用了debug模式，设置日志级别为DEBUG
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logger.info("已启用调试模式 (DEBUG 日志)")
-
     try:
-        # 加载配置
-        logger.info(f"加载配置: {args.config}")
-        config = Settings.from_yaml_or_default(args.config)
-
-        # 覆盖配置
-        if args.max_iterations:
-            config.evolution.max_iterations = args.max_iterations
-        if args.budget:
-            config.evolution.budget_llm_calls = args.budget
-        if args.output_dir:
-            config.paths.output = args.output_dir
-
-        # 验证项目路径
-        project_path = Path(args.project_path)
-        if not project_path.exists():
-            logger.error(f"项目路径不存在: {args.project_path}")
-            sys.exit(1)
-
-        if not (project_path / "pom.xml").exists():
-            logger.error(f"不是有效的 Maven 项目: {args.project_path}")
-            sys.exit(1)
-
-        # 验证 Bug 报告目录（如果指定）
-        bug_reports_dir = None
-        if args.bug_reports_dir:
-            bug_dir = Path(args.bug_reports_dir)
-            if bug_dir.exists() and bug_dir.is_dir():
-                bug_reports_dir = str(bug_dir.resolve())
-            else:
-                logger.warning(f"Bug 报告目录不存在: {args.bug_reports_dir}")
-
-        # 覆盖并行配置
-        parallel_mode = args.parallel or config.agent.parallel.enabled
-        if args.parallel_targets:
-            config.agent.parallel.max_parallel_targets = args.parallel_targets
-            parallel_mode = True
-
-        # 初始化系统
-        components = initialize_system(
-            config, bug_reports_dir=bug_reports_dir, parallel_mode=parallel_mode
+        exit_code = run_cli(
+            args,
+            system_initializer=initialize_system,
+            evolution_runner=run_evolution,
         )
-
-        # 运行协同进化
-        run_evolution(
-            project_path=str(project_path),
-            components=components,
-            resume_state=args.resume,
-        )
-
-        logger.info("COMET-L 运行完成")
+        if exit_code != 0:
+            sys.exit(exit_code)
 
     except Exception as e:
         logger.error(f"运行失败: {e}", exc_info=True)
