@@ -93,6 +93,62 @@ describe('Run page parallel mode', () => {
         taskIds: ['main', 'task-1'],
         counts: { main: 1, 'task-1': 1 },
         maxEntriesPerStream: 200,
+        items: [
+          {
+            taskId: 'main',
+            order: 0,
+            status: 'running',
+            startedAt: '2026-03-10T10:00:00Z',
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: '2026-03-10T10:00:00Z',
+            lastEntryAt: '2026-03-10T10:00:00Z',
+            bufferedEntryCount: 1,
+            totalEntryCount: 1,
+          },
+          {
+            taskId: 'task-1',
+            order: 1,
+            status: 'running',
+            startedAt: '2026-03-10T10:00:01Z',
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: '2026-03-10T10:00:01Z',
+            lastEntryAt: '2026-03-10T10:00:01Z',
+            bufferedEntryCount: 1,
+            totalEntryCount: 1,
+          },
+        ],
+        byTaskId: {
+          main: {
+            taskId: 'main',
+            order: 0,
+            status: 'running',
+            startedAt: '2026-03-10T10:00:00Z',
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: '2026-03-10T10:00:00Z',
+            lastEntryAt: '2026-03-10T10:00:00Z',
+            bufferedEntryCount: 1,
+            totalEntryCount: 1,
+          },
+          'task-1': {
+            taskId: 'task-1',
+            order: 1,
+            status: 'running',
+            startedAt: '2026-03-10T10:00:01Z',
+            completedAt: null,
+            endedAt: null,
+            durationSeconds: null,
+            firstEntryAt: '2026-03-10T10:00:01Z',
+            lastEntryAt: '2026-03-10T10:00:01Z',
+            bufferedEntryCount: 1,
+            totalEntryCount: 1,
+          },
+        },
       },
     });
     vi.spyOn(api, 'fetchRunLogsForTask').mockImplementation(async (_runId, taskId) => ({
@@ -100,6 +156,19 @@ describe('Run page parallel mode', () => {
       taskId,
       availableTaskIds: ['main', 'task-1'],
       maxEntriesPerStream: 200,
+      stream: {
+        taskId,
+        order: taskId === 'main' ? 0 : 1,
+        status: 'running',
+        startedAt: taskId === 'main' ? '2026-03-10T10:00:00Z' : '2026-03-10T10:00:01Z',
+        completedAt: null,
+        endedAt: null,
+        durationSeconds: null,
+        firstEntryAt: taskId === 'main' ? '2026-03-10T10:00:00Z' : '2026-03-10T10:00:01Z',
+        lastEntryAt: taskId === 'main' ? '2026-03-10T10:00:00Z' : '2026-03-10T10:00:01Z',
+        bufferedEntryCount: 1,
+        totalEntryCount: 1,
+      },
       entries: [
         {
           sequence: 1,
@@ -130,11 +199,14 @@ describe('Run page parallel mode', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Parallel Run Status' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Worker Cards' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Parallel Stats' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Active Targets' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Core Metrics' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Worker Output' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Log Timeline' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Batch Summary' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Parallel Stats' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Active Targets' })).not.toBeInTheDocument();
     expect(screen.getByText('Current batch: 2')).toBeInTheDocument();
-    expect(screen.getByText('Calculator.add')).toBeInTheDocument();
+    expect(screen.getByTitle('Calculator.add')).toBeInTheDocument();
     expect(screen.getByText('Calculator.divide')).toBeInTheDocument();
     expect(screen.getByText('Total workers spawned')).toBeInTheDocument();
     expect(screen.getByText('Coverage 42.0%')).toBeInTheDocument();
@@ -147,14 +219,14 @@ describe('Run page parallel mode', () => {
     });
   });
 
-  it('applies SSE updates to the parallel batch and worker cards', async () => {
+  it('applies SSE updates to the parallel batch and worker rows', async () => {
     render(
       <MemoryRouter initialEntries={['/runs/run-par-42']}>
         <App />
       </MemoryRouter>,
     );
 
-    await screen.findByRole('heading', { name: 'Worker Cards' });
+    await screen.findByRole('heading', { name: 'Worker Output' });
 
     await act(async () => {
       onEvent?.({
@@ -190,8 +262,61 @@ describe('Run page parallel mode', () => {
     });
 
     expect(await screen.findByText('Current batch: 3')).toBeInTheDocument();
-    expect(screen.getAllByText('Calculator.multiply')).toHaveLength(2);
-    expect(screen.getByText('Timed out while evaluating mutants.')).toBeInTheDocument();
+    expect(screen.getAllByTitle('Calculator.multiply')).toHaveLength(2);
     expect(screen.getByText('Coverage 50.0%')).toBeInTheDocument();
+    expect(screen.getByText('Timed out while evaluating mutants.')).toBeInTheDocument();
+  });
+
+  it('keeps long worker target ids available in the dense row layout', async () => {
+    vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue(
+      buildParallelSnapshot({
+        workerCards: [
+          {
+            targetId:
+              'Calculator.withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
+            className: 'Calculator',
+            methodName: 'withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
+            success: true,
+            error: null,
+            testsGenerated: 2,
+            mutantsGenerated: 3,
+            mutantsEvaluated: 3,
+            mutantsKilled: 2,
+            localMutationScore: 2 / 3,
+            processingTime: 1.4,
+          },
+        ],
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-par-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    const workerLabel = await screen.findByTitle(
+      'Calculator.withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
+    );
+    expect(workerLabel).toBeInTheDocument();
+  });
+
+  it('hides worker and batch execution detail during preprocessing', async () => {
+    vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue(
+      buildParallelSnapshot({
+        phase: { key: 'preprocessing', label: 'Preprocessing' },
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-par-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Parallel Preprocessing' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Batch Summary' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Worker Output' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Log Viewer' })).not.toBeInTheDocument();
   });
 });

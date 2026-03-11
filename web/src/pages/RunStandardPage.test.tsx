@@ -114,6 +114,7 @@ describe('Run page standard mode', () => {
     expect(screen.getByText('Phase: Running')).toBeInTheDocument();
     expect(screen.getByText('45.0%')).toBeInTheDocument();
     expect(screen.getByText('Recorded improvements')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Core Metrics' })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(MockEventSource.instances).toHaveLength(1);
@@ -181,6 +182,7 @@ describe('Run page standard mode', () => {
     expect(screen.getByRole('heading', { name: 'Core Metrics' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Action History Summary' })).toBeInTheDocument();
     expect(screen.queryByText('Current batch')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Worker Output' })).not.toBeInTheDocument();
   });
 
   it('falls back to snapshot polling when live events are unavailable', async () => {

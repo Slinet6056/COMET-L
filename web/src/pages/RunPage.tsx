@@ -96,6 +96,10 @@ function formatDuration(seconds: number | null | undefined): string {
   return `${seconds.toFixed(1)}s`;
 }
 
+function formatWorkerStatusLabel(success: boolean): string {
+  return success ? 'Completed' : 'Failed';
+}
+
 function getParallelSnapshot(snapshot: RunSnapshot): ParallelSnapshotData {
   return {
     currentBatch: snapshot.parallel?.currentBatch ?? snapshot.currentBatch ?? 0,
@@ -268,6 +272,19 @@ function buildParallelStatsSummary(
   }));
 }
 
+function buildActiveTargetSummary(
+  activeTargets: RunActiveTarget[],
+): Array<{ label: string; value: string; title: string }> {
+  return activeTargets.slice(0, 4).map((target) => {
+    const targetId = formatTargetId(target);
+    return {
+      label: targetId,
+      value: `Coverage ${formatPercent(Number(target.method_coverage ?? target.methodCoverage ?? null))}`,
+      title: targetId,
+    };
+  });
+}
+
 function StandardRunView(props: {
   runId: string;
   snapshot: RunSnapshot;
@@ -296,126 +313,101 @@ function StandardRunView(props: {
         </div>
       </div>
 
-      <div className="run-layout">
-        <div className="run-layout__main">
-          <section className="run-card" aria-labelledby="run-decision-panel">
-            <p className="eyebrow">Decision</p>
-            <h3 id="run-decision-panel">Decision Panel</h3>
-            <dl className="detail-grid">
-              <div>
-                <dt>Current target</dt>
-                <dd>{formatTarget(snapshot.currentTarget)}</dd>
-              </div>
-              <div>
-                <dt>Previous target</dt>
-                <dd>{formatTarget(snapshot.previousTarget)}</dd>
-              </div>
-              <div>
-                <dt>Phase</dt>
-                <dd>{snapshot.phase.label}</dd>
-              </div>
-              <div>
-                <dt>LLM calls</dt>
-                <dd>
-                  {snapshot.llmCalls} / {snapshot.budget}
-                </dd>
-              </div>
-            </dl>
-            <div className="decision-reasoning">
-              <strong>Decision reasoning</strong>
-              <p>{snapshot.decisionReasoning ?? 'No reasoning has been published yet.'}</p>
-            </div>
-          </section>
-
-          <section className="run-card" aria-labelledby="run-metrics-panel">
-            <p className="eyebrow">Metrics</p>
-            <h3 id="run-metrics-panel">Core Metrics</h3>
-            <div className="metric-grid">
-              <article>
-                <span>Mutation score</span>
-                <strong>{formatPercent(snapshot.metrics.mutationScore)}</strong>
-              </article>
-              <article>
-                <span>Line coverage</span>
-                <strong>{formatPercent(snapshot.metrics.lineCoverage)}</strong>
-              </article>
-              <article>
-                <span>Branch coverage</span>
-                <strong>{formatPercent(snapshot.metrics.branchCoverage)}</strong>
-              </article>
-              <article>
-                <span>Total tests</span>
-                <strong>{formatMetricValue(snapshot.metrics.totalTests)}</strong>
-              </article>
-              <article>
-                <span>Killed mutants</span>
-                <strong>{formatMetricValue(snapshot.metrics.killedMutants)}</strong>
-              </article>
-              <article>
-                <span>Survived mutants</span>
-                <strong>{formatMetricValue(snapshot.metrics.survivedMutants)}</strong>
-              </article>
-            </div>
-          </section>
-
-          <section className="run-card" aria-labelledby="run-actions-panel">
-            <p className="eyebrow">History</p>
-            <h3 id="run-actions-panel">Action History Summary</h3>
-            {actionHistory.length > 0 ? (
-              <ol className="summary-list">
-                {actionHistory.map((entry) => (
-                  <li key={entry.id}>
-                    <strong>{entry.title}</strong>
-                    <span>{entry.detail}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="muted-copy">Waiting for live run events.</p>
-            )}
-          </section>
+      <section className="run-card" aria-labelledby="run-metrics-panel">
+        <p className="eyebrow">Metrics</p>
+        <h3 id="run-metrics-panel">Core Metrics</h3>
+        <div className="metric-grid metric-grid--hero">
+          <article>
+            <span>Mutation score</span>
+            <strong>{formatPercent(snapshot.metrics.mutationScore)}</strong>
+          </article>
+          <article>
+            <span>Line coverage</span>
+            <strong>{formatPercent(snapshot.metrics.lineCoverage)}</strong>
+          </article>
+          <article>
+            <span>Branch coverage</span>
+            <strong>{formatPercent(snapshot.metrics.branchCoverage)}</strong>
+          </article>
         </div>
+        <dl className="detail-grid detail-grid--compact">
+          <div>
+            <dt>Current target</dt>
+            <dd>{formatTarget(snapshot.currentTarget)}</dd>
+          </div>
+          <div>
+            <dt>Previous target</dt>
+            <dd>{formatTarget(snapshot.previousTarget)}</dd>
+          </div>
+          <div>
+            <dt>Total tests</dt>
+            <dd>{formatMetricValue(snapshot.metrics.totalTests)}</dd>
+          </div>
+          <div>
+            <dt>Current method coverage</dt>
+            <dd>{formatPercent(snapshot.metrics.currentMethodCoverage)}</dd>
+          </div>
+          <div>
+            <dt>Killed mutants</dt>
+            <dd>{formatMetricValue(snapshot.metrics.killedMutants)}</dd>
+          </div>
+          <div>
+            <dt>Survived mutants</dt>
+            <dd>{formatMetricValue(snapshot.metrics.survivedMutants)}</dd>
+          </div>
+          <div>
+            <dt>LLM calls</dt>
+            <dd>
+              {snapshot.llmCalls} / {snapshot.budget}
+            </dd>
+          </div>
+          <div>
+            <dt>Iteration</dt>
+            <dd>{snapshot.iteration}</dd>
+          </div>
+        </dl>
+      </section>
 
-        <aside className="run-layout__sidebar">
-          <section className="run-card" aria-labelledby="run-improvements-panel">
-            <p className="eyebrow">Improvements</p>
-            <h3 id="run-improvements-panel">Recent Improvements</h3>
-            <ul className="summary-list summary-list--compact">
-              {improvementSummary.map((entry) => (
-                <li key={entry.label}>
-                  <strong>{entry.label}</strong>
-                  <span>{entry.value}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
+      <section className="run-card" aria-labelledby="run-decision-panel">
+        <p className="eyebrow">Decision</p>
+        <h3 id="run-decision-panel">Decision Panel</h3>
+        <div className="decision-reasoning">
+          <strong>Decision reasoning</strong>
+          <p>{snapshot.decisionReasoning ?? 'No reasoning has been published yet.'}</p>
+        </div>
+      </section>
 
-          <section className="run-card" aria-labelledby="run-state-panel">
-            <p className="eyebrow">State</p>
-            <h3 id="run-state-panel">Run State</h3>
-            <ul className="summary-list summary-list--compact">
-              <li>
-                <strong>Status</strong>
-                <span>{snapshot.status}</span>
-              </li>
-              <li>
-                <strong>Phase</strong>
-                <span>{snapshot.phase.label}</span>
-              </li>
-              <li>
-                <strong>Iteration</strong>
-                <span>{snapshot.iteration}</span>
-              </li>
-              <li>
-                <strong>Current method coverage</strong>
-                <span>{formatPercent(snapshot.metrics.currentMethodCoverage)}</span>
-              </li>
-            </ul>
-          </section>
+      <section className="run-card" aria-labelledby="run-improvements-panel">
+        <p className="eyebrow">Improvements</p>
+        <h3 id="run-improvements-panel">Recent Improvements</h3>
+        <ul className="summary-list summary-list--compact summary-list--two-column">
+          {improvementSummary.map((entry) => (
+            <li key={entry.label}>
+              <strong>{entry.label}</strong>
+              <span>{entry.value}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
 
-          <Link to={`/runs/${runId}/results`}>Go to results skeleton</Link>
-        </aside>
-      </div>
+      <section className="run-card" aria-labelledby="run-actions-panel">
+        <p className="eyebrow">History</p>
+        <h3 id="run-actions-panel">Action History Summary</h3>
+        {actionHistory.length > 0 ? (
+          <ol className="summary-list summary-list--compact summary-list--two-column">
+            {actionHistory.map((entry) => (
+              <li key={entry.id}>
+                <strong>{entry.title}</strong>
+                <span>{entry.detail}</span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="muted-copy">Waiting for live run events.</p>
+        )}
+      </section>
+
+      <Link to={`/runs/${runId}/results`}>Go to results skeleton</Link>
     </>
   );
 }
@@ -428,6 +420,8 @@ function ParallelRunView(props: {
   const { runId, snapshot, connectionState } = props;
   const parallel = getParallelSnapshot(snapshot);
   const parallelStatsSummary = buildParallelStatsSummary(parallel.parallelStats);
+  const activeTargetSummary = buildActiveTargetSummary(parallel.activeTargets);
+  const isPreprocessingPhase = snapshot.phase.key === 'preprocessing';
 
   return (
     <>
@@ -449,87 +443,69 @@ function ParallelRunView(props: {
         </div>
       </div>
 
-      <div className="run-layout">
-        <div className="run-layout__main">
-          <section className="run-card" aria-labelledby="run-parallel-overview-panel">
-            <p className="eyebrow">Parallel</p>
-            <h3 id="run-parallel-overview-panel">Current Batch</h3>
-            <dl className="detail-grid">
-              <div>
-                <dt>Current batch</dt>
-                <dd>{parallel.currentBatch}</dd>
-              </div>
-              <div>
-                <dt>Active targets</dt>
-                <dd>{parallel.activeTargets.length}</dd>
-              </div>
-              <div>
-                <dt>Latest worker cards</dt>
-                <dd>{parallel.workerCards.length}</dd>
-              </div>
-              <div>
-                <dt>Completed batch groups</dt>
-                <dd>{parallel.batchResults.length}</dd>
-              </div>
-            </dl>
-            <div className="decision-reasoning">
-              <strong>Decision reasoning</strong>
-              <p>{snapshot.decisionReasoning ?? 'No reasoning has been published yet.'}</p>
-            </div>
-          </section>
-
-          <section className="run-card" aria-labelledby="run-worker-panel">
-            <p className="eyebrow">Workers</p>
-            <h3 id="run-worker-panel">Worker Cards</h3>
-            {parallel.workerCards.length > 0 ? (
-              <div className="worker-card-grid">
-                {parallel.workerCards.map((worker) => (
-                  <article key={worker.targetId} className="worker-card">
-                    <div className="worker-card__header">
-                      <strong>{worker.targetId}</strong>
-                      <span className={worker.success ? 'worker-pill worker-pill--success' : 'worker-pill worker-pill--error'}>
-                        {worker.success ? 'Completed' : 'Failed'}
-                      </span>
-                    </div>
-                    <dl className="worker-card__details">
-                      <div>
-                        <dt>Tests</dt>
-                        <dd>{worker.testsGenerated}</dd>
-                      </div>
-                      <div>
-                        <dt>Mutants</dt>
-                        <dd>{worker.mutantsGenerated}</dd>
-                      </div>
-                      <div>
-                        <dt>Killed</dt>
-                        <dd>{worker.mutantsKilled}</dd>
-                      </div>
-                      <div>
-                        <dt>Local score</dt>
-                        <dd>{formatPercent(worker.localMutationScore)}</dd>
-                      </div>
-                      <div>
-                        <dt>Runtime</dt>
-                        <dd>{formatDuration(worker.processingTime)}</dd>
-                      </div>
-                    </dl>
-                    {worker.error ? <p className="worker-card__error">{worker.error}</p> : null}
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p className="muted-copy">Waiting for the first worker batch to finish.</p>
-            )}
-          </section>
-
-          <LogViewer runId={runId} runStatus={snapshot.status} />
+      <section className="run-card" aria-labelledby="run-parallel-metrics-panel">
+        <p className="eyebrow">Metrics</p>
+        <h3 id="run-parallel-metrics-panel">Core Metrics</h3>
+        <div className="metric-grid metric-grid--hero">
+          <article>
+            <span>Mutation score</span>
+            <strong>{formatPercent(snapshot.metrics.globalMutationScore)}</strong>
+          </article>
+          <article>
+            <span>Line coverage</span>
+            <strong>{formatPercent(snapshot.metrics.lineCoverage)}</strong>
+          </article>
+          <article>
+            <span>Branch coverage</span>
+            <strong>{formatPercent(snapshot.metrics.branchCoverage)}</strong>
+          </article>
         </div>
+        <dl className="detail-grid detail-grid--compact">
+          <div>
+            <dt>Current batch</dt>
+            <dd>{parallel.currentBatch}</dd>
+          </div>
+          <div>
+            <dt>Targets in flight</dt>
+            <dd>{parallel.activeTargets.length}</dd>
+          </div>
+          <div>
+            <dt>Latest worker updates</dt>
+            <dd>{parallel.workerCards.length}</dd>
+          </div>
+          <div>
+            <dt>Completed batch groups</dt>
+            <dd>{parallel.batchResults.length}</dd>
+          </div>
+          <div>
+            <dt>Total tests</dt>
+            <dd>{formatMetricValue(snapshot.metrics.totalTests)}</dd>
+          </div>
+          <div>
+            <dt>Total mutants</dt>
+            <dd>{formatMetricValue(snapshot.metrics.globalTotalMutants)}</dd>
+          </div>
+          <div>
+            <dt>Killed mutants</dt>
+            <dd>{formatMetricValue(snapshot.metrics.globalKilledMutants)}</dd>
+          </div>
+          <div>
+            <dt>Iteration</dt>
+            <dd>{snapshot.iteration}</dd>
+          </div>
+        </dl>
+        <div className="decision-reasoning">
+          <strong>Decision reasoning</strong>
+          <p>{snapshot.decisionReasoning ?? 'No reasoning has been published yet.'}</p>
+        </div>
+      </section>
 
-        <aside className="run-layout__sidebar">
-          <section className="run-card" aria-labelledby="run-parallel-stats-panel">
-            <p className="eyebrow">Stats</p>
-            <h3 id="run-parallel-stats-panel">Parallel Stats</h3>
-            <ul className="summary-list summary-list--compact">
+      {!isPreprocessingPhase && (parallelStatsSummary.length > 0 || activeTargetSummary.length > 0) ? (
+        <section className="run-card" aria-labelledby="run-parallel-summary-panel">
+          <p className="eyebrow">Summary</p>
+          <h3 id="run-parallel-summary-panel">Batch Summary</h3>
+          {parallelStatsSummary.length > 0 ? (
+            <ul className="summary-list summary-list--compact summary-list--two-column">
               {parallelStatsSummary.map((entry) => (
                 <li key={entry.label}>
                   <strong>{entry.label}</strong>
@@ -537,53 +513,91 @@ function ParallelRunView(props: {
                 </li>
               ))}
             </ul>
-          </section>
+          ) : null}
+          {activeTargetSummary.length > 0 ? (
+            <ul className="summary-list summary-list--compact summary-list--two-column">
+              {activeTargetSummary.map((entry) => (
+                <li key={entry.label}>
+                  <strong title={entry.title}>{entry.label}</strong>
+                  <span>{entry.value}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
 
-          <section className="run-card" aria-labelledby="run-active-targets-panel">
-            <p className="eyebrow">Targets</p>
-            <h3 id="run-active-targets-panel">Active Targets</h3>
-            {parallel.activeTargets.length > 0 ? (
-              <ul className="summary-list summary-list--compact">
-                {parallel.activeTargets.map((target) => (
-                  <li key={formatTargetId(target)}>
-                    <strong>{formatTargetId(target)}</strong>
-                    <span>
-                      Coverage {formatPercent(Number(target.method_coverage ?? target.methodCoverage ?? null))}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+      {!isPreprocessingPhase ? (
+        <>
+          <section className="run-card" aria-labelledby="run-worker-panel">
+            <div className="run-card__header run-card__header--compact">
+              <div>
+                <p className="eyebrow">Workers</p>
+                <h3 id="run-worker-panel">Worker Output</h3>
+              </div>
+              <span className="run-badge">Live: {connectionState}</span>
+            </div>
+            {parallel.workerCards.length > 0 ? (
+              <table className="worker-output-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Target</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Tests</th>
+                    <th scope="col">Mutants</th>
+                    <th scope="col">Killed</th>
+                    <th scope="col">Score</th>
+                    <th scope="col">Runtime</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parallel.workerCards.map((worker) => (
+                    <tr key={worker.targetId} className="worker-output-row">
+                      <td className="worker-output-row__target">
+                        <strong title={worker.targetId}>{worker.targetId}</strong>
+                        <span>
+                          {worker.className}.{worker.methodName}
+                        </span>
+                        {worker.error ? <p className="worker-output-row__error">{worker.error}</p> : null}
+                      </td>
+                      <td>
+                        <span
+                          className={
+                            worker.success
+                              ? 'worker-pill worker-pill--success'
+                              : 'worker-pill worker-pill--error'
+                          }
+                        >
+                          {formatWorkerStatusLabel(worker.success)}
+                        </span>
+                      </td>
+                      <td>{worker.testsGenerated}</td>
+                      <td>{worker.mutantsGenerated}</td>
+                      <td>{worker.mutantsKilled}</td>
+                      <td>{formatPercent(worker.localMutationScore)}</td>
+                      <td>{formatDuration(worker.processingTime)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             ) : (
-              <p className="muted-copy">No targets are currently assigned to workers.</p>
+              <p className="muted-copy">Waiting for the first worker batch to finish.</p>
             )}
           </section>
 
-          <section className="run-card" aria-labelledby="run-state-panel">
-            <p className="eyebrow">State</p>
-            <h3 id="run-state-panel">Run State</h3>
-            <ul className="summary-list summary-list--compact">
-              <li>
-                <strong>Status</strong>
-                <span>{snapshot.status}</span>
-              </li>
-              <li>
-                <strong>Phase</strong>
-                <span>{snapshot.phase.label}</span>
-              </li>
-              <li>
-                <strong>Iteration</strong>
-                <span>{snapshot.iteration}</span>
-              </li>
-              <li>
-                <strong>Global mutation score</strong>
-                <span>{formatPercent(snapshot.metrics.globalMutationScore)}</span>
-              </li>
-            </ul>
-          </section>
+          <LogViewer runId={runId} runStatus={snapshot.status} />
+        </>
+      ) : (
+        <section className="run-card" aria-labelledby="run-preprocessing-panel">
+          <p className="eyebrow">Preparation</p>
+          <h3 id="run-preprocessing-panel">Parallel Preprocessing</h3>
+          <p className="muted-copy">
+            Worker output and detailed target activity will appear after preprocessing completes.
+          </p>
+        </section>
+      )}
 
-          <Link to={`/runs/${runId}/results`}>Go to results skeleton</Link>
-        </aside>
-      </div>
+      <Link to={`/runs/${runId}/results`}>Go to results skeleton</Link>
     </>
   );
 }
@@ -710,7 +724,9 @@ export function RunPage() {
       <section className="panel run-page">
         <p className="eyebrow">Run</p>
         <h2>Run Status</h2>
-        <p>Loading snapshot for <code>{runId}</code>...</p>
+        <p>
+          Loading snapshot for <code>{runId}</code>...
+        </p>
       </section>
     );
   }
