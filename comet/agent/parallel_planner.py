@@ -4,7 +4,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from ..executor.coverage_parser import CoverageParser
 from ..executor.java_executor import JavaExecutor
@@ -408,7 +408,7 @@ class ParallelPlannerAgent:
                 if coverage is not None:
                     result.method_coverage = coverage.line_coverage_rate
                 result.error = "测试生成失败"
-                logger.warning(f"测试生成失败")
+                logger.warning("测试生成失败")
                 return result
 
             # 处理变异体生成结果
@@ -420,7 +420,7 @@ class ParallelPlannerAgent:
                 if coverage is not None:
                     result.method_coverage = coverage.line_coverage_rate
                 # 没有变异体也算成功（可能方法太简单）
-                logger.info(f"没有生成变异体")
+                logger.info("没有生成变异体")
                 result.success = True
                 return result
 
@@ -569,7 +569,7 @@ class ParallelPlannerAgent:
             from ..executor.mutation_evaluator import MutationEvaluator
 
             evaluator = MutationEvaluator(self.java_executor, self.sandbox_manager)
-            kill_matrix = evaluator.build_kill_matrix(
+            evaluator.build_kill_matrix(
                 mutants=unevaluated,
                 test_cases=test_cases,
                 project_path=sandbox_path,

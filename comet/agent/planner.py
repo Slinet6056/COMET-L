@@ -140,7 +140,7 @@ class PlannerAgent:
                     )
 
                     if has_improvement:
-                        logger.info(f"检测到改进，重置无改进计数器")
+                        logger.info("检测到改进，重置无改进计数器")
                         no_improvement_count = 0
                         # 记录改进（使用全局指标）
                         self.state.add_improvement(

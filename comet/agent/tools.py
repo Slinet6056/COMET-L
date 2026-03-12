@@ -26,7 +26,7 @@ class AgentTools:
 
     def __init__(self):
         """初始化工具集"""
-        self.tools: Dict[str, Callable] = {}
+        self.tools: Dict[str, Callable[..., Any]] = {}
         self.metadata: Dict[str, ToolMetadata] = {}
 
         # 组件依赖（将在 main.py 中注入）
@@ -48,7 +48,7 @@ class AgentTools:
 
         self._register_default_tools()
 
-    def _get_formatting_config(self) -> tuple:
+    def _get_formatting_config(self) -> tuple[bool | None, str | None]:
         """
         获取格式化配置
 
@@ -177,7 +177,12 @@ class AgentTools:
             ),
         )
 
-    def register(self, name: str, func: Callable, metadata: Optional[ToolMetadata] = None) -> None:
+    def register(
+        self,
+        name: str,
+        func: Callable[..., Any],
+        metadata: Optional[ToolMetadata] = None,
+    ) -> None:
         """
         注册工具
 
@@ -235,7 +240,7 @@ class AgentTools:
                 params_str = json.dumps(meta.params, ensure_ascii=False, indent=2)
                 lines.append(f"   参数：{params_str}")
             else:
-                lines.append(f"   参数：无（空对象 {{}}）")
+                lines.append("   参数：无（空对象 {}）")
 
             # 使用时机
             if meta.when_to_use:
@@ -487,6 +492,7 @@ class AgentTools:
 
         sandbox_path = None
         sandbox_id = None
+        original_test_case = None
 
         try:
             # 1. 获取现有测试
@@ -667,9 +673,7 @@ class AgentTools:
                 "success": False,
                 "error": str(e),
                 "sandbox_id": sandbox_id,
-                "original_test_case": (
-                    original_test_case if "original_test_case" in locals() else None
-                ),
+                "original_test_case": original_test_case,
             }
 
     def _commit_test_to_workspace(self, test_case, sandbox_path: str) -> bool:
@@ -1079,7 +1083,7 @@ class AgentTools:
 
         return test_case
 
-    def _identify_timeout_methods(self, test_case, project_path: Optional[str] = None) -> set:
+    def _identify_timeout_methods(self, test_case, project_path: Optional[str] = None) -> set[str]:
         """
         通过逐个运行测试方法来识别导致超时的方法
 
@@ -1363,7 +1367,7 @@ class AgentTools:
         sandbox_id = result["sandbox_id"]
 
         # ===== 阶段2：原子性提交到主工作空间 =====
-        logger.info(f"测试在沙箱中验证通过，准备提交到主工作空间...")
+        logger.info("测试在沙箱中验证通过，准备提交到主工作空间...")
         if not self._commit_test_to_workspace(test_case, sandbox_path):
             # 提交失败，主空间仍保持原状
             logger.warning("✗ 提交测试到主工作空间失败")
@@ -1382,7 +1386,7 @@ class AgentTools:
             }
 
         # ===== 阶段3：保存到数据库（只有前两步成功后才执行） =====
-        logger.info(f"测试已提交到主工作空间，保存到数据库...")
+        logger.info("测试已提交到主工作空间，保存到数据库...")
         try:
             logger.debug(f"准备保存新生成的测试用例: ID={test_case.id}")
             self.db.save_test_case(test_case)
@@ -1502,7 +1506,7 @@ class AgentTools:
             current_method_coverage = coverage.line_coverage_rate
 
         # ===== 阶段2：原子性提交到主工作空间 =====
-        logger.info(f"测试在沙箱中验证通过，准备提交到主工作空间...")
+        logger.info("测试在沙箱中验证通过，准备提交到主工作空间...")
         if not self._commit_test_to_workspace(refined_test_case, sandbox_path):
             # 提交失败，主空间仍保持原状
             logger.warning("✗ 提交测试到主工作空间失败")
@@ -1521,7 +1525,7 @@ class AgentTools:
             }
 
         # ===== 阶段3：保存到数据库（只有前两步成功后才执行） =====
-        logger.info(f"测试已提交到主工作空间，保存到数据库...")
+        logger.info("测试已提交到主工作空间，保存到数据库...")
         try:
             logger.debug(f"准备保存完善后的测试用例: ID={refined_test_case.id}")
             self.db.save_test_case(refined_test_case)

@@ -1,12 +1,11 @@
 """目标选择器 - 选择待测试的类和方法"""
 
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..executor.java_executor import JavaExecutor
 from ..store.database import Database
-from ..utils.project_utils import find_java_files, get_all_java_classes
+from ..utils.project_utils import get_all_java_classes
 
 logger = logging.getLogger(__name__)
 
