@@ -1,9 +1,9 @@
 """核心数据模型定义"""
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Contract(BaseModel):
@@ -20,9 +20,6 @@ class Contract(BaseModel):
     source: str = Field(description="来源（如 javadoc、comments、tests）")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="置信度")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class Pattern(BaseModel):
@@ -41,9 +38,6 @@ class Pattern(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
 
 class MutationPatch(BaseModel):
     """变异补丁 - 描述如何修改代码"""
@@ -54,8 +48,7 @@ class MutationPatch(BaseModel):
     original_code: str = Field(description="原始代码")
     mutated_code: str = Field(description="变异后代码")
 
-    class Config:
-        validate_assignment = True
+    model_config = ConfigDict(validate_assignment=True)
 
 
 class Mutant(BaseModel):
@@ -75,12 +68,11 @@ class Mutant(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     evaluated_at: Optional[datetime] = Field(default=None, description="评估时间")
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
 
 class TestMethod(BaseModel):
     """测试方法 - 单个测试方法的信息"""
+
+    __test__: ClassVar[bool] = False
 
     method_name: str = Field(description="测试方法名")
     code: str = Field(description="测试方法代码")
@@ -88,12 +80,11 @@ class TestMethod(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
 
 class TestCase(BaseModel):
     """测试用例模型 - 描述一个测试类"""
+
+    __test__: ClassVar[bool] = False
 
     id: str = Field(description="测试用例 ID")
     class_name: str = Field(description="测试类名")
@@ -109,9 +100,6 @@ class TestCase(BaseModel):
     coverage_branches: List[str] = Field(default_factory=list, description="覆盖的分支")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class CoverageInfo(BaseModel):
@@ -137,9 +125,6 @@ class EvaluationResult(BaseModel):
     execution_time: float = Field(ge=0.0, description="执行时间（秒）")
     coverage: Optional[CoverageInfo] = Field(default=None, description="覆盖率信息")
     timestamp: datetime = Field(default_factory=datetime.now, description="时间戳")
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class KillMatrix(BaseModel):
@@ -182,9 +167,6 @@ class Metrics(BaseModel):
     branch_coverage: float = Field(default=0.0, ge=0.0, le=1.0, description="分支覆盖率")
     llm_calls: int = Field(default=0, ge=0, description="LLM 调用次数")
     timestamp: datetime = Field(default_factory=datetime.now, description="时间戳")
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
     def calculate_mutation_score(self) -> None:
         """计算变异分数"""

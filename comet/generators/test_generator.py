@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 class TestGenerator:
     """测试生成器 - 生成 JUnit5 测试方法（支持 RAG 增强）"""
 
+    __test__ = False
+
     def __init__(
         self,
         llm_client: LLMClient,
