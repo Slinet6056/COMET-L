@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """知识库管理 - 整合 RAG 功能"""
+
+from __future__ import annotations
 
 import logging
 import threading

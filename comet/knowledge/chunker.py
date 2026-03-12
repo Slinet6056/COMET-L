@@ -3,20 +3,22 @@
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# 尝试导入 tiktoken，如果失败则使用简单的字符计数
-try:
-    import tiktoken
 
-    _tokenizer = tiktoken.get_encoding("cl100k_base")
-    HAS_TIKTOKEN = True
-except ImportError:
-    _tokenizer = None
-    HAS_TIKTOKEN = False
-    logger.warning("tiktoken 未安装，将使用字符计数代替 token 计数")
+def _init_tokenizer() -> tuple[Any, bool]:
+    try:
+        import tiktoken
+
+        return tiktoken.get_encoding("cl100k_base"), True
+    except ImportError:
+        logger.warning("tiktoken 未安装，将使用字符计数代替 token 计数")
+        return None, False
+
+
+_tokenizer, HAS_TIKTOKEN = _init_tokenizer()
 
 
 def count_tokens(text: str) -> int:
@@ -68,7 +70,7 @@ class ChunkingStrategy:
         self.max_tokens = max_tokens
         self.overlap_tokens = overlap_tokens
 
-    def chunk(self, text: str, metadata: Dict[str, Any] = None) -> List[TextChunk]:
+    def chunk(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> List[TextChunk]:
         """
         将文本分块
 
@@ -85,7 +87,7 @@ class ChunkingStrategy:
 class SimpleChunker(ChunkingStrategy):
     """简单分块器 - 按固定大小分块"""
 
-    def chunk(self, text: str, metadata: Dict[str, Any] = None) -> List[TextChunk]:
+    def chunk(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> List[TextChunk]:
         """按固定 token 数量分块"""
         metadata = metadata or {}
         chunks = []
@@ -162,7 +164,7 @@ class SimpleChunker(ChunkingStrategy):
 class CodeChunker(ChunkingStrategy):
     """代码分块器 - 按代码结构分块"""
 
-    def chunk(self, text: str, metadata: Dict[str, Any] = None) -> List[TextChunk]:
+    def chunk(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> List[TextChunk]:
         """按代码结构分块"""
         metadata = metadata or {}
         chunks = []
@@ -195,7 +197,6 @@ class CodeChunker(ChunkingStrategy):
         method_pattern = r"((?:public|private|protected|static|\s)*\s*\w+\s+\w+\s*\([^)]*\)\s*(?:throws\s+[\w,\s]+)?\s*\{)"
 
         methods = []
-        current_pos = 0
 
         for match in re.finditer(method_pattern, text):
             method_start = match.start()
@@ -412,7 +413,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
         return "\n".join(parts)
 
     def _format_null_checks(
-        self, null_checks: List[Dict], class_name: str, method_name: str
+        self, null_checks: List[Dict[str, Any]], class_name: str, method_name: str
     ) -> str:
         """格式化 Null 检查信息"""
         parts = [
@@ -428,7 +429,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
         return "\n".join(parts)
 
     def _format_boundary_checks(
-        self, boundary_checks: List[Dict], class_name: str, method_name: str
+        self, boundary_checks: List[Dict[str, Any]], class_name: str, method_name: str
     ) -> str:
         """格式化边界检查信息"""
         parts = [
@@ -447,7 +448,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
         return "\n".join(parts)
 
     def _format_exception_handling(
-        self, exception_info: Dict, class_name: str, method_name: str
+        self, exception_info: Dict[str, Any], class_name: str, method_name: str
     ) -> str:
         """格式化异常处理信息"""
         parts = [
@@ -477,7 +478,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
         return "\n".join(parts)
 
     def _format_method_calls(
-        self, method_calls: List[Dict], class_name: str, method_name: str
+        self, method_calls: List[Dict[str, Any]], class_name: str, method_name: str
     ) -> str:
         """格式化方法调用信息"""
         parts = [
@@ -486,7 +487,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
         ]
 
         # 按 scope 分组
-        by_scope: Dict[str, List[Dict]] = {}
+        by_scope: Dict[str, List[Dict[str, Any]]] = {}
         for call in method_calls:
             scope = call.get("scope", "this")
             if scope not in by_scope:
