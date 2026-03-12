@@ -62,6 +62,21 @@ class LogRouterTests(unittest.TestCase):
             self.assertEqual(worker_messages, ["worker only"])
             self.assertNotIn("main only", worker_messages)
 
+    def test_configured_log_format_keeps_only_time_level_and_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = Path(tmp_dir) / "run.log"
+            configure_logging(str(log_path), console_stream=io.StringIO())
+
+            logger = logging.getLogger("comet.agent.parallel_planner")
+            with log_context("Worker:Calculator.add"):
+                logger.info("trimmed prefix")
+
+            log_line = log_path.read_text(encoding="utf-8").strip()
+
+            self.assertRegex(log_line, r"^\d{2}:\d{2}:\d{2} INFO trimmed prefix$")
+            self.assertNotIn("comet.agent.parallel_planner", log_line)
+            self.assertNotIn("Worker:Calculator.add", log_line)
+
     def test_per_task_buffers_are_bounded(self) -> None:
         router = RunLogRouter(max_entries_per_stream=2)
 

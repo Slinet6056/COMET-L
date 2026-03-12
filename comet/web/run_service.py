@@ -16,7 +16,8 @@ from comet.utils.log_context import ContextFilter
 from comet.web.log_router import RunLogRouter
 from comet.web.runtime_protocol import RuntimeEventBus, build_run_snapshot
 
-LOG_FORMAT = "%(asctime)s - [%(task_id)s] %(name)s - %(levelname)s - %(message)s"
+LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+LOG_DATE_FORMAT = "%H:%M:%S"
 
 
 SystemInitializer = Callable[..., dict[str, Any]]
@@ -43,29 +44,25 @@ class ColoredFormatter(logging.Formatter):
         logging.CRITICAL: f"{BOLD}{RED}",
     }
 
+    def __init__(self, fmt: str, datefmt: str | None = None) -> None:
+        super().__init__(fmt=fmt, datefmt=datefmt)
+
     def format(self, record: logging.LogRecord) -> str:
         original_levelname = record.levelname
-        original_name = record.name
-        original_task_id = getattr(record, "task_id", "main")
         level_color = self.LEVEL_COLORS.get(record.levelno, "")
+        timestamp = self.formatTime(record, self.datefmt)
 
         if level_color:
             record.levelname = f"{level_color}{record.levelname}{self.RESET}"
 
-        record.task_id = f"{self.MAGENTA}{original_task_id}{self.RESET}"
-        record.name = f"{self.BLUE}{record.name}{self.RESET}"
-
         try:
             formatted = super().format(record)
-            if formatted and len(formatted) > 23:
-                timestamp = formatted[:23]
-                rest = formatted[23:]
+            if timestamp and formatted.startswith(timestamp):
+                rest = formatted[len(timestamp) :]
                 formatted = f"{self.BRIGHT_BLACK}{timestamp}{self.RESET}{rest}"
             return formatted
         finally:
             record.levelname = original_levelname
-            record.name = original_name
-            record.task_id = original_task_id
 
 
 @dataclass(slots=True)
@@ -927,12 +924,12 @@ def configure_logging(
 
     file_handler = logging.FileHandler(resolved_log_file, encoding="utf-8")
     file_handler.__dict__["_comet_managed"] = True
-    file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
     file_handler.addFilter(context_filter)
 
     console_handler = logging.StreamHandler(console_stream or sys.stdout)
     console_handler.__dict__["_comet_managed"] = True
-    console_handler.setFormatter(ColoredFormatter(LOG_FORMAT))
+    console_handler.setFormatter(ColoredFormatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
     console_handler.addFilter(context_filter)
 
     root_logger = logging.getLogger()
