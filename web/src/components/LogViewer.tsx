@@ -15,6 +15,7 @@ type LogViewerProps = {
 };
 
 const LIVE_LOG_POLL_MS = 1000;
+const AUTO_SCROLL_THRESHOLD_PX = 24;
 function formatTaskLabel(taskId: string): string {
   return taskId === 'main' ? 'main' : taskId;
 }
@@ -233,6 +234,10 @@ function getStreamEnd(stream: RunLogStream, now: number): number | null {
   );
 }
 
+function isPanelNearBottom(panel: HTMLDivElement): boolean {
+  return panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= AUTO_SCROLL_THRESHOLD_PX;
+}
+
 export function LogViewer({ runId, runStatus }: LogViewerProps) {
   const [streams, setStreams] = useState<RunLogStreamsSummary | null>(null);
   const [isSummaryLoading, setIsSummaryLoading] = useState(true);
@@ -243,7 +248,33 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
   const [loadingByTaskId, setLoadingByTaskId] = useState<Record<string, boolean>>({});
   const [errorByTaskId, setErrorByTaskId] = useState<Record<string, string | null>>({});
   const logPanelRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const latestStreamsRef = useRef<RunLogStreamsSummary | null>(null);
+  const previousEntryCountByTaskId = useRef<Record<string, number>>({});
+  const shouldAutoScrollByTaskId = useRef<Record<string, boolean>>({});
   const isLiveRun = runStatus !== 'completed' && runStatus !== 'failed';
+
+  useEffect(() => {
+    if (runId.length === 0) {
+      return;
+    }
+
+    setStreams(null);
+    setIsSummaryLoading(true);
+    setSummaryError(null);
+    setExpandedTaskIds({});
+    setEntriesByTaskId({});
+    setStreamByTaskId({});
+    setLoadingByTaskId({});
+    setErrorByTaskId({});
+    logPanelRefs.current = {};
+    latestStreamsRef.current = null;
+    previousEntryCountByTaskId.current = {};
+    shouldAutoScrollByTaskId.current = {};
+  }, [runId]);
+
+  useEffect(() => {
+    latestStreamsRef.current = streams;
+  }, [streams]);
 
   useEffect(() => {
     let active = true;
@@ -331,9 +362,10 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
   }, [runStatus, streams, taskIds]);
 
   const expandedStreamIds = useMemo(
-    () => taskIds.filter((taskId) => expandedTaskIds[taskId]),
+    () => taskIds.filter((taskId) => expandedTaskIds[taskId]).sort(),
     [expandedTaskIds, taskIds],
   );
+  const expandedStreamIdsKey = useMemo(() => JSON.stringify(expandedStreamIds), [expandedStreamIds]);
 
   const now = Date.now();
   const axisRange = useMemo(() => {
@@ -353,7 +385,9 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
   }, [now, streamItems]);
 
   useEffect(() => {
-    if (isSummaryLoading || summaryError || expandedStreamIds.length === 0) {
+    const expandedIds = JSON.parse(expandedStreamIdsKey) as string[];
+
+    if (isSummaryLoading || expandedIds.length === 0) {
       return;
     }
 
@@ -364,7 +398,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
       if (showLoading) {
         setLoadingByTaskId((current) => {
           const next = { ...current };
-          expandedStreamIds.forEach((taskId) => {
+          expandedIds.forEach((taskId) => {
             next[taskId] = true;
           });
           return next;
@@ -375,7 +409,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
         | { taskId: string; response: RunLogsStreamResponse }
         | { taskId: string; error: string }
       > = await Promise.all(
-        expandedStreamIds.map(async (taskId) => {
+        expandedIds.map(async (taskId) => {
           try {
             const response = await fetchRunLogsForTask(runId, taskId);
             return { taskId, response };
@@ -409,7 +443,8 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
         const next = { ...current };
         responses.forEach((result) => {
           if ('response' in result) {
-            next[result.taskId] = result.response.stream ?? streams?.byTaskId[result.taskId] ?? null;
+            next[result.taskId] =
+              result.response.stream ?? latestStreamsRef.current?.byTaskId[result.taskId] ?? null;
           }
         });
         return next;
@@ -425,7 +460,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
 
       setLoadingByTaskId((current) => {
         const next = { ...current };
-        expandedStreamIds.forEach((taskId) => {
+        expandedIds.forEach((taskId) => {
           next[taskId] = false;
         });
         return next;
@@ -446,15 +481,27 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
         window.clearInterval(intervalId);
       }
     };
-  }, [expandedStreamIds, isLiveRun, isSummaryLoading, runId, streams, summaryError]);
+  }, [expandedStreamIdsKey, isLiveRun, isSummaryLoading, runId]);
 
   useEffect(() => {
     expandedStreamIds.forEach((taskId) => {
       const panel = logPanelRefs.current[taskId];
       const entryCount = entriesByTaskId[taskId]?.length ?? 0;
-      if (panel && !loadingByTaskId[taskId] && entryCount >= 0) {
-        panel.scrollTop = panel.scrollHeight;
+
+      if (!panel || loadingByTaskId[taskId]) {
+        return;
       }
+
+      const previousEntryCount = previousEntryCountByTaskId.current[taskId] ?? 0;
+      const shouldAutoScroll =
+        previousEntryCount === 0 || (shouldAutoScrollByTaskId.current[taskId] ?? false);
+
+      if (shouldAutoScroll && entryCount >= 0) {
+        panel.scrollTop = panel.scrollHeight;
+        shouldAutoScrollByTaskId.current[taskId] = true;
+      }
+
+      previousEntryCountByTaskId.current[taskId] = entryCount;
     });
   }, [entriesByTaskId, expandedStreamIds, loadingByTaskId]);
 
@@ -481,7 +528,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
       {isSummaryLoading ? <p className="muted-copy">正在加载日志流...</p> : null}
       {!isSummaryLoading && summaryError ? <p role="alert">{summaryError}</p> : null}
 
-      {!isSummaryLoading && !summaryError ? (
+      {!isSummaryLoading && streams ? (
         <>
           <div className="run-log-timeline">
             <div className="run-log-timeline__axis" aria-hidden="true">
@@ -494,7 +541,12 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
               {streamItems.map((stream) => {
                 const isExpanded = Boolean(expandedTaskIds[stream.taskId]);
                 const panelId = `run-log-panel-${stream.taskId}`;
-                const resolvedStream = streamByTaskId[stream.taskId] ?? stream;
+                const detailStream = streamByTaskId[stream.taskId] ?? null;
+                const resolvedStream = detailStream ?? stream;
+                const rowStream = {
+                  ...stream,
+                  status: normalizeStreamStatus(stream, runStatus),
+                };
                 const displayStream = {
                   ...resolvedStream,
                   status: normalizeStreamStatus(resolvedStream, runStatus),
@@ -503,8 +555,8 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                 const isEntriesLoading = loadingByTaskId[stream.taskId] ?? false;
                 const entryError = errorByTaskId[stream.taskId];
                 const emptyState = getEmptyStateCopy(displayStream, runStatus);
-                const start = toMillis(displayStream.startedAt);
-                const end = getStreamEnd(displayStream, now);
+                const start = toMillis(rowStream.startedAt);
+                const end = getStreamEnd(rowStream, now);
                 const hasBar = axisRange.min !== null && start !== null && end !== null;
                 const offset = hasBar ? ((start - axisRange.min) / axisRange.span) * 100 : 0;
                 const width = hasBar ? Math.max(((end - start) / axisRange.span) * 100, 0.6) : 0;
@@ -520,15 +572,15 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                     >
                       <span className="run-log-row__info">
                         <span className="run-log-row__title">
-                          <strong title={displayStream.taskId}>{formatTaskLabel(displayStream.taskId)}</strong>
-                          <span className={`worker-pill worker-pill--${getStreamStatusTone(displayStream.status)}`}>
-                            {formatStatusLabel(displayStream.status)}
+                          <strong title={rowStream.taskId}>{formatTaskLabel(rowStream.taskId)}</strong>
+                          <span className={`worker-pill worker-pill--${getStreamStatusTone(rowStream.status)}`}>
+                            {formatStatusLabel(rowStream.status)}
                           </span>
                         </span>
                         <span className="run-log-row__stats">
-                          <span>{getStreamLogStateLabel(displayStream, runStatus)}</span>
-                          <span>{formatStreamDuration(displayStream, runStatus)}</span>
-                          <span>{displayStream.taskId === 'main' ? '主协调器' : '工作线程'}</span>
+                          <span>{getStreamLogStateLabel(rowStream, runStatus)}</span>
+                          <span>{formatStreamDuration(rowStream, runStatus)}</span>
+                          <span>{rowStream.taskId === 'main' ? '主协调器' : '工作线程'}</span>
                         </span>
                       </span>
 
@@ -561,6 +613,11 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                               role="log"
                               aria-live="polite"
                               aria-label={`${displayStream.taskId} 的日志条目`}
+                              onScroll={(event) => {
+                                shouldAutoScrollByTaskId.current[stream.taskId] = isPanelNearBottom(
+                                  event.currentTarget,
+                                );
+                              }}
                             >
                               {entries.map((entry) => (
                                 <div key={`${entry.taskId}-${entry.sequence}`} className="run-log-line">

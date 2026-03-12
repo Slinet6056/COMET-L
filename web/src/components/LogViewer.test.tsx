@@ -1,9 +1,80 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LogViewer } from './LogViewer';
 import * as api from '../lib/api';
+
+function buildSummary(runId: string) {
+  return {
+    runId,
+    streams: {
+      taskIds: ['main'],
+      counts: { main: 2 },
+      maxEntriesPerStream: 50,
+      items: [
+        {
+          taskId: 'main',
+          order: 0,
+          status: 'running',
+          startedAt: '2026-03-10T10:00:00Z',
+          completedAt: null,
+          endedAt: null,
+          durationSeconds: null,
+          firstEntryAt: '2026-03-10T10:00:00Z',
+          lastEntryAt: '2026-03-10T10:00:01Z',
+          bufferedEntryCount: 2,
+          totalEntryCount: 2,
+        },
+      ],
+      byTaskId: {
+        main: {
+          taskId: 'main',
+          order: 0,
+          status: 'running',
+          startedAt: '2026-03-10T10:00:00Z',
+          completedAt: null,
+          endedAt: null,
+          durationSeconds: null,
+          firstEntryAt: '2026-03-10T10:00:00Z',
+          lastEntryAt: '2026-03-10T10:00:01Z',
+          bufferedEntryCount: 2,
+          totalEntryCount: 2,
+        },
+      },
+    },
+  };
+}
+
+function buildStreamResponse(messages: string[]) {
+  return {
+    runId: 'run-logs-live',
+    taskId: 'main',
+    availableTaskIds: ['main'],
+    maxEntriesPerStream: 50,
+    stream: {
+      taskId: 'main',
+      order: 0,
+      status: 'running',
+      startedAt: '2026-03-10T10:00:00Z',
+      completedAt: null,
+      endedAt: null,
+      durationSeconds: null,
+      firstEntryAt: '2026-03-10T10:00:00Z',
+      lastEntryAt: '2026-03-10T10:00:01Z',
+      bufferedEntryCount: messages.length,
+      totalEntryCount: messages.length,
+    },
+    entries: messages.map((message, index) => ({
+      sequence: index + 1,
+      timestamp: `2026-03-10T10:00:0${index}Z`,
+      taskId: 'main',
+      logger: 'comet.main',
+      level: 'INFO',
+      message,
+    })),
+  };
+}
 
 describe('Log viewer', () => {
   beforeEach(() => {
@@ -155,8 +226,8 @@ describe('Log viewer', () => {
     expect(await screen.findByText('worker log line')).toBeInTheDocument();
     expect(screen.getByText('main log line')).toBeInTheDocument();
     expect(workerButton).toHaveAttribute('aria-expanded', 'true');
-    expect(fetchRunLogsForTaskSpy).toHaveBeenNthCalledWith(1, 'run-logs-1', 'main');
-    expect(fetchRunLogsForTaskSpy).toHaveBeenNthCalledWith(2, 'run-logs-1', 'task-7');
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-1', 'main');
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-1', 'task-7');
   });
 
   it('gracefully degrades when only the main stream exists and it is empty', async () => {
@@ -732,4 +803,427 @@ describe('Log viewer', () => {
       expect(buttons[3]).toHaveTextContent('task-failed');
     },
   );
+
+  it('keeps expanded logs visible during unchanged summary polling', async () => {
+    vi.useFakeTimers();
+
+    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () => buildSummary('run-logs-live'));
+
+    let resolveDetailPoll: ((value: ReturnType<typeof buildStreamResponse>) => void) | null = null;
+    const fetchRunLogsForTaskSpy = vi
+      .spyOn(api, 'fetchRunLogsForTask')
+      .mockImplementationOnce(async () => buildStreamResponse(['first line']))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveDetailPoll = resolve;
+          }),
+      );
+
+    render(<LogViewer runId="run-logs-live" runStatus="running" />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const mainButton = screen.getByRole('button', { name: /main/i });
+    fireEvent.click(mainButton);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('first line')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('first line')).toBeInTheDocument();
+    expect(screen.queryByText('正在加载日志条目...')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveDetailPoll?.(buildStreamResponse(['first line', 'second line']));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('second line')).toBeInTheDocument();
+  });
+
+  it('preserves manual upward scroll and still tail-follows near the bottom', async () => {
+    vi.useFakeTimers();
+
+    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () => buildSummary('run-logs-live'));
+
+    const fetchRunLogsForTaskSpy = vi
+      .spyOn(api, 'fetchRunLogsForTask')
+      .mockResolvedValueOnce(buildStreamResponse(['first line', 'second line']))
+      .mockResolvedValueOnce(buildStreamResponse(['first line', 'second line', 'third line']))
+      .mockResolvedValueOnce(
+        buildStreamResponse(['first line', 'second line', 'third line', 'fourth line']),
+      );
+
+    render(<LogViewer runId="run-logs-live" runStatus="running" />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const mainButton = screen.getByRole('button', { name: /main/i });
+    fireEvent.click(mainButton);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const panel = screen.getByRole('log', { name: 'main 的日志条目' });
+    let scrollHeight = 300;
+    Object.defineProperty(panel, 'clientHeight', {
+      configurable: true,
+      get: () => 100,
+    });
+    Object.defineProperty(panel, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight,
+    });
+
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
+
+    panel.scrollTop = 40;
+    fireEvent.scroll(panel);
+    scrollHeight = 360;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('third line')).toBeInTheDocument();
+    expect(panel.scrollTop).toBe(40);
+
+    panel.scrollTop = 348;
+    fireEvent.scroll(panel);
+    scrollHeight = 420;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('fourth line')).toBeInTheDocument();
+    expect(panel.scrollTop).toBe(420);
+  });
+
+  it('keeps rendered logs visible when summary polling fails after initial load', async () => {
+    vi.useFakeTimers();
+
+    const fetchRunLogsSpy = vi
+      .spyOn(api, 'fetchRunLogs')
+      .mockResolvedValueOnce(buildSummary('run-logs-live'))
+      .mockRejectedValueOnce(new Error('summary poll failed'));
+    vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue(buildStreamResponse(['first line']));
+
+    render(<LogViewer runId="run-logs-live" runStatus="running" />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /main/i }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('first line')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(fetchRunLogsSpy).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('first line')).toBeInTheDocument();
+    expect(screen.getByRole('log', { name: 'main 的日志条目' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('summary poll failed');
+  });
+
+  it('updates row status from summary polling even after detail data was cached', async () => {
+    vi.useFakeTimers();
+
+    let summaryCalls = 0;
+    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () => {
+      summaryCalls += 1;
+
+      return {
+        runId: 'run-logs-status',
+        streams: {
+          taskIds: ['main'],
+          counts: { main: 1 },
+          maxEntriesPerStream: 50,
+          items: [
+            {
+              taskId: 'main',
+              order: 0,
+              status: summaryCalls === 1 ? 'running' : 'completed',
+              startedAt: '2026-03-10T10:00:00Z',
+              completedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
+              endedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
+              durationSeconds: summaryCalls === 1 ? null : 5,
+              firstEntryAt: '2026-03-10T10:00:00Z',
+              lastEntryAt: '2026-03-10T10:00:05Z',
+              bufferedEntryCount: 1,
+              totalEntryCount: 1,
+            },
+          ],
+          byTaskId: {
+            main: {
+              taskId: 'main',
+              order: 0,
+              status: summaryCalls === 1 ? 'running' : 'completed',
+              startedAt: '2026-03-10T10:00:00Z',
+              completedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
+              endedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
+              durationSeconds: summaryCalls === 1 ? null : 5,
+              firstEntryAt: '2026-03-10T10:00:00Z',
+              lastEntryAt: '2026-03-10T10:00:05Z',
+              bufferedEntryCount: 1,
+              totalEntryCount: 1,
+            },
+          },
+        },
+      };
+    });
+    const fetchRunLogsForTaskSpy = vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue({
+      runId: 'run-logs-status',
+      taskId: 'main',
+      availableTaskIds: ['main'],
+      maxEntriesPerStream: 50,
+      stream: {
+        taskId: 'main',
+        order: 0,
+        status: 'running',
+        startedAt: '2026-03-10T10:00:00Z',
+        completedAt: null,
+        endedAt: null,
+        durationSeconds: null,
+        firstEntryAt: '2026-03-10T10:00:00Z',
+        lastEntryAt: '2026-03-10T10:00:00Z',
+        bufferedEntryCount: 1,
+        totalEntryCount: 1,
+      },
+      entries: [
+        {
+          sequence: 1,
+          timestamp: '2026-03-10T10:00:00Z',
+          taskId: 'main',
+          logger: 'comet.main',
+          level: 'INFO',
+          message: 'cached line',
+        },
+      ],
+    });
+
+    render(<LogViewer runId="run-logs-status" runStatus="running" />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('button', { name: /main/i })).toHaveTextContent('运行中');
+
+    const mainButton = screen.getByRole('button', { name: /main/i });
+    fireEvent.click(mainButton);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('cached line')).toBeInTheDocument();
+
+    fireEvent.click(mainButton);
+    expect(mainButton).toHaveAttribute('aria-expanded', 'false');
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('button', { name: /main/i })).toHaveTextContent('已完成');
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('updates timeline bar width from summary polling even after detail data was cached', async () => {
+    vi.useFakeTimers();
+
+    let summaryCalls = 0;
+    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () => {
+      summaryCalls += 1;
+
+      return {
+        runId: 'run-logs-timeline',
+        streams: {
+          taskIds: ['main', 'task-2'],
+          counts: { main: 1, 'task-2': 1 },
+          maxEntriesPerStream: 50,
+          items: [
+            {
+              taskId: 'main',
+              order: 0,
+              status: summaryCalls === 1 ? 'running' : 'completed',
+              startedAt: '2026-03-10T10:00:00Z',
+              completedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
+              endedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
+              durationSeconds: summaryCalls === 1 ? null : 5,
+              firstEntryAt: '2026-03-10T10:00:00Z',
+              lastEntryAt: summaryCalls === 1 ? '2026-03-10T10:00:02Z' : '2026-03-10T10:00:05Z',
+              bufferedEntryCount: 1,
+              totalEntryCount: 1,
+            },
+            {
+              taskId: 'task-2',
+              order: 1,
+              status: 'running',
+              startedAt: '2026-03-10T10:00:00Z',
+              completedAt: null,
+              endedAt: null,
+              durationSeconds: null,
+              firstEntryAt: '2026-03-10T10:00:00Z',
+              lastEntryAt: '2026-03-10T10:00:10Z',
+              bufferedEntryCount: 1,
+              totalEntryCount: 1,
+            },
+          ],
+          byTaskId: {
+            main: {
+              taskId: 'main',
+              order: 0,
+              status: summaryCalls === 1 ? 'running' : 'completed',
+              startedAt: '2026-03-10T10:00:00Z',
+              completedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
+              endedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
+              durationSeconds: summaryCalls === 1 ? null : 5,
+              firstEntryAt: '2026-03-10T10:00:00Z',
+              lastEntryAt: summaryCalls === 1 ? '2026-03-10T10:00:02Z' : '2026-03-10T10:00:05Z',
+              bufferedEntryCount: 1,
+              totalEntryCount: 1,
+            },
+            'task-2': {
+              taskId: 'task-2',
+              order: 1,
+              status: 'running',
+              startedAt: '2026-03-10T10:00:00Z',
+              completedAt: null,
+              endedAt: null,
+              durationSeconds: null,
+              firstEntryAt: '2026-03-10T10:00:00Z',
+              lastEntryAt: '2026-03-10T10:00:10Z',
+              bufferedEntryCount: 1,
+              totalEntryCount: 1,
+            },
+          },
+        },
+      };
+    });
+
+    const fetchRunLogsForTaskSpy = vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue({
+      runId: 'run-logs-timeline',
+      taskId: 'main',
+      availableTaskIds: ['main', 'task-2'],
+      maxEntriesPerStream: 50,
+      stream: {
+        taskId: 'main',
+        order: 0,
+        status: 'running',
+        startedAt: '2026-03-10T10:00:00Z',
+        completedAt: null,
+        endedAt: null,
+        durationSeconds: null,
+        firstEntryAt: '2026-03-10T10:00:00Z',
+        lastEntryAt: '2026-03-10T10:00:02Z',
+        bufferedEntryCount: 1,
+        totalEntryCount: 1,
+      },
+      entries: [
+        {
+          sequence: 1,
+          timestamp: '2026-03-10T10:00:00Z',
+          taskId: 'main',
+          logger: 'comet.main',
+          level: 'INFO',
+          message: 'cached line',
+        },
+      ],
+    });
+
+    render(<LogViewer runId="run-logs-timeline" runStatus="running" />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const mainButton = screen.getByRole('button', { name: /main/i });
+    const initialBar = mainButton.querySelector('.run-log-row__bar');
+    expect(initialBar).not.toBeNull();
+    expect(initialBar).toHaveAttribute('style', expect.stringContaining('width: 20%'));
+
+    fireEvent.click(mainButton);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('cached line')).toBeInTheDocument();
+    fireEvent.click(mainButton);
+    expect(mainButton).toHaveAttribute('aria-expanded', 'false');
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.resolve();
+    });
+
+    const updatedBar = screen
+      .getByRole('button', { name: /main/i })
+      .querySelector('.run-log-row__bar');
+    expect(updatedBar).not.toBeNull();
+    expect(updatedBar).toHaveAttribute('style', expect.stringContaining('width: 50%'));
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears expanded log state when the run id changes', async () => {
+    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async (requestedRunId) => buildSummary(requestedRunId));
+    vi.spyOn(api, 'fetchRunLogsForTask').mockImplementation(async (_runId, taskId) => ({
+      ...buildStreamResponse(['first line']),
+      taskId,
+    }));
+
+    const view = render(<LogViewer runId="run-logs-live" runStatus="running" />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /main/i }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('first line')).toBeInTheDocument();
+
+    view.rerender(<LogViewer runId="run-logs-next" runStatus="running" />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('first line')).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /main/i })).toHaveAttribute('aria-expanded', 'false');
+  });
 });
