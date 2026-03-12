@@ -5,9 +5,23 @@
 
 import logging
 import re
-from typing import Dict, List, Optional, Set
+from typing import Any, List, Optional, Protocol, Set, TypedDict, cast
+
+from javalang.parse import parse as parse_java
+from javalang.tree import MethodDeclaration
 
 logger = logging.getLogger(__name__)
+
+
+class JavaClassInfo(TypedDict):
+    package: str | None
+    class_name: str | None
+    is_public: bool
+
+
+class SupportsGeneratedTestMethod(Protocol):
+    method_name: str
+    code: str
 
 
 def extract_imports(java_code: str) -> List[str]:
@@ -25,7 +39,7 @@ def extract_imports(java_code: str) -> List[str]:
     return [imp.strip() for imp in imports]
 
 
-def parse_java_class(java_code: str) -> Dict[str, Optional[str]]:
+def parse_java_class(java_code: str) -> JavaClassInfo:
     """
     解析 Java 类的基本信息
 
@@ -35,7 +49,7 @@ def parse_java_class(java_code: str) -> Dict[str, Optional[str]]:
     Returns:
         包含类名、包名等信息的字典
     """
-    result = {
+    result: JavaClassInfo = {
         "package": None,
         "class_name": None,
         "is_public": False,
@@ -157,7 +171,7 @@ def build_test_class(
     return "\n".join(lines)
 
 
-def validate_test_methods(methods: list, class_code: str) -> Set[str]:
+def validate_test_methods(methods: list[SupportsGeneratedTestMethod], class_code: str) -> Set[str]:
     """
     验证测试方法代码，检查是否包含明显的错误模式
     使用 javalang 静态分析源代码中的 public 方法，然后检查测试代码是否调用了不存在的方法
@@ -174,13 +188,14 @@ def validate_test_methods(methods: list, class_code: str) -> Set[str]:
     # 使用javalang提取被测类的所有public方法
     public_methods: Set[str] = set()
     try:
-        import javalang
+        tree = parse_java(class_code)
 
-        tree = javalang.parse.parse(class_code)
-
-        for path, node in tree.filter(javalang.tree.MethodDeclaration):  # type: ignore
-            if "public" in node.modifiers:  # type: ignore
-                public_methods.add(node.name)  # type: ignore
+        for _, node in tree.filter(MethodDeclaration):
+            method_node = cast(MethodDeclaration, node)
+            modifiers = getattr(method_node, "modifiers", set())
+            method_name = getattr(method_node, "name", None)
+            if "public" in modifiers and isinstance(method_name, str):
+                public_methods.add(method_name)
 
         logger.debug(f"被测类的public方法（使用javalang）: {public_methods}")
     except Exception as e:

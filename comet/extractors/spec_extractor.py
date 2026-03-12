@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from ..executor.java_executor import JavaExecutor
 from ..llm.client import LLMClient
@@ -73,7 +73,7 @@ class SpecExtractor:
             method_name = method_signature.split("(")[0].strip().split()[-1]
 
             # 规范化列表字段（LLM 可能返回字典或字符串）
-            def normalize_list(items: list) -> List[str]:
+            def normalize_list(items: list[Any]) -> List[str]:
                 """将列表中的项转换为字符串"""
                 result = []
                 for item in items:
