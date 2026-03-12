@@ -31,27 +31,32 @@ COMET-L 是一个创新的测试生成系统，通过测试生成器和变异生
 - Python 3.11+
 - Java 25+（用于运行 COMET-L 与 Java Runtime）
 - Maven 3.6+
+- just（推荐，作为统一开发入口）
 - 目标项目可为 Java 8+（系统默认按 Java 8 语法生成测试，以兼容 JDK8 项目）
 
 ### 安装
 
 ```bash
-# 使用 uv 同步 Python 依赖（会根据 pyproject.toml + uv.lock 创建/更新 .venv）
-uv sync
+# 推荐：一键完成 Python 依赖同步、Web 依赖安装和 Java Runtime 构建
+just setup
 
-# 构建 Java 运行时模块
-cd java-runtime
-mvn clean package
-cd ..
+# 或者按需分步执行
+just sync
+just web-install
+just runtime-build
 ```
+
+底层命令仍然可用：`uv sync`、`pnpm --dir web install`、`mvn clean package -f java-runtime/pom.xml`。
 
 ### 配置
 
 复制配置模板并填入您的设置：
 
 ```bash
-cp config.example.yaml config.yaml
+just config-init
 ```
+
+如果目标文件已存在，`just config-init` 不会覆盖；你也可以继续手动执行 `cp config.example.yaml config.yaml`。
 
 编辑 `config.yaml`，配置 LLM API：
 
@@ -79,13 +84,29 @@ execution:
 对任意 Maven 项目运行协同进化：
 
 ```bash
-uv run python main.py --project-path /path/to/your/java/project
+just run /path/to/your/java/project
 ```
 
 使用示例项目测试：
 
 ```bash
-uv run python main.py --project-path examples/calculator-demo
+just run
+```
+
+更多常用运行方式：
+
+```bash
+# 调试模式
+just run-debug examples/calculator-demo
+
+# 指定配置文件
+just run-config examples/calculator-demo config.yaml
+
+# 指定 LLM 调用预算
+just run-budget examples/calculator-demo 500
+
+# 并行模式
+just run-parallel examples/calculator-demo 8
 ```
 
 ## Web 控制台
@@ -95,29 +116,63 @@ uv run python main.py --project-path examples/calculator-demo
 Web 控制台当前采用“前端先构建、后端托管静态资源”的本地工作流。请在仓库根目录执行：
 
 ```bash
-pnpm --dir web install
-pnpm --dir web build
-uv run uvicorn comet.web.app:app --reload
+just web-install
+just web-build
+just web-serve
 ```
 
 启动后访问 `http://127.0.0.1:8000/`，后端会在生产形态下自动挂载 `web/dist`，并同时继续提供 `/api/*` 接口。
 
-如果只想单独调试前端组件，也可以运行 `pnpm --dir web dev`；但当前仓库默认没有为 Vite dev server 配置 API 代理，因此完整联调仍建议以上述“build + backend”方式进行。
+如果只想单独调试前端组件，也可以运行 `just web-dev`；但当前仓库默认没有为 Vite dev server 配置 API 代理，因此完整联调仍建议以上述“build + backend”方式进行。
 
 ### Web 测试命令
 
 ```bash
 # 结果页定向回归
-pnpm --dir web test -- --run ResultsPage.test.tsx
+just test-web ResultsPage.test.tsx
 
 # 前端生产构建
-pnpm --dir web build
+just web-build
 ```
 
 如需运行后端 API 测试，可使用：
 
 ```bash
-uv run python -m unittest tests.test_web_api
+just test-web-api
+```
+
+## 常用 just 命令
+
+仓库已经内置 `justfile`，日常开发优先使用 `just`：
+
+```bash
+# 查看可用命令
+just
+
+# 环境与构建
+just setup
+just sync
+just web-install
+just runtime-build
+
+# 运行 COMET-L
+just run
+just run-debug examples/calculator-demo
+just run-config examples/calculator-demo config.yaml
+just run-budget examples/calculator-demo 500
+just run-parallel examples/calculator-demo 8
+
+# Web 开发
+just web-build
+just web-dev
+just web-serve
+just test-web ResultsPage.test.tsx
+just test-web-api
+
+# 格式化与检查
+just format
+just check
+just install-hooks
 ```
 
 ### 当前本地限制
@@ -131,19 +186,19 @@ uv run python -m unittest tests.test_web_api
 
 ```bash
 # 基本使用
-uv run python main.py --project-path /path/to/project
+just run /path/to/project
 
 # 指定最大迭代次数
 uv run python main.py --project-path /path/to/project --max-iterations 5
 
 # 设置 LLM 调用预算
-uv run python main.py --project-path /path/to/project --budget 500
+just run-budget /path/to/project 500
 
 # 使用自定义配置
-uv run python main.py --project-path /path/to/project --config my-config.yaml
+just run-config /path/to/project my-config.yaml
 
 # 启用调试日志
-uv run python main.py --project-path /path/to/project --debug
+just run-debug /path/to/project
 
 # 指定 Bug 报告目录（用于 RAG 知识库）
 uv run python main.py --project-path /path/to/project --bug-reports-dir /path/to/bug-reports
@@ -152,7 +207,7 @@ uv run python main.py --project-path /path/to/project --bug-reports-dir /path/to
 uv run python main.py --project-path /path/to/project --parallel
 
 # 指定并行目标数
-uv run python main.py --project-path /path/to/project --parallel --parallel-targets 8
+just run-parallel /path/to/project 8
 ```
 
 ## Bug 报告格式
