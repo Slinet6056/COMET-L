@@ -3,6 +3,7 @@ import logging
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from comet.utils.log_context import log_context
 from comet.web.log_router import RunLogRouter
@@ -128,6 +129,95 @@ class LogRouterTests(unittest.TestCase):
         self.assertEqual(stream["durationSeconds"], 5.0)
         self.assertEqual(stream["bufferedEntryCount"], 0)
         self.assertEqual(router.get_logs("task-1"), [])
+
+    def test_sync_parallel_state_keeps_first_stream_appearance_order(self) -> None:
+        router = RunLogRouter(max_entries_per_stream=10)
+
+        logger = logging.getLogger("test.web.log_router.order")
+        logger.setLevel(logging.INFO)
+        logger.addHandler(router)
+        self.addCleanup(logger.removeHandler, router)
+
+        with log_context("task-z"):
+            logger.info("task-z first")
+        with log_context("task-a"):
+            logger.info("task-a second")
+
+        state = SimpleNamespace(
+            get_task_lifecycle_details=lambda: [
+                {
+                    "targetId": "task-a",
+                    "order": 1,
+                    "status": "completed",
+                    "startedAt": "2026-01-01T00:00:02+00:00",
+                    "endedAt": "2026-01-01T00:00:03+00:00",
+                    "completedAt": "2026-01-01T00:00:03+00:00",
+                    "durationSeconds": 1.0,
+                },
+                {
+                    "targetId": "task-z",
+                    "order": 2,
+                    "status": "completed",
+                    "startedAt": "2026-01-01T00:00:01+00:00",
+                    "endedAt": "2026-01-01T00:00:04+00:00",
+                    "completedAt": "2026-01-01T00:00:04+00:00",
+                    "durationSeconds": 3.0,
+                },
+            ]
+        )
+
+        router.sync_parallel_state(state)
+        snapshot = router.snapshot()
+
+        self.assertEqual(snapshot["taskIds"], ["main", "task-z", "task-a"])
+        self.assertEqual(snapshot["byTaskId"]["task-z"]["order"], 1)
+        self.assertEqual(snapshot["byTaskId"]["task-a"]["order"], 2)
+        self.assertEqual(snapshot["byTaskId"]["task-a"]["status"], "completed")
+        self.assertEqual(snapshot["byTaskId"]["task-z"]["status"], "completed")
+
+    def test_sync_parallel_state_appends_new_lifecycle_only_streams_after_seen_streams(
+        self,
+    ) -> None:
+        router = RunLogRouter(max_entries_per_stream=10)
+
+        logger = logging.getLogger("test.web.log_router.lifecycle_only")
+        logger.setLevel(logging.INFO)
+        logger.addHandler(router)
+        self.addCleanup(logger.removeHandler, router)
+
+        with log_context("task-z"):
+            logger.info("task-z first")
+
+        state = SimpleNamespace(
+            get_task_lifecycle_details=lambda: [
+                {
+                    "targetId": "task-a",
+                    "order": 1,
+                    "status": "completed",
+                    "startedAt": "2026-01-01T00:00:02+00:00",
+                    "endedAt": "2026-01-01T00:00:03+00:00",
+                    "completedAt": "2026-01-01T00:00:03+00:00",
+                    "durationSeconds": 1.0,
+                },
+                {
+                    "targetId": "task-z",
+                    "order": 2,
+                    "status": "completed",
+                    "startedAt": "2026-01-01T00:00:01+00:00",
+                    "endedAt": "2026-01-01T00:00:04+00:00",
+                    "completedAt": "2026-01-01T00:00:04+00:00",
+                    "durationSeconds": 3.0,
+                },
+            ]
+        )
+
+        router.sync_parallel_state(state)
+        snapshot = router.snapshot()
+
+        self.assertEqual(snapshot["taskIds"], ["main", "task-z", "task-a"])
+        self.assertEqual(snapshot["byTaskId"]["task-z"]["order"], 1)
+        self.assertEqual(snapshot["byTaskId"]["task-a"]["order"], 2)
+        self.assertEqual(snapshot["byTaskId"]["task-a"]["status"], "completed")
 
 
 if __name__ == "__main__":

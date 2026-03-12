@@ -161,9 +161,6 @@ class RunLogRouter(logging.Handler):
                 task_id = target.get("targetId")
                 if not task_id:
                     continue
-                order_value = target.get("order")
-                order: int | None
-                order = order_value if isinstance(order_value, int) else None
                 status_value = target.get("status")
                 status: str | None
                 status = status_value if isinstance(status_value, str) else None
@@ -187,7 +184,7 @@ class RunLogRouter(logging.Handler):
                     if isinstance(duration_value, (int, float))
                     else None
                 )
-                stream = self._ensure_stream_locked(str(task_id), order=order)
+                stream = self._ensure_stream_locked(str(task_id))
                 self._merge_stream_state_locked(
                     stream,
                     status=status,
@@ -219,8 +216,6 @@ class RunLogRouter(logging.Handler):
     ) -> LogStreamState:
         stream = self._streams.get(task_id)
         if stream is not None:
-            if order is not None and order < stream.order:
-                stream.order = order
             return stream
 
         next_order = self._stream_order if order is None else int(order)
