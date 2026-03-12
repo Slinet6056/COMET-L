@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import chromadb
+from chromadb.api.types import Metadata as ChromaMetadata
+from chromadb.api.types import PyEmbedding
 from chromadb.config import Settings as ChromaSettings
 
 from .embedding import EmbeddingService
@@ -29,7 +31,7 @@ class Document:
 
     id: str
     content: str
-    metadata: Dict[str, Any]
+    metadata: ChromaMetadata
     embedding: Optional[List[float]] = None
 
 
@@ -90,6 +92,12 @@ class VectorStore:
             )
         return self._collections[knowledge_type]
 
+    @staticmethod
+    def _normalize_metadata(
+        metadata: ChromaMetadata | None,
+    ) -> ChromaMetadata:
+        return dict(metadata) if metadata is not None else {}
+
     def add(
         self,
         knowledge_type: str,
@@ -110,15 +118,16 @@ class VectorStore:
         # 获取 embeddings
         texts = [doc.content for doc in documents]
         embeddings = self.embedding_service.embed_batch(texts)
+        chroma_embeddings: list[PyEmbedding] = [embedding for embedding in embeddings]
 
         # 准备数据
         ids = [doc.id for doc in documents]
-        metadatas = [doc.metadata for doc in documents]
+        metadatas: list[ChromaMetadata] = [doc.metadata for doc in documents]
 
         # 添加到集合
         collection.add(
             ids=ids,
-            embeddings=embeddings,
+            embeddings=chroma_embeddings,
             documents=texts,
             metadatas=metadatas,
         )
@@ -155,13 +164,15 @@ class VectorStore:
 
         # 获取 embedding
         embedding = self.embedding_service.embed(document.content)
+        chroma_embeddings: list[PyEmbedding] = [embedding]
+        metadatas: list[ChromaMetadata] = [document.metadata]
 
         # 更新
         collection.update(
             ids=[document.id],
-            embeddings=[embedding],
+            embeddings=chroma_embeddings,
             documents=[document.content],
-            metadatas=[document.metadata],
+            metadatas=metadatas,
         )
 
         logger.debug(f"更新文档: {document.id}")
@@ -240,7 +251,9 @@ class VectorStore:
                 document = Document(
                     id=doc_id,
                     content=results["documents"][0][i] if results["documents"] else "",
-                    metadata=results["metadatas"][0][i] if results["metadatas"] else {},
+                    metadata=self._normalize_metadata(
+                        results["metadatas"][0][i] if results["metadatas"] else None
+                    ),
                 )
 
                 search_results.append(SearchResult(document=document, score=score))
@@ -297,7 +310,9 @@ class VectorStore:
             return Document(
                 id=results["ids"][0],
                 content=results["documents"][0] if results["documents"] else "",
-                metadata=results["metadatas"][0] if results["metadatas"] else {},
+                metadata=self._normalize_metadata(
+                    results["metadatas"][0] if results["metadatas"] else None
+                ),
             )
         return None
 
@@ -335,7 +350,9 @@ class VectorStore:
                 Document(
                     id=doc_id,
                     content=results["documents"][i] if results["documents"] else "",
-                    metadata=results["metadatas"][i] if results["metadatas"] else {},
+                    metadata=self._normalize_metadata(
+                        results["metadatas"][i] if results["metadatas"] else None
+                    ),
                 )
             )
 

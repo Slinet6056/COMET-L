@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..executor.coverage_parser import MethodCoverage
 from ..models import EvaluationResult, Mutant, TestCase, TestMethod
 
 logger = logging.getLogger(__name__)
@@ -948,7 +949,7 @@ class Database:
                 return None
             return self._row_to_method_coverage(row)
 
-    def get_latest_coverage_for_class(self, class_name: str) -> List:
+    def get_latest_coverage_for_class(self, class_name: str) -> List[MethodCoverage]:
         """
         获取类的最新覆盖率（所有方法）
 
@@ -982,7 +983,7 @@ class Database:
             rows = cursor.fetchall()
             return [self._row_to_method_coverage(row) for row in rows]
 
-    def get_low_coverage_methods(self, threshold: float = 0.8) -> List:
+    def get_low_coverage_methods(self, threshold: float = 0.8) -> List[MethodCoverage]:
         """
         获取低覆盖率的方法
 
@@ -1011,7 +1012,7 @@ class Database:
             rows = cursor.fetchall()
             return [self._row_to_method_coverage(row) for row in rows]
 
-    def get_all_method_coverage(self, iteration: Optional[int] = None) -> List:
+    def get_all_method_coverage(self, iteration: Optional[int] = None) -> List[MethodCoverage]:
         """
         获取所有方法的覆盖率
 
@@ -1041,10 +1042,8 @@ class Database:
             rows = cursor.fetchall()
             return [self._row_to_method_coverage(row) for row in rows]
 
-    def _row_to_method_coverage(self, row: sqlite3.Row):
+    def _row_to_method_coverage(self, row: sqlite3.Row) -> MethodCoverage:
         """将数据库行转换为 MethodCoverage 对象"""
-        from ..executor.coverage_parser import MethodCoverage
-
         return MethodCoverage(
             class_name=row["class_name"],
             method_name=row["method_name"],
