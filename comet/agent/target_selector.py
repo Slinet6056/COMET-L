@@ -1,8 +1,8 @@
 """目标选择器 - 选择待测试的类和方法"""
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..executor.java_executor import JavaExecutor
 from ..store.database import Database
@@ -147,10 +147,7 @@ class TargetSelector:
 
                 if methods:
                     for method in methods:
-                        if (
-                            isinstance(method, dict)
-                            and method.get("name") == selected.method_name
-                        ):
+                        if isinstance(method, dict) and method.get("name") == selected.method_name:
                             selected_method_info = method
                             method_signature = method.get("signature")
                             break
@@ -173,9 +170,7 @@ class TargetSelector:
         if all_coverage:
             # 过滤黑名单
             filtered = [
-                c
-                for c in all_coverage
-                if f"{c.class_name}.{c.method_name}" not in blacklist
+                c for c in all_coverage if f"{c.class_name}.{c.method_name}" not in blacklist
             ]
             if not filtered:
                 logger.warning("所有方法都在黑名单中，无法选择目标")
@@ -183,9 +178,7 @@ class TargetSelector:
 
             # 优先选择未处理的目标
             unprocessed = [
-                c
-                for c in filtered
-                if f"{c.class_name}.{c.method_name}" not in processed_targets
+                c for c in filtered if f"{c.class_name}.{c.method_name}" not in processed_targets
             ]
 
             if unprocessed:
@@ -209,10 +202,7 @@ class TargetSelector:
 
             if methods:
                 for method in methods:
-                    if (
-                        isinstance(method, dict)
-                        and method.get("name") == selected.method_name
-                    ):
+                    if isinstance(method, dict) and method.get("name") == selected.method_name:
                         selected_method_info = method
                         method_signature = method.get("signature")
                         break
@@ -254,9 +244,7 @@ class TargetSelector:
                 if target_key in processed_targets:
                     continue
 
-                method_signature = (
-                    method.get("signature") if isinstance(method, dict) else None
-                )
+                method_signature = method.get("signature") if isinstance(method, dict) else None
 
                 logger.info(f"选择目标（默认）: {selected_class}.{method_name}")
                 return {
@@ -281,9 +269,7 @@ class TargetSelector:
                 if target_key in blacklist:
                     continue
 
-                method_signature = (
-                    method.get("signature") if isinstance(method, dict) else None
-                )
+                method_signature = method.get("signature") if isinstance(method, dict) else None
 
                 logger.info(f"选择目标（默认，已处理）: {selected_class}.{method_name}")
                 return {
@@ -295,9 +281,7 @@ class TargetSelector:
                 }
 
         # 如果所有类都没有可用方法，返回 None
-        logger.warning(
-            "所有类都没有符合条件的方法（可能都在黑名单中或被最小行数配置过滤掉了）"
-        )
+        logger.warning("所有类都没有符合条件的方法（可能都在黑名单中或被最小行数配置过滤掉了）")
         return {"class_name": None, "method_name": None}
 
     def select_by_mutations(
@@ -331,19 +315,15 @@ class TargetSelector:
             mutant_counts[class_name] = count
 
         # 按变异体数量升序遍历，找到不在黑名单的目标
-        sorted_classes = sorted(
-            all_classes, key=lambda x: mutant_counts.get(x, float("inf"))
-        )
+        sorted_classes = sorted(all_classes, key=lambda x: mutant_counts.get(x, float("inf")))
 
         # 先尝试找未处理的目标
         for candidate_class in sorted_classes:
-            method_info, method_name, method_signature = (
-                self._get_first_available_method(
-                    candidate_class,
-                    blacklist,
-                    processed_targets,
-                    prefer_unprocessed=True,
-                )
+            method_info, method_name, method_signature = self._get_first_available_method(
+                candidate_class,
+                blacklist,
+                processed_targets,
+                prefer_unprocessed=True,
             )
             if method_name is not None:
                 target_key = f"{candidate_class}.{method_name}"
@@ -354,9 +334,7 @@ class TargetSelector:
                         f"选择目标（按变异体数量，已处理）: {candidate_class}.{method_name}"
                     )
                 else:
-                    logger.info(
-                        f"选择目标（按变异体数量）: {candidate_class}.{method_name}"
-                    )
+                    logger.info(f"选择目标（按变异体数量）: {candidate_class}.{method_name}")
 
                 return {
                     "class_name": candidate_class,
@@ -407,31 +385,23 @@ class TargetSelector:
             class_scores[class_name] = score
 
         # 按分数升序遍历，找到不在黑名单的目标
-        sorted_classes = sorted(
-            all_classes, key=lambda x: class_scores.get(x, float("inf"))
-        )
+        sorted_classes = sorted(all_classes, key=lambda x: class_scores.get(x, float("inf")))
 
         for candidate_class in sorted_classes:
-            method_info, method_name, method_signature = (
-                self._get_first_available_method(
-                    candidate_class,
-                    blacklist,
-                    processed_targets,
-                    prefer_unprocessed=True,
-                )
+            method_info, method_name, method_signature = self._get_first_available_method(
+                candidate_class,
+                blacklist,
+                processed_targets,
+                prefer_unprocessed=True,
             )
             if method_name is not None:
                 target_key = f"{candidate_class}.{method_name}"
                 is_processed = target_key in processed_targets
 
                 if is_processed:
-                    logger.warning(
-                        f"选择目标（综合评分，已处理）: {candidate_class}.{method_name}"
-                    )
+                    logger.warning(f"选择目标（综合评分，已处理）: {candidate_class}.{method_name}")
                 else:
-                    logger.info(
-                        f"选择目标（综合评分）: {candidate_class}.{method_name}"
-                    )
+                    logger.info(f"选择目标（综合评分）: {candidate_class}.{method_name}")
 
                 return {
                     "class_name": candidate_class,
@@ -475,14 +445,12 @@ class TargetSelector:
         processed_targets_list = []
 
         for class_name in all_classes:
-            method_info, method_name, method_signature = (
-                self._get_first_available_method(
-                    class_name,
-                    blacklist,
-                    processed_targets,
-                    prefer_unprocessed=False,
-                    allow_first_only=False,
-                )
+            method_info, method_name, method_signature = self._get_first_available_method(
+                class_name,
+                blacklist,
+                processed_targets,
+                prefer_unprocessed=False,
+                allow_first_only=False,
             )
             if method_name is not None:
                 target_key = f"{class_name}.{method_name}"
@@ -495,13 +463,13 @@ class TargetSelector:
 
         # 优先从未处理的目标中随机选择
         if unprocessed_targets:
-            selected_class, selected_method_info, method_name, method_signature = (
-                random.choice(unprocessed_targets)
+            selected_class, selected_method_info, method_name, method_signature = random.choice(
+                unprocessed_targets
             )
             logger.info(f"选择目标（随机）: {selected_class}.{method_name}")
         elif processed_targets_list:
-            selected_class, selected_method_info, method_name, method_signature = (
-                random.choice(processed_targets_list)
+            selected_class, selected_method_info, method_name, method_signature = random.choice(
+                processed_targets_list
             )
             logger.warning(f"选择目标（随机，已处理）: {selected_class}.{method_name}")
         else:
@@ -562,9 +530,7 @@ class TargetSelector:
         candidates.sort(key=lambda x: x[1]["killrate"])
 
         # 优先选择未处理的目标
-        unprocessed_candidates = [
-            (k, s) for k, s in candidates if k not in processed_targets
-        ]
+        unprocessed_candidates = [(k, s) for k, s in candidates if k not in processed_targets]
 
         if unprocessed_candidates:
             selected_key, selected_stat = unprocessed_candidates[0]
@@ -633,9 +599,7 @@ class TargetSelector:
                     mappings = self.db.get_all_class_mappings()
                     is_interface = False
                     for mapping in mappings:
-                        if mapping.get("simple_name") == class_name and mapping.get(
-                            "is_interface"
-                        ):
+                        if mapping.get("simple_name") == class_name and mapping.get("is_interface"):
                             is_interface = True
                             break
                     if not is_interface:
@@ -703,13 +667,9 @@ class TargetSelector:
                         class_methods.append(method)
 
                 if skipped_count > 0:
-                    logger.debug(
-                        f"类 {class_name}：根据最小行数配置跳过了 {skipped_count} 个方法"
-                    )
+                    logger.debug(f"类 {class_name}：根据最小行数配置跳过了 {skipped_count} 个方法")
 
-                logger.debug(
-                    f"类 {class_name} 有 {len(class_methods)} 个符合条件的 public 方法"
-                )
+                logger.debug(f"类 {class_name} 有 {len(class_methods)} 个符合条件的 public 方法")
                 return class_methods
         except Exception as e:
             logger.warning(f"获取 public 方法失败: {e}")
@@ -751,9 +711,7 @@ class TargetSelector:
             if target_key in blacklist:
                 continue
 
-            method_signature = (
-                method.get("signature") if isinstance(method, dict) else None
-            )
+            method_signature = method.get("signature") if isinstance(method, dict) else None
             method_info = method if isinstance(method, dict) else None
             candidate = (method_info, method_name, method_signature)
 

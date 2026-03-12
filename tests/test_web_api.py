@@ -1,11 +1,11 @@
-import unittest
-from datetime import datetime
-from io import BytesIO
 import json
 import logging
 import tempfile
 import threading
 import time
+import unittest
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from comet.agent.state import AgentState, ParallelAgentState, WorkerResult
 from comet.config.settings import Settings
 from comet.executor.coverage_parser import MethodCoverage
-from comet.models import MutationPatch, Mutant, TestCase, TestMethod
+from comet.models import Mutant, MutationPatch, TestCase, TestMethod
 from comet.store.database import Database
 from comet.utils.log_context import log_context
 from comet.web.app import app, create_app
@@ -90,9 +90,7 @@ class ConfigApiTests(unittest.TestCase):
                 "file": (
                     "config.yaml",
                     BytesIO(
-                        ("llm:\n  temperature: 3.5\nexecution:\n  timeout: 0\n").encode(
-                            "utf-8"
-                        )
+                        ("llm:\n  temperature: 3.5\nexecution:\n  timeout: 0\n").encode("utf-8")
                     ),
                     "application/x-yaml",
                 )
@@ -125,17 +123,13 @@ class SnapshotTests(unittest.TestCase):
         snapshot = build_run_snapshot("run-001", "running", state)
 
         self.assertEqual(snapshot["mode"], "standard")
-        self.assertEqual(
-            snapshot["decisionReasoning"], "Need more assertions for Calculator.add"
-        )
+        self.assertEqual(snapshot["decisionReasoning"], "Need more assertions for Calculator.add")
         self.assertEqual(
             snapshot["currentTarget"],
             {"class_name": "Calculator", "method_name": "add"},
         )
         self.assertEqual(snapshot["improvementSummary"]["count"], 1)
-        self.assertEqual(
-            snapshot["improvementSummary"]["latest"]["mutation_score_delta"], 0.1
-        )
+        self.assertEqual(snapshot["improvementSummary"]["latest"]["mutation_score_delta"], 0.1)
 
     def test_parallel_snapshot_includes_worker_cards(self) -> None:
         state = ParallelAgentState()
@@ -164,9 +158,7 @@ class SnapshotTests(unittest.TestCase):
             ]
         )
 
-        snapshot = build_run_snapshot(
-            "run-002", "running", state, log_router=log_router
-        )
+        snapshot = build_run_snapshot("run-002", "running", state, log_router=log_router)
 
         self.assertEqual(snapshot["mode"], "parallel")
         self.assertEqual(snapshot["currentBatch"], 1)
@@ -204,9 +196,7 @@ class SnapshotTests(unittest.TestCase):
         with log_context("Calculator.add"):
             logger.info("worker log line")
 
-        snapshot = build_run_snapshot(
-            "run-logs-merge", "running", state, log_router=log_router
-        )
+        snapshot = build_run_snapshot("run-logs-merge", "running", state, log_router=log_router)
 
         self.assertEqual(snapshot["logStreams"]["taskIds"], ["main", "Calculator.add"])
         self.assertEqual(
@@ -230,9 +220,7 @@ class EventBusTests(unittest.TestCase):
         second = bus.publish("run.completed", runId="run-003")
 
         events = bus.list_events()
-        self.assertEqual(
-            [event["type"] for event in events], ["run.snapshot", "run.completed"]
-        )
+        self.assertEqual([event["type"] for event in events], ["run.snapshot", "run.completed"])
         self.assertLess(first["sequence"], second["sequence"])
 
 
@@ -313,9 +301,7 @@ class StreamingApiTests(unittest.TestCase):
         response = self.client.get(f"/api/runs/{run_id}/events")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.headers["content-type"], "text/event-stream; charset=utf-8"
-        )
+        self.assertEqual(response.headers["content-type"], "text/event-stream; charset=utf-8")
         events = self._parse_sse(response.text)
         self.assertGreaterEqual(len(events), 4)
         self.assertEqual(events[0]["event"], "run.snapshot")
@@ -377,9 +363,7 @@ class StreamingApiTests(unittest.TestCase):
             "running",
         )
         self.assertEqual(
-            summary_payload["streams"]["byTaskId"]["Task.zeroLogs"][
-                "bufferedEntryCount"
-            ],
+            summary_payload["streams"]["byTaskId"]["Task.zeroLogs"]["bufferedEntryCount"],
             0,
         )
 
@@ -462,9 +446,7 @@ class RunApiTests(unittest.TestCase):
             assert self.release_run is not None
             config = components["config"]
             assert isinstance(config, Settings)
-            state = (
-                ParallelAgentState() if components["parallel_mode"] else AgentState()
-            )
+            state = ParallelAgentState() if components["parallel_mode"] else AgentState()
             state.iteration = 1
             state.llm_calls = 3
             state.budget = config.evolution.budget_llm_calls
@@ -519,9 +501,7 @@ class RunApiTests(unittest.TestCase):
         if self.temp_dir is not None:
             self.temp_dir.cleanup()
 
-    def _wait_for_status(
-        self, run_id: str, expected: str, timeout: float = 5.0
-    ) -> None:
+    def _wait_for_status(self, run_id: str, expected: str, timeout: float = 5.0) -> None:
         assert self.run_service is not None
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -549,11 +529,7 @@ class RunApiTests(unittest.TestCase):
                     "config.yaml",
                     BytesIO(
                         (
-                            "llm:\n"
-                            "  api_key: yaml-key\n"
-                            "agent:\n"
-                            "  parallel:\n"
-                            "    enabled: false\n"
+                            "llm:\n  api_key: yaml-key\nagent:\n  parallel:\n    enabled: false\n"
                         ).encode("utf-8")
                     ),
                     "application/x-yaml",
@@ -584,12 +560,8 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(current_payload["metrics"]["mutationScore"], 0.5)
         self.assertTrue(current_payload["artifacts"]["resolvedConfig"]["exists"])
         self.assertEqual(current_payload["logStreams"]["taskIds"], ["main"])
-        self.assertEqual(
-            current_payload["logStreams"]["byTaskId"]["main"]["status"], "running"
-        )
-        self.assertIsNotNone(
-            current_payload["logStreams"]["byTaskId"]["main"]["startedAt"]
-        )
+        self.assertEqual(current_payload["logStreams"]["byTaskId"]["main"]["status"], "running")
+        self.assertIsNotNone(current_payload["logStreams"]["byTaskId"]["main"]["startedAt"])
 
         by_id_response = self.client.get(f"/api/runs/{run_id}")
         self.assertEqual(by_id_response.status_code, 200)
@@ -607,9 +579,7 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(resolved_config["evolution"]["budget_llm_calls"], 42)
         self.assertTrue(resolved_config["agent"]["parallel"]["enabled"])
 
-        conflict = self.client.post(
-            "/api/runs", data={"projectPath": str(self.project_path)}
-        )
+        conflict = self.client.post("/api/runs", data={"projectPath": str(self.project_path)})
         self.assertEqual(conflict.status_code, 409)
         self.assertEqual(conflict.json()["error"]["code"], "active_run_conflict")
 
@@ -627,12 +597,8 @@ class RunApiTests(unittest.TestCase):
             completed_payload["logStreams"]["byTaskId"]["main"]["status"],
             "completed",
         )
-        self.assertIsNotNone(
-            completed_payload["logStreams"]["byTaskId"]["main"]["completedAt"]
-        )
-        self.assertIsNotNone(
-            completed_payload["logStreams"]["byTaskId"]["main"]["durationSeconds"]
-        )
+        self.assertIsNotNone(completed_payload["logStreams"]["byTaskId"]["main"]["completedAt"])
+        self.assertIsNotNone(completed_payload["logStreams"]["byTaskId"]["main"]["durationSeconds"])
 
         no_current = self.client.get("/api/runs/current")
         self.assertEqual(no_current.status_code, 404)
@@ -701,9 +667,7 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         payload = response.json()
         self.assertEqual(payload["error"]["code"], "invalid_project_path")
-        self.assertEqual(
-            payload["error"]["fieldErrors"][0]["code"], "not_maven_project"
-        )
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "not_maven_project")
 
 
 class ResultsApiTests(unittest.TestCase):
@@ -764,9 +728,7 @@ class ResultsApiTests(unittest.TestCase):
             encoding="utf-8",
         )
         Path(session.paths["log"]).parent.mkdir(parents=True, exist_ok=True)
-        Path(session.paths["log"]).write_text(
-            "run started\nrun completed\n", encoding="utf-8"
-        )
+        Path(session.paths["log"]).write_text("run started\nrun completed\n", encoding="utf-8")
 
         database = Database(session.paths["database"])
         try:
@@ -889,20 +851,14 @@ class ResultsApiTests(unittest.TestCase):
         self.assertGreater(payload["artifacts"]["finalState"]["sizeBytes"], 0)
         self.assertGreater(payload["artifacts"]["runLog"]["sizeBytes"], 0)
 
-        final_state_response = self.client.get(
-            f"/api/runs/{run_id}/artifacts/final-state"
-        )
+        final_state_response = self.client.get(f"/api/runs/{run_id}/artifacts/final-state")
         self.assertEqual(final_state_response.status_code, 200)
-        self.assertEqual(
-            final_state_response.headers["content-type"], "application/json"
-        )
+        self.assertEqual(final_state_response.headers["content-type"], "application/json")
         self.assertIn('"total_tests": 7', final_state_response.text)
 
         run_log_response = self.client.get(f"/api/runs/{run_id}/artifacts/run-log")
         self.assertEqual(run_log_response.status_code, 200)
-        self.assertEqual(
-            run_log_response.headers["content-type"], "text/plain; charset=utf-8"
-        )
+        self.assertEqual(run_log_response.headers["content-type"], "text/plain; charset=utf-8")
         self.assertIn("run completed", run_log_response.text)
 
     def test_results_endpoint_gracefully_degrades_when_database_is_missing(

@@ -1,8 +1,8 @@
 """执行器模块"""
 
 from .java_executor import JavaExecutor
-from .mutation_evaluator import MutationEvaluator
 from .metrics import MetricsCollector
+from .mutation_evaluator import MutationEvaluator
 
 __all__ = [
     "JavaExecutor",

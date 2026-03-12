@@ -40,9 +40,7 @@ def create_app(
 
         def _resolve_frontend_path(full_path: str) -> Path:
             relative_path = full_path.strip("/")
-            candidate = (
-                dist_path / relative_path if relative_path else dist_path / "index.html"
-            )
+            candidate = dist_path / relative_path if relative_path else dist_path / "index.html"
             if candidate.is_file():
                 return candidate
             return dist_path / "index.html"

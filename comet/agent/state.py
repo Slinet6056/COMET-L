@@ -3,10 +3,10 @@
 import json
 import logging
 import threading
-from pathlib import Path
-from typing import Dict, Any, Optional, List
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +128,7 @@ class AgentState:
         # 只保留最近 10 次操作
         self.action_history = self.action_history[-10:]
 
-    def update_target(
-        self, new_target: Optional[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
+    def update_target(self, new_target: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         更新当前目标，并记录上一个目标
 
@@ -258,9 +256,7 @@ class AgentState:
         state.budget = data.get("budget", 1000)
         state.current_target = data.get("current_target", data.get("currentTarget"))
         state.previous_target = data.get("previous_target", data.get("previousTarget"))
-        state.decision_reasoning = data.get(
-            "decision_reasoning", data.get("decisionReasoning")
-        )
+        state.decision_reasoning = data.get("decision_reasoning", data.get("decisionReasoning"))
         state.action_history = data.get("action_history", [])
         state.recent_improvements = data.get(
             "recent_improvements", data.get("recentImprovements", [])
@@ -379,20 +375,14 @@ class WorkerResult:
             success=data.get("success", False),
             error=data.get("error"),
             tests_generated=data.get("tests_generated", data.get("testsGenerated", 0)),
-            mutants_generated=data.get(
-                "mutants_generated", data.get("mutantsGenerated", 0)
-            ),
-            mutants_evaluated=data.get(
-                "mutants_evaluated", data.get("mutantsEvaluated", 0)
-            ),
+            mutants_generated=data.get("mutants_generated", data.get("mutantsGenerated", 0)),
+            mutants_evaluated=data.get("mutants_evaluated", data.get("mutantsEvaluated", 0)),
             mutants_killed=data.get("mutants_killed", data.get("mutantsKilled", 0)),
             local_mutation_score=data.get(
                 "local_mutation_score", data.get("localMutationScore", 0.0)
             ),
             test_files=data.get("test_files", {}),
-            processing_time=data.get(
-                "processing_time", data.get("processingTime", 0.0)
-            ),
+            processing_time=data.get("processing_time", data.get("processingTime", 0.0)),
             method_coverage=data.get("method_coverage", data.get("methodCoverage")),
         )
 
@@ -520,8 +510,7 @@ class ParallelAgentState(AgentState):
     def get_active_target_details(self) -> List[Dict[str, Any]]:
         with self._active_targets_lock:
             return [
-                self._serialize_active_target(target)
-                for target in self._active_targets.values()
+                self._serialize_active_target(target) for target in self._active_targets.values()
             ]
 
     def get_task_lifecycle_details(self) -> List[Dict[str, Any]]:
@@ -653,9 +642,7 @@ class ParallelAgentState(AgentState):
         """转换为字典（线程安全）"""
         with self._lock:
             data = super().to_dict()
-            batch_results = [
-                [result.to_dict() for result in batch] for batch in self.batch_results
-            ]
+            batch_results = [[result.to_dict() for result in batch] for batch in self.batch_results]
             active_targets = self.get_active_target_details()
             target_lifecycle = self.get_task_lifecycle_details()
             data["current_batch"] = self.current_batch
@@ -694,9 +681,7 @@ class ParallelAgentState(AgentState):
         state.budget = data.get("budget", 1000)
         state.current_target = data.get("current_target", data.get("currentTarget"))
         state.previous_target = data.get("previous_target", data.get("previousTarget"))
-        state.decision_reasoning = data.get(
-            "decision_reasoning", data.get("decisionReasoning")
-        )
+        state.decision_reasoning = data.get("decision_reasoning", data.get("decisionReasoning"))
         state.action_history = data.get("action_history", [])
         state.recent_improvements = data.get(
             "recent_improvements", data.get("recentImprovements", [])
@@ -716,9 +701,7 @@ class ParallelAgentState(AgentState):
 
         # 并行特有字段
         state.current_batch = data.get("current_batch", data.get("currentBatch", 0))
-        state.parallel_stats = data.get(
-            "parallel_stats", data.get("parallelStats")
-        ) or {
+        state.parallel_stats = data.get("parallel_stats", data.get("parallelStats")) or {
             "total_batches": 0,
             "total_workers_spawned": 0,
             "total_targets_processed": 0,
@@ -728,8 +711,7 @@ class ParallelAgentState(AgentState):
 
         serialized_batches = data.get("batch_results", data.get("batchResults", []))
         state.batch_results = [
-            [WorkerResult.from_dict(result) for result in batch]
-            for batch in serialized_batches
+            [WorkerResult.from_dict(result) for result in batch] for batch in serialized_batches
         ]
 
         active_targets = data.get("active_targets", data.get("activeTargets", []))
@@ -749,17 +731,13 @@ class ParallelAgentState(AgentState):
             if not target_id:
                 continue
             restored_target = dict(target)
-            started_at = restored_target.get(
-                "started_at", restored_target.get("startedAt")
-            )
+            started_at = restored_target.get("started_at", restored_target.get("startedAt"))
             if isinstance(started_at, str):
                 restored_target["started_at"] = datetime.fromisoformat(started_at)
             ended_at = restored_target.get("ended_at", restored_target.get("endedAt"))
             if isinstance(ended_at, str):
                 restored_target["ended_at"] = datetime.fromisoformat(ended_at)
-            completed_at = restored_target.get(
-                "completed_at", restored_target.get("completedAt")
-            )
+            completed_at = restored_target.get("completed_at", restored_target.get("completedAt"))
             if isinstance(completed_at, str):
                 restored_target["completed_at"] = datetime.fromisoformat(completed_at)
             state._target_lifecycle[target_id] = restored_target

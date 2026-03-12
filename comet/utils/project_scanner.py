@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +56,7 @@ class ProjectScanner:
 
         # 只保留 src/main/java 目录下的源文件
         source_files = [
-            f
-            for f in java_files
-            if "/src/main/java/" in str(f) or "\\src\\main\\java\\" in str(f)
+            f for f in java_files if "/src/main/java/" in str(f) or "\\src\\main\\java\\" in str(f)
         ]
 
         logger.info(f"找到 {len(source_files)} 个源文件")
@@ -78,10 +76,7 @@ class ProjectScanner:
                 logger.warning(f"扫描文件失败 {file_path}: {e}")
                 failed_files.append(str(file_path))
 
-        logger.info(
-            f"扫描完成: {scanned_files}/{len(source_files)} 个文件, "
-            f"{total_classes} 个类"
-        )
+        logger.info(f"扫描完成: {scanned_files}/{len(source_files)} 个文件, {total_classes} 个类")
 
         if failed_files:
             logger.warning(f"失败的文件数: {len(failed_files)}")

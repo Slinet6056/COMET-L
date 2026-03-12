@@ -120,10 +120,7 @@ def get_java_runtime_jar() -> str:
     """获取 Java Runtime JAR 路径"""
     project_root = Path(__file__).parent.parent.parent
     jar_path = (
-        project_root
-        / "java-runtime"
-        / "target"
-        / "comet-runtime-1.0.0-jar-with-dependencies.jar"
+        project_root / "java-runtime" / "target" / "comet-runtime-1.0.0-jar-with-dependencies.jar"
     )
     return str(jar_path)
 

@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
@@ -150,8 +150,7 @@ class PlannerAgent:
                                 "line_coverage": self.state.line_coverage,
                                 "mutation_score_delta": self.state.global_mutation_score
                                 - prev_mutation_score,
-                                "coverage_delta": self.state.line_coverage
-                                - prev_line_coverage,
+                                "coverage_delta": self.state.line_coverage - prev_line_coverage,
                             }
                         )
                     else:
@@ -172,15 +171,11 @@ class PlannerAgent:
                 logger.info(f"连续 {no_improvement_count} 轮无改进")
 
                 # 将当前目标加入黑名单并重新选择
-                if self.state.current_target and self.state.current_target.get(
-                    "class_name"
-                ):
+                if self.state.current_target and self.state.current_target.get("class_name"):
                     current_class = self.state.current_target["class_name"]
                     current_method = self.state.current_target.get("method_name", "")
 
-                    logger.info(
-                        f"将当前目标 {current_class}.{current_method} 加入黑名单"
-                    )
+                    logger.info(f"将当前目标 {current_class}.{current_method} 加入黑名单")
                     self.state.add_failed_target(
                         current_class,
                         current_method,
@@ -208,9 +203,7 @@ class PlannerAgent:
 
                     # 更新当前方法覆盖率
                     if "method_coverage" in new_target:
-                        self.state.current_method_coverage = new_target[
-                            "method_coverage"
-                        ]
+                        self.state.current_method_coverage = new_target["method_coverage"]
 
                     # 记录切换动作
                     self.state.add_action(
@@ -260,9 +253,7 @@ class PlannerAgent:
         mutation_score_delta = self.state.global_mutation_score - prev_mutation_score
         coverage_delta = self.state.line_coverage - prev_line_coverage
 
-        has_improvement = (
-            mutation_score_delta >= threshold or coverage_delta >= threshold
-        )
+        has_improvement = mutation_score_delta >= threshold or coverage_delta >= threshold
 
         if has_improvement:
             logger.info(
@@ -373,36 +364,24 @@ class PlannerAgent:
                     status="valid",
                 )
                 self.state.total_mutants = len(current_mutants)
-                self.state.survived_mutants = len(
-                    [m for m in current_mutants if m.survived]
-                )
-                self.state.killed_mutants = (
-                    self.state.total_mutants - self.state.survived_mutants
-                )
+                self.state.survived_mutants = len([m for m in current_mutants if m.survived])
+                self.state.killed_mutants = self.state.total_mutants - self.state.survived_mutants
 
                 # 计算当前目标变异分数
                 if self.state.total_mutants > 0:
-                    self.state.mutation_score = (
-                        self.state.killed_mutants / self.state.total_mutants
-                    )
+                    self.state.mutation_score = self.state.killed_mutants / self.state.total_mutants
                 else:
                     self.state.mutation_score = 0.0
             else:
                 # 没有当前目标时，使用所有 valid 变异体
                 valid_mutants = self.tools.db.get_valid_mutants()
                 self.state.total_mutants = len(valid_mutants)
-                self.state.survived_mutants = len(
-                    [m for m in valid_mutants if m.survived]
-                )
-                self.state.killed_mutants = (
-                    self.state.total_mutants - self.state.survived_mutants
-                )
+                self.state.survived_mutants = len([m for m in valid_mutants if m.survived])
+                self.state.killed_mutants = self.state.total_mutants - self.state.survived_mutants
 
                 # 计算变异分数
                 if self.state.total_mutants > 0:
-                    self.state.mutation_score = (
-                        self.state.killed_mutants / self.state.total_mutants
-                    )
+                    self.state.mutation_score = self.state.killed_mutants / self.state.total_mutants
                 else:
                     self.state.mutation_score = 0.0
 
@@ -411,18 +390,15 @@ class PlannerAgent:
                 if not self.tools.project_path:
                     logger.debug("project_path 未设置，跳过覆盖率同步")
                 else:
-                    from pathlib import Path
-                    from ..executor.coverage_parser import CoverageParser
                     import time
+                    from pathlib import Path
+
+                    from ..executor.coverage_parser import CoverageParser
 
                     parser = CoverageParser()
 
                     jacoco_path = (
-                        Path(self.tools.project_path)
-                        / "target"
-                        / "site"
-                        / "jacoco"
-                        / "jacoco.xml"
+                        Path(self.tools.project_path) / "target" / "site" / "jacoco" / "jacoco.xml"
                     )
 
                     # 等待 JaCoCo 报告文件生成（带重试）
@@ -451,23 +427,17 @@ class PlannerAgent:
                             and "branch_coverage" in global_coverage
                         ):
                             self.state.line_coverage = global_coverage["line_coverage"]
-                            self.state.branch_coverage = global_coverage[
-                                "branch_coverage"
-                            ]
+                            self.state.branch_coverage = global_coverage["branch_coverage"]
 
                             logger.debug(
                                 f"同步全局覆盖率（从 XML）: 行 {self.state.line_coverage:.1%}, "
                                 f"分支 {self.state.branch_coverage:.1%}"
                             )
                         else:
-                            logger.warning(
-                                f"从 XML 解析的覆盖率数据格式不正确: {global_coverage}"
-                            )
+                            logger.warning(f"从 XML 解析的覆盖率数据格式不正确: {global_coverage}")
                             # 如果解析失败，保持当前值不变（不重置为0）
                     else:
-                        logger.debug(
-                            f"JaCoCo XML 报告不存在: {jacoco_path}，保持当前覆盖率值"
-                        )
+                        logger.debug(f"JaCoCo XML 报告不存在: {jacoco_path}，保持当前覆盖率值")
                         # 如果文件不存在，保持当前值不变（不重置为0），因为可能是还没有运行过评估
 
                     # 同步当前目标方法的覆盖率
@@ -481,9 +451,7 @@ class PlannerAgent:
                             self.state.current_target["method_name"],
                         )
                         if current_coverage:
-                            self.state.current_method_coverage = (
-                                current_coverage.line_coverage_rate
-                            )
+                            self.state.current_method_coverage = current_coverage.line_coverage_rate
                             logger.debug(
                                 f"已更新当前方法覆盖率: {self.state.current_method_coverage:.1%}"
                             )
@@ -616,9 +584,7 @@ class PlannerAgent:
                     and "method_coverage" in result
                 ):
                     self.state.current_method_coverage = result["method_coverage"]
-                    logger.debug(
-                        f"更新当前方法覆盖率: {self.state.current_method_coverage:.1%}"
-                    )
+                    logger.debug(f"更新当前方法覆盖率: {self.state.current_method_coverage:.1%}")
 
                 # 记录操作历史
                 self.state.add_action(
@@ -650,9 +616,7 @@ class PlannerAgent:
             logger.warning(f"工具执行失败: {action} - {e}")
 
             # 记录失败的操作
-            self.state.add_action(
-                action=action, params=params, success=False, result=str(e)
-            )
+            self.state.add_action(action=action, params=params, success=False, result=str(e))
 
             return None
 
@@ -754,9 +718,7 @@ class PlannerAgent:
                     "generate_mutants", class_name=class_name, method_name=method_name
                 )
                 if mutant_result and mutant_result.get("generated", 0) > 0:
-                    logger.info(
-                        f"  ✓ 成功生成 {mutant_result.get('generated')} 个变异体"
-                    )
+                    logger.info(f"  ✓ 成功生成 {mutant_result.get('generated')} 个变异体")
                     need_evaluation = True
                     # 记录自动执行的操作
                     self.state.add_action(
@@ -785,9 +747,7 @@ class PlannerAgent:
             try:
                 eval_result = self.tools.call("run_evaluation")
                 if eval_result:
-                    logger.info(
-                        f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体"
-                    )
+                    logger.info(f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体")
                     # 记录自动执行的操作
                     self.state.add_action(
                         action="run_evaluation",
@@ -821,9 +781,7 @@ class PlannerAgent:
         try:
             eval_result = self.tools.call("run_evaluation")
             if eval_result:
-                logger.info(
-                    f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体"
-                )
+                logger.info(f"  ✓ 评估完成: 评估了 {eval_result.get('evaluated', 0)} 个变异体")
                 # 记录自动执行的操作
                 self.state.add_action(
                     action="run_evaluation",

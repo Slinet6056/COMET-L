@@ -49,9 +49,7 @@ class FakeDatabase(Database):
 
 
 class ParallelPlannerCoverageSyncTest(unittest.TestCase):
-    def _make_planner(
-        self, workspace_path: Path
-    ) -> tuple[ParallelPlannerAgent, FakeDatabase]:
+    def _make_planner(self, workspace_path: Path) -> tuple[ParallelPlannerAgent, FakeDatabase]:
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.workspace_path = str(workspace_path)
         planner.coverage_parser = FakeCoverageParser()

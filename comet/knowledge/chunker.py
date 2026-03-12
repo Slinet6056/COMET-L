@@ -3,7 +3,7 @@
 import logging
 import re
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -238,9 +238,7 @@ class CodeChunker(ChunkingStrategy):
 
         return chunks
 
-    def _chunk_by_paragraphs(
-        self, text: str, metadata: Dict[str, Any]
-    ) -> List[TextChunk]:
+    def _chunk_by_paragraphs(self, text: str, metadata: Dict[str, Any]) -> List[TextChunk]:
         """按段落分块"""
         paragraphs = text.split("\n\n")
         chunks = []
@@ -340,9 +338,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
         # 边界检查模式
         boundary_checks = analysis.get("boundaryChecks", [])
         if boundary_checks:
-            boundary_text = self._format_boundary_checks(
-                boundary_checks, class_name, method_name
-            )
+            boundary_text = self._format_boundary_checks(boundary_checks, class_name, method_name)
             chunks.append(
                 TextChunk(
                     content=boundary_text,
@@ -356,9 +352,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
 
         # 异常处理
         exception_handling = analysis.get("exceptionHandling", {})
-        if exception_handling.get("tryCatchBlocks") or exception_handling.get(
-            "thrownExceptions"
-        ):
+        if exception_handling.get("tryCatchBlocks") or exception_handling.get("thrownExceptions"):
             exception_text = self._format_exception_handling(
                 exception_handling, class_name, method_name
             )
@@ -376,9 +370,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
         # 方法调用
         method_calls = analysis.get("methodCalls", [])
         if method_calls:
-            calls_text = self._format_method_calls(
-                method_calls, class_name, method_name
-            )
+            calls_text = self._format_method_calls(method_calls, class_name, method_name)
             chunks.append(
                 TextChunk(
                     content=calls_text,
@@ -411,9 +403,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
 
         params = analysis.get("parameters", [])
         if params:
-            param_str = ", ".join(
-                f"{p.get('type', '')} {p.get('name', '')}" for p in params
-            )
+            param_str = ", ".join(f"{p.get('type', '')} {p.get('name', '')}" for p in params)
             parts.append(f"Parameters: {param_str}")
 
         if analysis.get("javadoc"):
@@ -479,9 +469,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
                 parts.append(f"  Resources: {', '.join(tc.get('resources', []))}")
             for catch in tc.get("catches", []):
                 status = "SWALLOWED" if catch.get("isSwallowed") else "handled"
-                parts.append(
-                    f"  Catches {catch.get('exceptionType', 'Exception')}: {status}"
-                )
+                parts.append(f"  Catches {catch.get('exceptionType', 'Exception')}: {status}")
             if tc.get("hasFinally"):
                 parts.append("  Has finally block")
             parts.append("")

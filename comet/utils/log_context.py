@@ -11,9 +11,7 @@ from contextlib import contextmanager
 from typing import Generator
 
 # 任务上下文变量，存储当前任务的标识信息
-task_context: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "task_context", default=""
-)
+task_context: contextvars.ContextVar[str] = contextvars.ContextVar("task_context", default="")
 
 
 class ContextFilter(logging.Filter):

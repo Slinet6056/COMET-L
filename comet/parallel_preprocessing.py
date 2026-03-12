@@ -5,10 +5,10 @@ import os
 import threading
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .utils.log_context import log_context
 
@@ -164,9 +164,7 @@ class ParallelPreprocessor:
         try:
             # 检查是否启用契约提取
             if hasattr(self.config, "knowledge"):
-                if not getattr(
-                    self.config.knowledge, "contract_extraction_enabled", True
-                ):
+                if not getattr(self.config.knowledge, "contract_extraction_enabled", True):
                     return
 
             # 提取契约
@@ -203,9 +201,7 @@ class ParallelPreprocessor:
                 # 索引分析结果
                 for cls in analysis_result.get("classes", []):
                     if cls.get("name") == class_name or not class_name:
-                        self.knowledge_base.index_source_analysis(
-                            cls.get("name", class_name), cls
-                        )
+                        self.knowledge_base.index_source_analysis(cls.get("name", class_name), cls)
                 logger.debug(f"索引源码分析: {class_name}")
         except Exception as e:
             logger.warning(f"源码分析失败 {class_name}: {e}")
@@ -287,7 +283,7 @@ class ParallelPreprocessor:
         Returns:
             (class_name, method_name, method_info) 的列表
         """
-        from .utils.project_utils import get_all_java_classes, find_java_file
+        from .utils.project_utils import find_java_file, get_all_java_classes
 
         all_methods = []
         skipped_count = 0
@@ -327,9 +323,7 @@ class ParallelPreprocessor:
                                             skipped_count += 1
                                             continue
 
-                                    all_methods.append(
-                                        (class_name, method_name, method)
-                                    )
+                                    all_methods.append((class_name, method_name, method))
                         else:
                             # 如果是字符串（旧格式），直接使用（无法过滤）
                             all_methods.append((class_name, method, {}))
@@ -344,9 +338,7 @@ class ParallelPreprocessor:
 
         return all_methods
 
-    def _parallel_process_methods(
-        self, all_methods: List[Tuple[str, str, Dict[str, Any]]]
-    ) -> None:
+    def _parallel_process_methods(self, all_methods: List[Tuple[str, str, Dict[str, Any]]]) -> None:
         """
         并行处理所有方法（简化版本，无文件锁限制）
 
@@ -421,9 +413,7 @@ class ParallelPreprocessor:
                 for future in future_to_info:
                     if not future.done() and not future.cancelled():
                         try:
-                            future.result(
-                                timeout=max(0, 5 - (time.time() - wait_start))
-                            )
+                            future.result(timeout=max(0, 5 - (time.time() - wait_start)))
                         except:
                             pass
 
@@ -457,9 +447,7 @@ class ParallelPreprocessor:
             # 直接调用处理方法（不使用额外的线程池包装）
             # 超时控制在 _process_method 内部通过检查时间来实现
             try:
-                result = self._process_method(
-                    class_name, method_name, method_info, start_time
-                )
+                result = self._process_method(class_name, method_name, method_info, start_time)
                 elapsed = result.get("elapsed")
                 duration_seconds = (
                     float(elapsed)
@@ -483,15 +471,11 @@ class ParallelPreprocessor:
                     success=False,
                     started_at=started_at_iso,
                     ended_at=datetime.now(timezone.utc).isoformat(),
-                    duration_seconds=max(
-                        (datetime.now() - start_time).total_seconds(), 0.0
-                    ),
+                    duration_seconds=max((datetime.now() - start_time).total_seconds(), 0.0),
                 )
                 return {"success": False, "error": str(e)}
 
-    def _cleanup_timeout_data(
-        self, class_name: str, method_name: str, start_time
-    ) -> None:
+    def _cleanup_timeout_data(self, class_name: str, method_name: str, start_time) -> None:
         """
         清理超时任务产生的数据库数据
 
@@ -517,9 +501,7 @@ class ParallelPreprocessor:
                         self.db.delete_test_case(tc.id)
 
             # 清理在本次处理期间创建的、针对该方法的变异体
-            mutants = self.db.get_mutants_by_method(
-                class_name, method_name, status=None
-            )
+            mutants = self.db.get_mutants_by_method(class_name, method_name, status=None)
             for mutant in mutants:
                 # 检查是否是在本次处理期间创建的
                 if mutant.created_at and mutant.created_at >= time_threshold:
@@ -550,9 +532,10 @@ class ParallelPreprocessor:
         Returns:
             处理结果字典
         """
-        from .utils.project_utils import find_java_file, write_test_file
-        from .utils.code_utils import extract_class_from_file
         from datetime import datetime
+
+        from .utils.code_utils import extract_class_from_file
+        from .utils.project_utils import find_java_file, write_test_file
 
         # 如果未提供任务开始时间，使用当前时间
         if task_start_time is None:
@@ -598,14 +581,10 @@ class ParallelPreprocessor:
 
             # 1. 生成测试
             class_code = extract_class_from_file(str(file_path))
-            method_signature = method_info.get(
-                "signature", f"public void {method_name}()"
-            )
+            method_signature = method_info.get("signature", f"public void {method_name}()")
 
             # 1.1 提取契约（RAG 知识库）
-            self._extract_and_index_contract(
-                class_name, method_name, method_signature, class_code
-            )
+            self._extract_and_index_contract(class_name, method_name, method_signature, class_code)
 
             # 获取现有测试（用于参考）
             existing_tests = self.db.get_tests_by_target_class(class_name)
@@ -702,17 +681,13 @@ class ParallelPreprocessor:
 
             invalid_methods = validate_test_methods(test_case.methods, class_code)
             if invalid_methods:
-                logger.warning(
-                    f"发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除"
-                )
+                logger.warning(f"发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除")
                 test_case.methods = [
                     m for m in test_case.methods if m.method_name not in invalid_methods
                 ]
 
                 if not test_case.methods:
-                    logger.warning(
-                        f"所有测试方法都包含错误: {class_name}.{method_name}"
-                    )
+                    logger.warning(f"所有测试方法都包含错误: {class_name}.{method_name}")
                     return result
 
                 # 重新构建测试代码
@@ -754,9 +729,7 @@ class ParallelPreprocessor:
                         "error": f"Timeout after {self.timeout_per_method}s",
                     }
                 # 静态过滤
-                valid_mutants = self.static_guard.filter_mutants(
-                    mutants, str(sandbox_file_path)
-                )
+                valid_mutants = self.static_guard.filter_mutants(mutants, str(sandbox_file_path))
 
                 # 更新文件路径（但不保存到数据库）
                 for mutant in valid_mutants:
@@ -792,9 +765,7 @@ class ParallelPreprocessor:
             result["success"] = True
 
         except Exception as e:
-            logger.warning(
-                f"处理方法失败 {class_name}.{method_name}: {e}", exc_info=True
-            )
+            logger.warning(f"处理方法失败 {class_name}.{method_name}: {e}", exc_info=True)
             result["error"] = str(e)
 
         finally:
@@ -828,8 +799,8 @@ class ParallelPreprocessor:
         改进：在独立验证沙箱中构建和验证合并后的测试文件，
         只有验证通过后才写入 workspace 沙箱
         """
-        from .utils.project_utils import write_test_file, clear_test_directory
         from .utils.code_utils import build_test_class
+        from .utils.project_utils import clear_test_directory, write_test_file
 
         # 使用已有的 java_executor
         java_executor = self.java_executor
@@ -872,9 +843,7 @@ class ParallelPreprocessor:
                 )
 
                 if valid_methods:
-                    logger.debug(
-                        f"验证沙箱中验证通过: {class_name} ({len(valid_methods)} 个方法)"
-                    )
+                    logger.debug(f"验证沙箱中验证通过: {class_name} ({len(valid_methods)} 个方法)")
                     # 保存验证通过的测试信息
                     validated_tests[class_name] = (valid_methods, test_case)
                 else:
@@ -890,9 +859,7 @@ class ParallelPreprocessor:
             return
 
         # 4. 将验证通过的测试写入workspace并更新数据库
-        logger.info(
-            f"步骤 4: 将 {len(validated_tests)} 个验证通过的测试写入workspace..."
-        )
+        logger.info(f"步骤 4: 将 {len(validated_tests)} 个验证通过的测试写入workspace...")
 
         for class_name, (valid_methods, test_case) in validated_tests.items():
             try:
@@ -901,9 +868,7 @@ class ParallelPreprocessor:
                     final_full_code = test_case.full_code
                 else:
                     # 回退方案：从methods重建
-                    logger.warning(
-                        f"TestCase {class_name} 没有full_code，从methods重建"
-                    )
+                    logger.warning(f"TestCase {class_name} 没有full_code，从methods重建")
                     method_codes = [m.code for m in valid_methods]
                     final_full_code = build_test_class(
                         test_class_name=test_case.class_name,
@@ -924,9 +889,7 @@ class ParallelPreprocessor:
                     formatting_style=formatting_style,
                 )
 
-                logger.info(
-                    f"已写入workspace: {class_name} ({len(valid_methods)} 个方法)"
-                )
+                logger.info(f"已写入workspace: {class_name} ({len(valid_methods)} 个方法)")
 
                 # 更新测试用例
                 test_case.full_code = final_full_code
@@ -1017,9 +980,7 @@ class ParallelPreprocessor:
             logger.info(f"二分查找识别到 {len(failed_classes)} 个有问题的测试类")
             for test_class_name in failed_classes:
                 # 从数据库删除
-                test_cases = [
-                    tc for tc in all_test_cases if tc.class_name == test_class_name
-                ]
+                test_cases = [tc for tc in all_test_cases if tc.class_name == test_class_name]
                 for tc in test_cases:
                     logger.warning(f"删除编译失败的测试类: {tc.class_name}")
                     self.db.delete_test_case(tc.id)
@@ -1069,12 +1030,8 @@ class ParallelPreprocessor:
             if test_case.class_name in failed_methods_by_class:
                 failed_methods = failed_methods_by_class[test_case.class_name]
                 for method_name in failed_methods:
-                    logger.warning(
-                        f"删除失败的测试方法: {test_case.class_name}.{method_name}"
-                    )
-                    self._delete_test_method_from_db(
-                        test_case.target_class, method_name
-                    )
+                    logger.warning(f"删除失败的测试方法: {test_case.class_name}.{method_name}")
+                    self._delete_test_method_from_db(test_case.target_class, method_name)
                     total_removed += 1
 
         # 重新构建测试目录
@@ -1110,12 +1067,8 @@ class ParallelPreprocessor:
 
         # 在两个独立沙箱中并行验证
         with ThreadPoolExecutor(max_workers=2) as executor:
-            left_future = executor.submit(
-                self._validate_test_classes_in_sandbox, left_cases
-            )
-            right_future = executor.submit(
-                self._validate_test_classes_in_sandbox, right_cases
-            )
+            left_future = executor.submit(self._validate_test_classes_in_sandbox, left_cases)
+            right_future = executor.submit(self._validate_test_classes_in_sandbox, right_cases)
 
             left_valid = left_future.result()
             right_valid = right_future.result()
@@ -1155,9 +1108,7 @@ class ParallelPreprocessor:
             return True
 
         # 创建验证沙箱
-        validation_sandbox = self.sandbox_manager.create_validation_sandbox(
-            self.project_path
-        )
+        validation_sandbox = self.sandbox_manager.create_validation_sandbox(self.project_path)
         sandbox_id = Path(validation_sandbox).name
 
         try:
@@ -1178,13 +1129,9 @@ class ParallelPreprocessor:
             success = compile_result.get("success", False)
 
             if success:
-                logger.debug(
-                    f"验证沙箱 {sandbox_id}: 编译通过 ({len(test_cases)} 个测试类)"
-                )
+                logger.debug(f"验证沙箱 {sandbox_id}: 编译通过 ({len(test_cases)} 个测试类)")
             else:
-                logger.debug(
-                    f"验证沙箱 {sandbox_id}: 编译失败 ({len(test_cases)} 个测试类)"
-                )
+                logger.debug(f"验证沙箱 {sandbox_id}: 编译失败 ({len(test_cases)} 个测试类)")
 
             return success
 
@@ -1202,7 +1149,7 @@ class ParallelPreprocessor:
         """
         从数据库重新构建 workspace 中的所有测试文件
         """
-        from .utils.project_utils import write_test_file, clear_test_directory
+        from .utils.project_utils import clear_test_directory, write_test_file
 
         # 清空测试目录
         clear_test_directory(self.workspace_sandbox)
@@ -1246,8 +1193,8 @@ class ParallelPreprocessor:
         Returns:
             验证通过的方法列表，如果验证失败返回空列表
         """
-        from .utils.project_utils import write_test_file
         from .utils.code_utils import build_test_class
+        from .utils.project_utils import write_test_file
 
         sandbox_path = None
         sandbox_id = None
@@ -1310,9 +1257,10 @@ class ParallelPreprocessor:
         Returns:
             验证通过的方法列表
         """
-        from .utils.project_utils import write_test_file
-        from .utils.code_utils import build_test_class
         import os
+
+        from .utils.code_utils import build_test_class
+        from .utils.project_utils import write_test_file
 
         # 使用提供的沙箱路径或默认的workspace沙箱
         project_path = sandbox_path if sandbox_path else self.workspace_sandbox
@@ -1397,17 +1345,13 @@ class ParallelPreprocessor:
                         # 二分查找也没找到，这不应该发生
                         logger.warning("二分查找未能识别失败方法，删除所有方法")
                         for m in valid_methods:
-                            self._delete_test_method_from_db(
-                                target_class, m.method_name
-                            )
+                            self._delete_test_method_from_db(target_class, m.method_name)
                         valid_methods = []
                         break
                 elif valid_methods:
                     # 只剩一个方法，删除它
                     removed = valid_methods.pop()
-                    logger.warning(
-                        f"只剩一个方法且编译失败，删除: {removed.method_name}"
-                    )
+                    logger.warning(f"只剩一个方法且编译失败，删除: {removed.method_name}")
                     self._delete_test_method_from_db(target_class, removed.method_name)
                 else:
                     # 没有方法了，退出
@@ -1418,9 +1362,7 @@ class ParallelPreprocessor:
                 continue
 
             # 步骤2: 编译成功后，运行测试
-            logger.info(
-                f"✓ 合并后编译成功: {test_class_name} ({len(valid_methods)} 个方法)"
-            )
+            logger.info(f"✓ 合并后编译成功: {test_class_name} ({len(valid_methods)} 个方法)")
             logger.info("开始运行测试，识别失败的测试方法...")
 
             test_result = java_executor.run_tests(project_path)
@@ -1430,9 +1372,7 @@ class ParallelPreprocessor:
                 return valid_methods
 
             # 步骤3: 测试失败，解析Surefire报告，识别失败的测试方法
-            failed_test_methods = self._identify_failed_test_methods(
-                test_class_name, project_path
-            )
+            failed_test_methods = self._identify_failed_test_methods(test_class_name, project_path)
 
             if not failed_test_methods:
                 # 无法识别失败的测试方法，使用二分查找（并行递归）
@@ -1449,9 +1389,7 @@ class ParallelPreprocessor:
                     )
 
                     if failed_methods_from_binary:
-                        logger.info(
-                            f"二分查找识别到 {len(failed_methods_from_binary)} 个失败方法"
-                        )
+                        logger.info(f"二分查找识别到 {len(failed_methods_from_binary)} 个失败方法")
                         for method_name in failed_methods_from_binary:
                             valid_methods = [
                                 m for m in valid_methods if m.method_name != method_name
@@ -1461,18 +1399,14 @@ class ParallelPreprocessor:
                         # 二分查找也没找到，这不应该发生
                         logger.warning("二分查找未能识别失败方法，删除所有方法")
                         for m in valid_methods:
-                            self._delete_test_method_from_db(
-                                target_class, m.method_name
-                            )
+                            self._delete_test_method_from_db(target_class, m.method_name)
                         valid_methods = []
                         break
                     continue
                 elif valid_methods:
                     # 只剩一个方法，删除它
                     removed = valid_methods.pop()
-                    logger.warning(
-                        f"只剩一个方法且测试失败，删除: {removed.method_name}"
-                    )
+                    logger.warning(f"只剩一个方法且测试失败，删除: {removed.method_name}")
                     self._delete_test_method_from_db(target_class, removed.method_name)
                     continue
                 else:
@@ -1481,13 +1415,9 @@ class ParallelPreprocessor:
                     break
 
             # 从文件和数据库中删除失败的测试方法
-            logger.warning(
-                f"识别到 {len(failed_test_methods)} 个失败的测试方法，将删除"
-            )
+            logger.warning(f"识别到 {len(failed_test_methods)} 个失败的测试方法，将删除")
             for method_name in failed_test_methods:
-                valid_methods = [
-                    m for m in valid_methods if m.method_name != method_name
-                ]
+                valid_methods = [m for m in valid_methods if m.method_name != method_name]
                 logger.warning(f"删除测试失败的方法: {method_name}")
                 self._delete_test_method_from_db(target_class, method_name)
 
@@ -1669,16 +1599,14 @@ class ParallelPreprocessor:
         Returns:
             是否验证通过（编译和测试都成功）
         """
-        from .utils.project_utils import write_test_file
         from .utils.code_utils import build_test_class
+        from .utils.project_utils import write_test_file
 
         if not methods:
             return True
 
         # 创建验证沙箱
-        validation_sandbox = self.sandbox_manager.create_validation_sandbox(
-            self.project_path
-        )
+        validation_sandbox = self.sandbox_manager.create_validation_sandbox(self.project_path)
         sandbox_id = Path(validation_sandbox).name
 
         try:
@@ -1750,9 +1678,7 @@ class ParallelPreprocessor:
                     # 重新加载测试用例以检查是否还有方法
                     updated_test_case = self.db.get_test_case(test_case.id)
                     if updated_test_case and not updated_test_case.methods:
-                        logger.debug(
-                            f"测试用例 {test_case.id} 没有方法了，删除整个测试用例"
-                        )
+                        logger.debug(f"测试用例 {test_case.id} 没有方法了，删除整个测试用例")
                         self.db.delete_test_case(test_case.id)
 
             if not deleted_from_any:
@@ -1774,8 +1700,9 @@ class ParallelPreprocessor:
         Returns:
             失败的测试方法名集合
         """
-        from comet.executor.surefire_parser import SurefireParser
         import os
+
+        from comet.executor.surefire_parser import SurefireParser
 
         failed_methods = set()
 
@@ -1869,9 +1796,7 @@ class ParallelPreprocessor:
 
         return method_ranges
 
-    def _get_method_line_ranges_from_file(
-        self, test_file_path: str
-    ) -> Dict[str, Tuple[int, int]]:
+    def _get_method_line_ranges_from_file(self, test_file_path: str) -> Dict[str, Tuple[int, int]]:
         """
         使用 javalang 解析测试文件，获取每个方法的精确行号范围
 
@@ -1921,9 +1846,7 @@ class ParallelPreprocessor:
                 method_ranges[method_name] = (start_line, end_line)
 
         except javalang.parser.JavaSyntaxError as e:
-            logger.warning(
-                f"javalang 解析失败（语法错误），尝试从错误位置提取信息: {e}"
-            )
+            logger.warning(f"javalang 解析失败（语法错误），尝试从错误位置提取信息: {e}")
             # 如果解析失败，返回空字典，让调用者使用备用策略
         except Exception as e:
             logger.warning(f"解析测试文件失败: {e}")
@@ -1991,9 +1914,7 @@ class ParallelPreprocessor:
         else:
             # 备用策略：使用正则表达式从文件中提取方法位置
             logger.debug("使用备用策略：通过正则表达式从文件中提取方法位置")
-            method_ranges = self._get_method_line_ranges_by_regex(
-                test_file_path, methods
-            )
+            method_ranges = self._get_method_line_ranges_by_regex(test_file_path, methods)
 
             if method_ranges:
                 for method_name, (start, end) in method_ranges.items():

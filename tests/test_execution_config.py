@@ -38,20 +38,12 @@ class ExecutionConfigTests(unittest.TestCase):
                 runtime_java_home=str(runtime_home),
                 target_java_home=str(target_home),
             )
-            runtime_env = config.build_runtime_subprocess_env(
-                base_env={"PATH": "/usr/bin"}
-            )
-            target_env = config.build_target_subprocess_env(
-                base_env={"PATH": "/usr/bin"}
-            )
+            runtime_env = config.build_runtime_subprocess_env(base_env={"PATH": "/usr/bin"})
+            target_env = config.build_target_subprocess_env(base_env={"PATH": "/usr/bin"})
 
-            self.assertEqual(
-                config.resolve_runtime_java_cmd(), str(runtime_bin / "java")
-            )
+            self.assertEqual(config.resolve_runtime_java_cmd(), str(runtime_bin / "java"))
             self.assertEqual(config.resolve_target_java_cmd(), str(target_bin / "java"))
-            self.assertEqual(
-                config.resolve_target_javac_cmd(), str(target_bin / "javac")
-            )
+            self.assertEqual(config.resolve_target_javac_cmd(), str(target_bin / "javac"))
             self.assertEqual(runtime_env["JAVA_HOME"], str(runtime_home.resolve()))
             self.assertEqual(target_env["JAVA_HOME"], str(target_home.resolve()))
             self.assertEqual(runtime_env["PATH"], f"{runtime_bin.resolve()}:/usr/bin")
@@ -73,19 +65,13 @@ class ExecutionConfigTests(unittest.TestCase):
             runtime_only = ExecutionConfig(runtime_java_home=str(runtime_home))
             target_only = ExecutionConfig(target_java_home=str(target_home))
 
-            self.assertEqual(
-                runtime_only.resolve_runtime_java_cmd(), str(runtime_bin / "java")
-            )
+            self.assertEqual(runtime_only.resolve_runtime_java_cmd(), str(runtime_bin / "java"))
             self.assertEqual(runtime_only.resolve_target_java_cmd(), "java")
             self.assertEqual(runtime_only.resolve_target_javac_cmd(), "javac")
 
             self.assertEqual(target_only.resolve_runtime_java_cmd(), "java")
-            self.assertEqual(
-                target_only.resolve_target_java_cmd(), str(target_bin / "java")
-            )
-            self.assertEqual(
-                target_only.resolve_target_javac_cmd(), str(target_bin / "javac")
-            )
+            self.assertEqual(target_only.resolve_target_java_cmd(), str(target_bin / "java"))
+            self.assertEqual(target_only.resolve_target_javac_cmd(), str(target_bin / "javac"))
 
     def test_maven_home_updates_env_and_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

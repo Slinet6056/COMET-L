@@ -595,7 +595,8 @@ function ParallelRunView(props: {
         </div>
       </section>
 
-      {!isPreprocessingPhase && (parallelStatsSummary.length > 0 || activeTargetSummary.length > 0) ? (
+      {!isPreprocessingPhase &&
+      (parallelStatsSummary.length > 0 || activeTargetSummary.length > 0) ? (
         <section className="run-card" aria-labelledby="run-parallel-summary-panel">
           <p className="eyebrow">摘要</p>
           <h3 id="run-parallel-summary-panel">批次摘要</h3>
@@ -652,7 +653,9 @@ function ParallelRunView(props: {
                       <span>
                         {worker.className}.{worker.methodName}
                       </span>
-                      {worker.error ? <p className="worker-output-row__error">{worker.error}</p> : null}
+                      {worker.error ? (
+                        <p className="worker-output-row__error">{worker.error}</p>
+                      ) : null}
                     </td>
                     <td>
                       <span
@@ -682,9 +685,7 @@ function ParallelRunView(props: {
         <section className="run-card" aria-labelledby="run-preprocessing-panel">
           <p className="eyebrow">准备</p>
           <h3 id="run-preprocessing-panel">并行预处理</h3>
-          <p className="muted-copy">
-            预处理完成后会显示工作线程输出。下方仍可查看实时日志。
-          </p>
+          <p className="muted-copy">预处理完成后会显示工作线程输出。下方仍可查看实时日志。</p>
         </section>
       )}
 
@@ -758,7 +759,11 @@ export function RunPage() {
               setSnapshot((current) => (current ? applyRunEvent(current, event) : current));
               setActionHistory((current) => [buildActionEntry(event), ...current].slice(0, 6));
 
-              if (isTerminalRunStatus(event.status) || event.type === 'run.completed' || event.type === 'run.failed') {
+              if (
+                isTerminalRunStatus(event.status) ||
+                event.type === 'run.completed' ||
+                event.type === 'run.failed'
+              ) {
                 setConnectionState('ended');
                 return;
               }

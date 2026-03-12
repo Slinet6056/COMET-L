@@ -14,9 +14,7 @@ class LLMClientReasoningEnabledTest(unittest.TestCase):
             reasoning_enabled=reasoning_enabled,
         )
 
-    def _run_chat_and_capture_kwargs(
-        self, client: LLMClient
-    ) -> tuple[str, dict[str, object]]:
+    def _run_chat_and_capture_kwargs(self, client: LLMClient) -> tuple[str, dict[str, object]]:
         captured_kwargs: dict[str, object] = {}
 
         class _Usage:
@@ -39,9 +37,7 @@ class LLMClientReasoningEnabledTest(unittest.TestCase):
             captured_kwargs.update(kwargs)
             return _Response()
 
-        with patch.object(
-            client.client.chat.completions, "create", side_effect=_fake_create
-        ):
+        with patch.object(client.client.chat.completions, "create", side_effect=_fake_create):
             content = client.chat([{"role": "user", "content": "hello"}])
         return content, captured_kwargs
 

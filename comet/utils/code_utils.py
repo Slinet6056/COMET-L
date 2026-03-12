@@ -3,9 +3,9 @@
 复杂的 Java 代码解析（提取方法、签名等）使用 JavaExecutor
 """
 
-import re
 import logging
-from typing import List, Dict, Optional, Set
+import re
+from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +136,7 @@ def build_test_class(
         "import java.lang.reflect.*;",
     ]
 
-    all_imports = default_imports + [
-        imp for imp in imports if imp not in default_imports
-    ]
+    all_imports = default_imports + [imp for imp in imports if imp not in default_imports]
     lines.extend(all_imports)
     lines.append("")
 

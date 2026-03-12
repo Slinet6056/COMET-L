@@ -2,9 +2,9 @@
 
 import logging
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Optional, Set
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 

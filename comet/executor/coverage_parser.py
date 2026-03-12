@@ -2,9 +2,9 @@
 
 import logging
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Any, Optional
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -144,9 +144,7 @@ class CoverageParser:
                         if source_filename in source_line_info:
                             for line_nr in range(start_line, end_line + 1):
                                 if line_nr in source_line_info[source_filename]:
-                                    line_info = source_line_info[source_filename][
-                                        line_nr
-                                    ]
+                                    line_info = source_line_info[source_filename][line_nr]
                                     if line_info["covered"]:
                                         covered_lines.append(line_nr)
                                     elif line_info["missed"]:
@@ -211,9 +209,7 @@ class CoverageParser:
 
                         method_coverages.append(method_coverage)
 
-            logger.info(
-                f"成功解析 {len(method_coverages)} 个方法的覆盖率信息（含精确行号）"
-            )
+            logger.info(f"成功解析 {len(method_coverages)} 个方法的覆盖率信息（含精确行号）")
             return method_coverages
 
         except ET.ParseError as e:
@@ -277,9 +273,7 @@ class CoverageParser:
             total_lines = len(covered_lines_sorted) + len(missed_lines_sorted)
 
             # 计算覆盖率
-            line_coverage_rate = (
-                len(covered_lines_sorted) / total_lines if total_lines > 0 else 0.0
-            )
+            line_coverage_rate = len(covered_lines_sorted) / total_lines if total_lines > 0 else 0.0
             branch_coverage_rate = (
                 total_covered_branches / total_branches if total_branches > 0 else 0.0
             )
@@ -372,9 +366,7 @@ class CoverageParser:
                         covered_branches = 0
 
                     # 计算覆盖率
-                    line_coverage_rate = (
-                        covered_count / total_lines if total_lines > 0 else 0.0
-                    )
+                    line_coverage_rate = covered_count / total_lines if total_lines > 0 else 0.0
                     branch_coverage_rate = (
                         covered_branches / total_branches if total_branches > 0 else 0.0
                     )
@@ -406,9 +398,7 @@ class CoverageParser:
                         f"分支 {covered_branches}/{total_branches} ({branch_coverage_rate:.1%})"
                     )
 
-            logger.info(
-                f"从 sourcefile 元素解析得到 {len(source_coverages)} 个源文件的覆盖率信息"
-            )
+            logger.info(f"从 sourcefile 元素解析得到 {len(source_coverages)} 个源文件的覆盖率信息")
             return source_coverages
 
         except ET.ParseError as e:
@@ -418,9 +408,7 @@ class CoverageParser:
             logger.warning(f"解析覆盖率报告时出错: {e}")
             return []
 
-    def aggregate_global_coverage(
-        self, method_coverages: List[MethodCoverage]
-    ) -> Dict[str, Any]:
+    def aggregate_global_coverage(self, method_coverages: List[MethodCoverage]) -> Dict[str, Any]:
         """
         计算全局覆盖率（基于源文件聚合，避免重复计算）
 
@@ -459,9 +447,7 @@ class CoverageParser:
             total_branches += sc.total_branches
 
         line_coverage = total_covered_lines / total_lines if total_lines > 0 else 0.0
-        branch_coverage = (
-            total_covered_branches / total_branches if total_branches > 0 else 0.0
-        )
+        branch_coverage = total_covered_branches / total_branches if total_branches > 0 else 0.0
 
         logger.info(
             f"全局覆盖率: "
@@ -530,9 +516,7 @@ class CoverageParser:
                 covered_branches = 0
 
             line_coverage = covered_lines / total_lines if total_lines > 0 else 0.0
-            branch_coverage = (
-                covered_branches / total_branches if total_branches > 0 else 0.0
-            )
+            branch_coverage = covered_branches / total_branches if total_branches > 0 else 0.0
 
             logger.info(
                 f"全局覆盖率（从 XML）: "

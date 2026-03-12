@@ -1,7 +1,8 @@
 """核心数据模型定义"""
 
-from typing import List, Optional, Dict, Any
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -29,17 +30,13 @@ class Pattern(BaseModel):
 
     id: str = Field(description="模式 ID")
     name: str = Field(description="模式名称")
-    category: str = Field(
-        description="类别（如 null_pointer、boundary、resource_leak）"
-    )
+    category: str = Field(description="类别（如 null_pointer、boundary、resource_leak）")
     description: str = Field(description="模式描述")
     template: str = Field(description="变异模板")
     examples: List[str] = Field(default_factory=list, description="示例")
     mutation_strategy: Optional[str] = Field(default=None, description="变异策略")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="置信度")
-    success_rate: float = Field(
-        default=0.0, ge=0.0, le=1.0, description="成功率（发现缺陷的比例）"
-    )
+    success_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="成功率（发现缺陷的比例）")
     usage_count: int = Field(default=0, ge=0, description="使用次数")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
@@ -127,9 +124,7 @@ class CoverageInfo(BaseModel):
     covered_branches: int = Field(default=0, ge=0, description="覆盖的分支数")
     total_branches: int = Field(default=0, ge=0, description="总分支数")
     line_coverage: float = Field(default=0.0, ge=0.0, le=1.0, description="行覆盖率")
-    branch_coverage: float = Field(
-        default=0.0, ge=0.0, le=1.0, description="分支覆盖率"
-    )
+    branch_coverage: float = Field(default=0.0, ge=0.0, le=1.0, description="分支覆盖率")
 
 
 class EvaluationResult(BaseModel):
@@ -184,9 +179,7 @@ class Metrics(BaseModel):
     total_tests: int = Field(default=0, ge=0, description="总测试数")
     mutation_score: float = Field(default=0.0, ge=0.0, le=1.0, description="变异分数")
     line_coverage: float = Field(default=0.0, ge=0.0, le=1.0, description="行覆盖率")
-    branch_coverage: float = Field(
-        default=0.0, ge=0.0, le=1.0, description="分支覆盖率"
-    )
+    branch_coverage: float = Field(default=0.0, ge=0.0, le=1.0, description="分支覆盖率")
     llm_calls: int = Field(default=0, ge=0, description="LLM 调用次数")
     timestamp: datetime = Field(default_factory=datetime.now, description="时间戳")
 

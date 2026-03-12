@@ -155,9 +155,7 @@ class ParallelPlannerAgent:
                 successful_results = [r for r in worker_results if r.success]
                 failed_results = [r for r in worker_results if not r.success]
 
-                logger.info(
-                    f"批次完成: {len(successful_results)} 成功, {len(failed_results)} 失败"
-                )
+                logger.info(f"批次完成: {len(successful_results)} 成功, {len(failed_results)} 失败")
 
                 # 将失败的目标加入黑名单
                 for result in failed_results:
@@ -202,8 +200,7 @@ class ParallelPlannerAgent:
                             "line_coverage": self.state.line_coverage,
                             "mutation_score_delta": self.state.global_mutation_score
                             - prev_mutation_score,
-                            "coverage_delta": self.state.line_coverage
-                            - prev_line_coverage,
+                            "coverage_delta": self.state.line_coverage - prev_line_coverage,
                         }
                     )
                 else:
@@ -274,9 +271,7 @@ class ParallelPlannerAgent:
 
         return targets
 
-    def _process_targets_parallel(
-        self, targets: List[Dict[str, Any]]
-    ) -> List[WorkerResult]:
+    def _process_targets_parallel(self, targets: List[Dict[str, Any]]) -> List[WorkerResult]:
         """
         并行处理多个目标
 
@@ -290,8 +285,7 @@ class ParallelPlannerAgent:
 
         with ThreadPoolExecutor(max_workers=len(targets)) as executor:
             futures = {
-                executor.submit(self._process_single_target, target): target
-                for target in targets
+                executor.submit(self._process_single_target, target): target for target in targets
             }
 
             for future in as_completed(futures):
@@ -314,9 +308,7 @@ class ParallelPlannerAgent:
                         )
                     )
                 finally:
-                    target_id = (
-                        f"{target.get('class_name')}.{target.get('method_name')}"
-                    )
+                    target_id = f"{target.get('class_name')}.{target.get('method_name')}"
                     matched_result = next(
                         (r for r in results if r.target_id == target_id),
                         None,
@@ -348,9 +340,7 @@ class ParallelPlannerAgent:
         target_id = f"{class_name}.{method_name}"
 
         with log_context(target_id):
-            return self._process_single_target_impl(
-                target, class_name, method_name, target_id
-            )
+            return self._process_single_target_impl(target, class_name, method_name, target_id)
 
     def _process_single_target_impl(
         self, target: Dict[str, Any], class_name: str, method_name: str, target_id: str
@@ -435,9 +425,7 @@ class ParallelPlannerAgent:
                 return result
 
             # 2. 评估变异体（在独立沙箱中）
-            eval_result = self._evaluate_in_sandbox(
-                sandbox_path, class_name, method_name
-            )
+            eval_result = self._evaluate_in_sandbox(sandbox_path, class_name, method_name)
             if eval_result:
                 result.mutants_evaluated = eval_result.get("evaluated", 0)
                 result.mutants_killed = eval_result.get("killed", 0)
@@ -486,9 +474,7 @@ class ParallelPlannerAgent:
                 for tc in existing_tests:
                     test_file_path = Path(sandbox_path) / "src" / "test" / "java"
                     if tc.package_name:
-                        test_file_path = test_file_path / tc.package_name.replace(
-                            ".", "/"
-                        )
+                        test_file_path = test_file_path / tc.package_name.replace(".", "/")
                     test_file_path = test_file_path / f"{tc.class_name}.java"
                     if test_file_path.exists():
                         test_files[str(test_file_path)] = test_file_path.read_text()
@@ -505,9 +491,7 @@ class ParallelPlannerAgent:
 
             if result and result.get("generated", 0) > 0:
                 # 收集生成的测试文件（只收集与当前目标相关的）
-                test_files = self._collect_test_files(
-                    sandbox_path, class_name, method_name
-                )
+                test_files = self._collect_test_files(sandbox_path, class_name, method_name)
                 result["test_files"] = test_files
 
             return result
@@ -546,9 +530,7 @@ class ParallelPlannerAgent:
             from ..utils.project_utils import write_test_file
 
             # 获取变异体和测试用例
-            mutants = self.db.get_mutants_by_method(
-                class_name, method_name, status="valid"
-            )
+            mutants = self.db.get_mutants_by_method(class_name, method_name, status="valid")
             test_cases = self.db.get_tests_by_target_method(class_name, method_name)
 
             if not mutants or not test_cases:
@@ -635,9 +617,7 @@ class ParallelPlannerAgent:
             file_name = test_file.stem  # 不含扩展名的文件名
 
             # 检查文件名是否匹配当前目标
-            is_target_file = any(
-                file_name.startswith(pattern) for pattern in target_patterns
-            )
+            is_target_file = any(file_name.startswith(pattern) for pattern in target_patterns)
 
             if not is_target_file:
                 logger.debug(f"跳过非目标测试文件: {test_file.name}")
@@ -787,9 +767,7 @@ class ParallelPlannerAgent:
     def sync_workspace_coverage(
         self, iteration: Optional[int] = None, wait_for_report: bool = True
     ) -> bool:
-        jacoco_path = (
-            Path(self.workspace_path) / "target" / "site" / "jacoco" / "jacoco.xml"
-        )
+        jacoco_path = Path(self.workspace_path) / "target" / "site" / "jacoco" / "jacoco.xml"
         return self._sync_coverage_from_report(
             jacoco_path, iteration=iteration, wait_for_report=wait_for_report
         )
@@ -809,9 +787,7 @@ class ParallelPlannerAgent:
                 break
 
             if attempt < max_wait_attempts - 1:
-                logger.debug(
-                    f"等待 JaCoCo 报告生成... (尝试 {attempt + 1}/{max_wait_attempts})"
-                )
+                logger.debug(f"等待 JaCoCo 报告生成... (尝试 {attempt + 1}/{max_wait_attempts})")
                 time.sleep(0.5)
 
         if not file_found:
@@ -822,9 +798,7 @@ class ParallelPlannerAgent:
 
         coverage_iteration = self.state.iteration if iteration is None else iteration
 
-        method_coverages = self.coverage_parser.parse_jacoco_xml_with_lines(
-            str(jacoco_path)
-        )
+        method_coverages = self.coverage_parser.parse_jacoco_xml_with_lines(str(jacoco_path))
         for cov in method_coverages:
             self.db.save_method_coverage(cov, coverage_iteration)
 
@@ -832,9 +806,7 @@ class ParallelPlannerAgent:
         if not method_coverages:
             logger.warning("JaCoCo 报告已生成，但未解析到任何方法级覆盖率数据")
 
-        coverage = self.coverage_parser.aggregate_global_coverage_from_xml(
-            str(jacoco_path)
-        )
+        coverage = self.coverage_parser.aggregate_global_coverage_from_xml(str(jacoco_path))
         if coverage:
             self.state.line_coverage = coverage.get("line_coverage", 0.0)
             self.state.branch_coverage = coverage.get("branch_coverage", 0.0)
@@ -889,9 +861,7 @@ class ParallelPlannerAgent:
 
         if has_improvement:
             logger.info(
-                f"检测到改进: "
-                f"变异分数 Δ{mutation_delta:+.1%}, "
-                f"覆盖率 Δ{coverage_delta:+.1%}"
+                f"检测到改进: 变异分数 Δ{mutation_delta:+.1%}, 覆盖率 Δ{coverage_delta:+.1%}"
             )
         else:
             logger.debug(

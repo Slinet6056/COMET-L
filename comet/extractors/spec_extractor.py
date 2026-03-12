@@ -2,15 +2,15 @@
 
 import json
 import logging
-from typing import Optional, List
 from datetime import datetime
+from typing import List, Optional
 
+from ..executor.java_executor import JavaExecutor
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
 from ..models import Contract
 from ..utils.hash_utils import generate_id
 from ..utils.json_utils import extract_json_from_response
-from ..executor.java_executor import JavaExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +18,7 @@ logger = logging.getLogger(__name__)
 class SpecExtractor:
     """契约提取器 - 从源代码中提取前置条件、后置条件和异常条件"""
 
-    def __init__(
-        self, llm_client: LLMClient, java_executor: Optional[JavaExecutor] = None
-    ):
+    def __init__(self, llm_client: LLMClient, java_executor: Optional[JavaExecutor] = None):
         """
         初始化契约提取器
 

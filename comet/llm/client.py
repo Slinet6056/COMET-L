@@ -111,9 +111,7 @@ class LLMClient:
                     kwargs["reasoning_effort"] = self.reasoning_effort
 
                 if self.reasoning_enabled is not None:
-                    kwargs["extra_body"] = {
-                        "reasoning": {"enabled": self.reasoning_enabled}
-                    }
+                    kwargs["extra_body"] = {"reasoning": {"enabled": self.reasoning_enabled}}
 
                 # 添加 verbosity 配置（如果模型支持）
                 if self.verbosity is not None:
@@ -164,9 +162,7 @@ class LLMClient:
                 if content is None or content == "":
                     error_msg = f"模型返回空内容 (finish_reason: {finish_reason}"
                     if response.usage:
-                        error_msg += (
-                            f", completion_tokens: {response.usage.completion_tokens}"
-                        )
+                        error_msg += f", completion_tokens: {response.usage.completion_tokens}"
                     error_msg += ")"
                     raise ValueError(error_msg)
 
@@ -182,9 +178,7 @@ class LLMClient:
                     f"耗时 {elapsed:.2f}s, 错误: {e}"
                 )
                 if attempt == self.max_retries - 1:
-                    raise RuntimeError(
-                        f"LLM 请求超时，已重试 {self.max_retries} 次: {e}"
-                    )
+                    raise RuntimeError(f"LLM 请求超时，已重试 {self.max_retries} 次: {e}")
                 time.sleep(2**attempt)  # 指数退避
 
             except Exception as e:
@@ -237,9 +231,7 @@ class LLMClient:
             "total_calls": total_calls,
             "total_tokens": total_tokens,
             "total_cost": total_cost,
-            "avg_tokens_per_call": (
-                total_tokens / total_calls if total_calls > 0 else 0
-            ),
+            "avg_tokens_per_call": (total_tokens / total_calls if total_calls > 0 else 0),
         }
 
     def get_total_calls(self) -> int:

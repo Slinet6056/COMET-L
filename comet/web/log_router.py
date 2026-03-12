@@ -166,23 +166,17 @@ class RunLogRouter(logging.Handler):
                 status = status_value if isinstance(status_value, str) else None
                 started_at_value = target.get("startedAt")
                 started_at: str | None
-                started_at = (
-                    started_at_value if isinstance(started_at_value, str) else None
-                )
+                started_at = started_at_value if isinstance(started_at_value, str) else None
                 ended_at_value = target.get("endedAt")
                 ended_at: str | None
                 ended_at = ended_at_value if isinstance(ended_at_value, str) else None
                 completed_at_value = target.get("completedAt")
                 completed_at: str | None
-                completed_at = (
-                    completed_at_value if isinstance(completed_at_value, str) else None
-                )
+                completed_at = completed_at_value if isinstance(completed_at_value, str) else None
                 duration_value = target.get("durationSeconds")
                 duration_seconds: float | None
                 duration_seconds = (
-                    float(duration_value)
-                    if isinstance(duration_value, (int, float))
-                    else None
+                    float(duration_value) if isinstance(duration_value, (int, float)) else None
                 )
                 stream = self._ensure_stream_locked(str(task_id))
                 self._merge_stream_state_locked(
@@ -199,10 +193,7 @@ class RunLogRouter(logging.Handler):
         with self._lock:
             ordered_streams = self._ordered_streams_locked()
             items = [stream.to_dict() for stream in ordered_streams]
-            counts = {
-                stream.task_id: stream.buffered_entry_count
-                for stream in ordered_streams
-            }
+            counts = {stream.task_id: stream.buffered_entry_count for stream in ordered_streams}
         return {
             "taskIds": [stream["taskId"] for stream in items],
             "counts": counts,
@@ -211,9 +202,7 @@ class RunLogRouter(logging.Handler):
             "byTaskId": {stream["taskId"]: stream for stream in items},
         }
 
-    def _ensure_stream_locked(
-        self, task_id: str, order: int | None = None
-    ) -> LogStreamState:
+    def _ensure_stream_locked(self, task_id: str, order: int | None = None) -> LogStreamState:
         stream = self._streams.get(task_id)
         if stream is not None:
             return stream

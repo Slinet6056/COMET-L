@@ -1,15 +1,15 @@
 """变异生成器"""
 
 import logging
-from typing import List, Optional, Union
 from datetime import datetime
+from typing import List, Optional, Union
 
+from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
-from ..models import Mutant, MutationPatch, Contract, Pattern, TestCase
-from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase
-from ..utils.hash_utils import generate_id
+from ..models import Contract, Mutant, MutationPatch, Pattern, TestCase
 from ..utils.code_utils import add_line_numbers
+from ..utils.hash_utils import generate_id
 from ..utils.parsers import parse_mutation_response
 
 logger = logging.getLogger(__name__)
@@ -88,9 +88,7 @@ class MutantGenerator:
         for attempt in range(max_retries):
             try:
                 logger.info(f"生成变异体 (尝试 {attempt + 1}/{max_retries})...")
-                mutants = self._generate_mutants_once(
-                    class_name, class_code, target_method
-                )
+                mutants = self._generate_mutants_once(class_name, class_code, target_method)
 
                 if mutants:
                     logger.info(f"成功生成 {len(mutants)} 个变异体")
@@ -166,7 +164,7 @@ class MutantGenerator:
             mutants = []
             for idx, mut_data in enumerate(mutations_data):
                 try:
-                    logger.debug(f"处理变异 #{idx+1}")
+                    logger.debug(f"处理变异 #{idx + 1}")
 
                     patch = MutationPatch(
                         file_path="",  # 将由调用者设置
@@ -185,9 +183,9 @@ class MutantGenerator:
                         created_at=datetime.now(),
                     )
                     mutants.append(mutant)
-                    logger.debug(f"成功创建变异 #{idx+1}")
+                    logger.debug(f"成功创建变异 #{idx + 1}")
                 except Exception as e:
-                    logger.warning(f"跳过无效的变异数据 #{idx+1}: {e}")
+                    logger.warning(f"跳过无效的变异数据 #{idx + 1}: {e}")
                     logger.debug(f"变异数据: {mut_data}")
 
             logger.info(f"成功生成 {len(mutants)} 个变异体用于 {class_name}")
@@ -320,7 +318,7 @@ class MutantGenerator:
             mutants = []
             for idx, mut_data in enumerate(mutations_data):
                 try:
-                    logger.debug(f"处理变异 #{idx+1}")
+                    logger.debug(f"处理变异 #{idx + 1}")
 
                     patch = MutationPatch(
                         file_path="",  # 将由调用者设置
@@ -339,9 +337,9 @@ class MutantGenerator:
                         created_at=datetime.now(),
                     )
                     mutants.append(mutant)
-                    logger.debug(f"成功创建变异 #{idx+1}")
+                    logger.debug(f"成功创建变异 #{idx + 1}")
                 except Exception as e:
-                    logger.warning(f"跳过无效的变异数据 #{idx+1}: {e}")
+                    logger.warning(f"跳过无效的变异数据 #{idx + 1}: {e}")
                     logger.debug(f"变异数据: {mut_data}")
 
             logger.info(f"成功完善 {len(mutants)} 个变异体用于 {class_name}")

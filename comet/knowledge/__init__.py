@@ -5,16 +5,16 @@
 """
 
 # 基础组件（无 chromadb 依赖）
-from .knowledge_base import KnowledgeBase, RAGKnowledgeBase, create_knowledge_base
 from .bug_parser import BugReport, BugReportParser, load_bug_reports
 from .chunker import (
-    TextChunk,
     ChunkingStrategy,
-    SimpleChunker,
     CodeChunker,
     MethodAnalysisChunker,
+    SimpleChunker,
+    TextChunk,
     create_chunker,
 )
+from .knowledge_base import KnowledgeBase, RAGKnowledgeBase, create_knowledge_base
 
 __all__ = [
     # 知识库

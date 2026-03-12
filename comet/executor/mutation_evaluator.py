@@ -3,15 +3,15 @@
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Set, Optional
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional, Set
 
-from ..models import Mutant, TestCase, KillMatrix, EvaluationResult
+from ..models import EvaluationResult, KillMatrix, Mutant, TestCase
+from ..utils.log_context import log_context
+from ..utils.sandbox import SandboxManager
 from .java_executor import JavaExecutor
 from .surefire_parser import SurefireParser
-from ..utils.sandbox import SandboxManager
-from ..utils.log_context import log_context
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,8 @@ class MutationEvaluator:
             测试结果字典 {test_id: passed}
         """
         # 创建沙箱 - 修复：添加时间戳和线程ID确保唯一性，避免并发冲突
-        import time
         import threading
+        import time
 
         thread_id = threading.get_ident()
         timestamp_ns = time.time_ns()
@@ -64,9 +64,7 @@ class MutationEvaluator:
         try:
             sandbox_path = self.sandbox_manager.create_sandbox(project_path, sandbox_id)
         except Exception as e:
-            logger.warning(
-                f"创建沙箱失败（可能已被其他线程使用）: {mutant.id}, 错误: {e}"
-            )
+            logger.warning(f"创建沙箱失败（可能已被其他线程使用）: {mutant.id}, 错误: {e}")
             # 跳过此变异体，避免并发冲突
             return {}
 
@@ -74,8 +72,8 @@ class MutationEvaluator:
             # 应用变异到沙箱
             # 构建变异补丁 JSON
             import json
-            import time
             import os
+            import time
 
             # 确定源文件路径
             original_file_path = mutant.patch.file_path
@@ -128,9 +126,7 @@ class MutationEvaluator:
 
             if not mutation_result.get("success", False):
                 logger.warning(f"应用变异失败: {mutant.id}")
-                logger.warning(
-                    f"  行范围: {mutant.patch.line_start}-{mutant.patch.line_end}"
-                )
+                logger.warning(f"  行范围: {mutant.patch.line_start}-{mutant.patch.line_end}")
                 if mutation_result.get("stderr"):
                     logger.warning(f"  Java 错误: {mutation_result['stderr'][:500]}")
 
@@ -173,17 +169,13 @@ class MutationEvaluator:
                         results[test_case.id] = False
                 else:
                     # 解析 Surefire 报告，获取精确的测试结果
-                    failed_tests = self.surefire_parser.get_failed_test_names(
-                        reports_dir
-                    )
+                    failed_tests = self.surefire_parser.get_failed_test_names(reports_dir)
                     logger.debug(f"  检测到 {len(failed_tests)} 个失败的测试")
 
                     if not failed_tests:
                         # 有报告但没有失败的测试，可能是其他错误（如测试超时）
                         # 保守策略：标记所有测试为失败
-                        logger.debug(
-                            f"  未找到具体失败的测试，保守策略标记所有测试为失败"
-                        )
+                        logger.debug(f"  未找到具体失败的测试，保守策略标记所有测试为失败")
                         for test_case in test_cases:
                             results[test_case.id] = False
                     else:
@@ -198,9 +190,7 @@ class MutationEvaluator:
                                 if test_case.package_name:
                                     full_name = f"{test_case.package_name}.{test_case.class_name}.{method.method_name}"
                                 else:
-                                    full_name = (
-                                        f"{test_case.class_name}.{method.method_name}"
-                                    )
+                                    full_name = f"{test_case.class_name}.{method.method_name}"
                                 full_names.append(full_name)
                             test_full_names[test_case.id] = full_names
 
@@ -267,9 +257,7 @@ class MutationEvaluator:
             return self._build_kill_matrix_serial(mutants, test_cases, project_path)
 
         # 并行模式
-        return self._build_kill_matrix_parallel(
-            mutants, test_cases, project_path, max_workers
-        )
+        return self._build_kill_matrix_parallel(mutants, test_cases, project_path, max_workers)
 
     def _build_kill_matrix_serial(
         self,
@@ -302,8 +290,7 @@ class MutationEvaluator:
             mutant.evaluated_at = datetime.now()
 
         logger.info(
-            f"击杀矩阵构建完成: "
-            f"{len([m for m in mutants if not m.survived])}/{len(mutants)} 被击杀"
+            f"击杀矩阵构建完成: {len([m for m in mutants if not m.survived])}/{len(mutants)} 被击杀"
         )
         return kill_matrix
 
@@ -333,9 +320,7 @@ class MutationEvaluator:
             with log_context(f"Eval:{mutant.id[:8]}"):
                 try:
                     # 评估变异体（每个变异体在独立沙箱中运行）
-                    test_results = self.evaluate_mutant(
-                        mutant, test_cases, project_path
-                    )
+                    test_results = self.evaluate_mutant(mutant, test_cases, project_path)
 
                     # 线程安全地更新击杀矩阵和变异体状态
                     with results_lock:
@@ -357,9 +342,7 @@ class MutationEvaluator:
                         completed += 1
                         current = completed
                         if current % 5 == 0 or current == total:
-                            logger.info(
-                                f"评估进度: {current}/{total} ({current*100//total}%)"
-                            )
+                            logger.info(f"评估进度: {current}/{total} ({current * 100 // total}%)")
 
                 except Exception as e:
                     logger.warning(f"评估变异体时出错: {e}")
@@ -371,10 +354,7 @@ class MutationEvaluator:
         # 使用线程池并行评估
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务
-            futures = {
-                executor.submit(evaluate_and_update, mutant): mutant
-                for mutant in mutants
-            }
+            futures = {executor.submit(evaluate_and_update, mutant): mutant for mutant in mutants}
 
             # 等待所有任务完成，处理异常
             for future in as_completed(futures):
@@ -387,7 +367,7 @@ class MutationEvaluator:
         killed_count = len([m for m in mutants if not m.survived])
         logger.info(
             f"并行击杀矩阵构建完成: {killed_count}/{total} 被击杀 "
-            f"(变异分数: {killed_count*100//total if total > 0 else 0}%)"
+            f"(变异分数: {killed_count * 100 // total if total > 0 else 0}%)"
         )
         return kill_matrix
 

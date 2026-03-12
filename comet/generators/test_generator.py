@@ -1,20 +1,20 @@
 """测试生成器"""
 
 import logging
-from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
 
+from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
-from ..models import TestCase, TestMethod, Contract, Mutant
-from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase
-from ..utils.hash_utils import generate_id
+from ..models import Contract, Mutant, TestCase, TestMethod
 from ..utils.code_utils import build_test_class, extract_imports, parse_java_class
+from ..utils.hash_utils import generate_id
 from ..utils.parsers import (
+    extract_test_method_name,
+    parse_test_class_response,
     parse_test_method_response,
     parse_test_methods_response,
-    parse_test_class_response,
-    extract_test_method_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -148,9 +148,7 @@ class TestGenerator:
                 if not test_method_name:
                     # 如果无法提取方法名，使用默认名称
                     test_method_name = f"test_{method_name}_{idx + 1}"
-                    logger.warning(
-                        f"无法提取测试方法名，使用默认名称: {test_method_name}"
-                    )
+                    logger.warning(f"无法提取测试方法名，使用默认名称: {test_method_name}")
 
                 test_method = TestMethod(
                     method_name=test_method_name,
@@ -199,9 +197,7 @@ class TestGenerator:
                 updated_at=datetime.now(),
             )
 
-            logger.info(
-                f"成功生成 {len(test_methods)} 个测试方法用于 {class_name}.{method_name}"
-            )
+            logger.info(f"成功生成 {len(test_methods)} 个测试方法用于 {class_name}.{method_name}")
             return test_case
 
         except Exception as e:
@@ -275,18 +271,14 @@ class TestGenerator:
                 if not refined_method_name:
                     # 如果无法提取方法名，使用默认名称
                     refined_method_name = f"test_{target_method or 'method'}_{idx + 1}"
-                    logger.warning(
-                        f"无法提取优化后的方法名，使用: {refined_method_name}"
-                    )
+                    logger.warning(f"无法提取优化后的方法名，使用: {refined_method_name}")
 
                 # 创建优化后的 TestMethod 对象
                 refined_method = TestMethod(
                     method_name=refined_method_name,
                     code=refined_code,
                     target_method=target_method
-                    or (
-                        test_case.methods[0].target_method if test_case.methods else ""
-                    ),
+                    or (test_case.methods[0].target_method if test_case.methods else ""),
                     created_at=datetime.now(),
                     updated_at=datetime.now(),
                 )
@@ -408,12 +400,10 @@ class TestGenerator:
 
             try:
                 # 使用提示词管理器生成修复提示词
-                system_prompt, user_prompt = (
-                    self.prompt_manager.render_fix_single_method(
-                        method_code=method_code,
-                        class_code=class_code,
-                        error_message=error_message,
-                    )
+                system_prompt, user_prompt = self.prompt_manager.render_fix_single_method(
+                    method_code=method_code,
+                    class_code=class_code,
+                    error_message=error_message,
                 )
 
                 # 调用 LLM（不再使用 json_object 格式，使用配置文件的 temperature）

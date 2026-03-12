@@ -56,9 +56,7 @@ def _error_response(
     message: str,
     field_errors: list[FieldError],
 ) -> JSONResponse:
-    payload = ErrorResponse(
-        error=ApiError(code=code, message=message, fieldErrors=field_errors)
-    )
+    payload = ErrorResponse(error=ApiError(code=code, message=message, fieldErrors=field_errors))
     return JSONResponse(status_code=status_code, content=payload.model_dump())
 
 
@@ -104,9 +102,7 @@ def _config_error_response(exc: ValidationError) -> JSONResponse:
     )
 
 
-def _build_sse_snapshot_event(
-    run_id: str, run_service: RunLifecycleService
-) -> dict[str, Any]:
+def _build_sse_snapshot_event(run_id: str, run_service: RunLifecycleService) -> dict[str, Any]:
     snapshot = run_service.build_snapshot(run_id)
     return {
         "sequence": 0,
@@ -156,9 +152,7 @@ def _artifact_not_found_response(run_id: str, artifact_name: str) -> JSONRespons
         message="Artifact does not exist.",
         field_errors=[
             FieldError(path=["runId"], code="known_run", message=run_id),
-            FieldError(
-                path=["artifact"], code="missing_artifact", message=artifact_name
-            ),
+            FieldError(path=["artifact"], code="missing_artifact", message=artifact_name),
         ],
     )
 
@@ -166,10 +160,7 @@ def _artifact_not_found_response(run_id: str, artifact_name: str) -> JSONRespons
 def _resolve_runtime_hooks(
     services: AppServices,
 ) -> tuple[Callable[..., dict[str, Any]], Callable[..., None]]:
-    if (
-        services.system_initializer is not None
-        and services.evolution_runner is not None
-    ):
+    if services.system_initializer is not None and services.evolution_runner is not None:
         return services.system_initializer, services.evolution_runner
 
     import main
@@ -390,9 +381,7 @@ async def create_run(
             409,
             code="active_run_conflict",
             message="Another run is already active.",
-            field_errors=[
-                FieldError(path=[], code="active_run_exists", message=str(exc))
-            ],
+            field_errors=[FieldError(path=[], code="active_run_exists", message=str(exc))],
         )
 
     created_response = RunCreateResponse(
@@ -445,9 +434,7 @@ def get_run_snapshot(
             404,
             code="run_not_found",
             message="Run does not exist.",
-            field_errors=[
-                FieldError(path=["runId"], code="unknown_run", message=run_id)
-            ],
+            field_errors=[FieldError(path=["runId"], code="unknown_run", message=run_id)],
         )
     return RunSnapshotResponse.model_validate(snapshot)
 

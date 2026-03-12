@@ -2,10 +2,10 @@
 
 import logging
 import os
-from datetime import datetime
-from typing import Dict, Any, List, Callable, Optional
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -177,9 +177,7 @@ class AgentTools:
             ),
         )
 
-    def register(
-        self, name: str, func: Callable, metadata: Optional[ToolMetadata] = None
-    ) -> None:
+    def register(self, name: str, func: Callable, metadata: Optional[ToolMetadata] = None) -> None:
         """
         注册工具
 
@@ -296,9 +294,7 @@ class AgentTools:
         else:
             logger.debug(f"测试文件不存在，无需删除: {test_file_path}")
 
-    def _generate_and_verify_in_sandbox(
-        self, class_name: str, method_name: str
-    ) -> Dict[str, Any]:
+    def _generate_and_verify_in_sandbox(self, class_name: str, method_name: str) -> Dict[str, Any]:
         """
         在独立沙箱中生成并验证测试（阶段1：验证阶段）
 
@@ -322,8 +318,8 @@ class AgentTools:
                 "error": str (如果失败)
             }
         """
-        from ..utils.project_utils import find_java_file, write_test_file
         from ..utils.code_utils import extract_class_from_file
+        from ..utils.project_utils import find_java_file, write_test_file
 
         sandbox_path = None
         sandbox_id = None
@@ -409,7 +405,7 @@ class AgentTools:
 
             # 8. 静态校验
             if test_case.compile_success:
-                from ..utils.code_utils import validate_test_methods, build_test_class
+                from ..utils.code_utils import build_test_class, validate_test_methods
 
                 invalid_methods = validate_test_methods(test_case.methods, class_code)
                 if invalid_methods:
@@ -417,9 +413,7 @@ class AgentTools:
                         f"静态校验发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除"
                     )
                     test_case.methods = [
-                        m
-                        for m in test_case.methods
-                        if m.method_name not in invalid_methods
+                        m for m in test_case.methods if m.method_name not in invalid_methods
                     ]
 
                     if not test_case.methods:
@@ -462,9 +456,7 @@ class AgentTools:
             logger.warning(f"在沙箱中生成测试失败: {e}", exc_info=True)
             return {"success": False, "error": str(e), "sandbox_id": sandbox_id}
 
-    def _refine_and_verify_in_sandbox(
-        self, class_name: str, method_name: str
-    ) -> Dict[str, Any]:
+    def _refine_and_verify_in_sandbox(self, class_name: str, method_name: str) -> Dict[str, Any]:
         """
         在独立沙箱中完善并验证测试（阶段1：验证阶段）
 
@@ -490,8 +482,8 @@ class AgentTools:
                 "original_test_case": TestCase (原始测试用例)
             }
         """
-        from ..utils.project_utils import find_java_file, write_test_file
         from ..utils.code_utils import extract_class_from_file
+        from ..utils.project_utils import find_java_file, write_test_file
 
         sandbox_path = None
         sandbox_id = None
@@ -618,19 +610,15 @@ class AgentTools:
 
             # 9. 静态校验
             if refined_test_case.compile_success:
-                from ..utils.code_utils import validate_test_methods, build_test_class
+                from ..utils.code_utils import build_test_class, validate_test_methods
 
-                invalid_methods = validate_test_methods(
-                    refined_test_case.methods, class_code
-                )
+                invalid_methods = validate_test_methods(refined_test_case.methods, class_code)
                 if invalid_methods:
                     logger.warning(
                         f"静态校验发现 {len(invalid_methods)} 个包含潜在错误的测试方法，将移除"
                     )
                     refined_test_case.methods = [
-                        m
-                        for m in refined_test_case.methods
-                        if m.method_name not in invalid_methods
+                        m for m in refined_test_case.methods if m.method_name not in invalid_methods
                     ]
 
                     if not refined_test_case.methods:
@@ -756,8 +744,8 @@ class AgentTools:
             修复后的测试用例
         """
         from ..executor.surefire_parser import SurefireParser
-        from ..utils.project_utils import write_test_file
         from ..utils.code_utils import build_test_class
+        from ..utils.project_utils import write_test_file
 
         # 使用传入的 project_path 或默认的 self.project_path
         # 这样可以支持并发执行，每个线程使用独立的沙箱
@@ -784,9 +772,7 @@ class AgentTools:
             compile_retry_count += 1
 
             if compile_retry_count >= max_compile_retries:
-                logger.warning(
-                    f"✗ 编译失败且已达到最大重试次数（{max_compile_retries}次）"
-                )
+                logger.warning(f"✗ 编译失败且已达到最大重试次数（{max_compile_retries}次）")
                 test_case.compile_success = False
                 test_case.compile_error = (
                     f"编译失败（已重试{max_compile_retries}次）: {compile_error}"
@@ -807,9 +793,7 @@ class AgentTools:
             if not fixed_test_case:
                 logger.warning("LLM 未能生成修复后的测试代码")
                 test_case.compile_success = False
-                test_case.compile_error = (
-                    f"编译失败（已重试{compile_retry_count}次）且无法修复"
-                )
+                test_case.compile_error = f"编译失败（已重试{compile_retry_count}次）且无法修复"
                 return test_case
 
             # 写入修复后的测试文件（直接覆盖）
@@ -849,9 +833,7 @@ class AgentTools:
             timeout_methods = self._identify_timeout_methods(test_case, work_path)
 
             if timeout_methods:
-                logger.warning(
-                    f"识别到 {len(timeout_methods)} 个超时或失败的方法，将移除它们"
-                )
+                logger.warning(f"识别到 {len(timeout_methods)} 个超时或失败的方法，将移除它们")
                 # 保留没有超时的方法
                 valid_methods = [
                     m for m in test_case.methods if m.method_name not in timeout_methods
@@ -860,12 +842,8 @@ class AgentTools:
                 if not valid_methods:
                     logger.warning("所有测试方法都超时或失败")
                     test_case.compile_success = False
-                    timeout_value = (
-                        self.java_executor.test_timeout if self.java_executor else 30
-                    )
-                    test_case.compile_error = (
-                        f"所有测试方法都超时或失败（>{timeout_value}秒）"
-                    )
+                    timeout_value = self.java_executor.test_timeout if self.java_executor else 30
+                    test_case.compile_error = f"所有测试方法都超时或失败（>{timeout_value}秒）"
                     test_case.methods = []
                     return test_case
 
@@ -891,9 +869,7 @@ class AgentTools:
                     formatting_style=formatting_style,
                 )
 
-                logger.info(
-                    f"保留了 {len(valid_methods)} 个有效的测试方法，开始验证..."
-                )
+                logger.info(f"保留了 {len(valid_methods)} 个有效的测试方法，开始验证...")
 
                 # 重新编译和测试，确保剩余方法一起工作正常
                 compile_result = self.java_executor.compile_tests(work_path)
@@ -906,9 +882,7 @@ class AgentTools:
 
                 test_result = self.java_executor.run_tests(work_path)
                 if test_result.get("success"):
-                    logger.info(
-                        f"✓ 过滤后的测试用例验证成功，保留 {len(valid_methods)} 个方法"
-                    )
+                    logger.info(f"✓ 过滤后的测试用例验证成功，保留 {len(valid_methods)} 个方法")
                     test_case.compile_success = True
                     test_case.compile_error = None
                     return test_case
@@ -921,12 +895,8 @@ class AgentTools:
             else:
                 logger.warning("无法识别超时方法")
                 test_case.compile_success = False
-                timeout_value = (
-                    self.java_executor.test_timeout if self.java_executor else 30
-                )
-                test_case.compile_error = (
-                    f"测试运行超时但无法识别具体方法（>{timeout_value}秒）"
-                )
+                timeout_value = self.java_executor.test_timeout if self.java_executor else 30
+                test_case.compile_error = f"测试运行超时但无法识别具体方法（>{timeout_value}秒）"
                 test_case.methods = []
                 return test_case
 
@@ -954,14 +924,10 @@ class AgentTools:
                 if test.passed:
                     passed_methods.add(test.method_name)
                 else:
-                    error_msg = (
-                        test.error_message or test.failure_message or "Unknown error"
-                    )
+                    error_msg = test.error_message or test.failure_message or "Unknown error"
                     failed_methods[test.method_name] = error_msg
 
-        logger.info(
-            f"测试结果: {len(passed_methods)} 个通过, {len(failed_methods)} 个失败"
-        )
+        logger.info(f"测试结果: {len(passed_methods)} 个通过, {len(failed_methods)} 个失败")
 
         if failed_methods:
             for method_name, error in failed_methods.items():
@@ -974,10 +940,7 @@ class AgentTools:
 
         for method_name, error_message in failed_methods.items():
             # 对于超时错误，直接丢弃，不尝试修复
-            if (
-                "timeout" in error_message.lower()
-                or "timed out" in error_message.lower()
-            ):
+            if "timeout" in error_message.lower() or "timed out" in error_message.lower():
                 logger.warning(f"方法 {method_name} 超时，直接丢弃")
                 discarded_methods.add(method_name)
                 continue
@@ -1116,9 +1079,7 @@ class AgentTools:
 
         return test_case
 
-    def _identify_timeout_methods(
-        self, test_case, project_path: Optional[str] = None
-    ) -> set:
+    def _identify_timeout_methods(self, test_case, project_path: Optional[str] = None) -> set:
         """
         通过逐个运行测试方法来识别导致超时的方法
 
@@ -1129,7 +1090,7 @@ class AgentTools:
         Returns:
             导致超时的方法名集合
         """
-        from comet.utils import write_test_file, build_test_class
+        from comet.utils import build_test_class, write_test_file
 
         # 使用传入的 project_path 或默认的 self.project_path
         work_path = project_path or self.project_path
@@ -1211,9 +1172,7 @@ class AgentTools:
         # 获取黑名单
         blacklist = set()
         if self.state and self.state.failed_targets:
-            blacklist = {
-                ft.get("target") for ft in self.state.failed_targets if ft.get("target")
-            }
+            blacklist = {ft.get("target") for ft in self.state.failed_targets if ft.get("target")}
             logger.debug(f"黑名单中有 {len(blacklist)} 个失败的目标")
 
         # 获取已处理目标列表
@@ -1222,15 +1181,11 @@ class AgentTools:
             processed_targets = set(self.state.processed_targets)
             logger.debug(f"已处理目标列表中有 {len(processed_targets)} 个目标")
 
-        target = selector.select(
-            criteria, blacklist=blacklist, processed_targets=processed_targets
-        )
+        target = selector.select(criteria, blacklist=blacklist, processed_targets=processed_targets)
 
         # 获取目标方法的覆盖率
         if target.get("class_name") and target.get("method_name"):
-            coverage = self.db.get_method_coverage(
-                target["class_name"], target["method_name"]
-            )
+            coverage = self.db.get_method_coverage(target["class_name"], target["method_name"])
             if coverage:
                 target["method_coverage"] = coverage.line_coverage_rate
                 logger.info(f"目标方法覆盖率: {coverage.line_coverage_rate:.1%}")
@@ -1248,9 +1203,7 @@ class AgentTools:
                 old_method = previous["method_name"]
 
                 # 将旧目标标记为已处理
-                old_target_key = (
-                    f"{old_class}.{old_method}" if old_method else old_class
-                )
+                old_target_key = f"{old_class}.{old_method}" if old_method else old_class
                 self.state.mark_target_processed(old_target_key)
                 logger.info(f"将旧目标 {old_target_key} 标记为已处理")
 
@@ -1264,9 +1217,7 @@ class AgentTools:
             if "method_coverage" in target:
                 self.state.current_method_coverage = target["method_coverage"]
 
-        logger.info(
-            f"已选择目标: {target.get('class_name')}.{target.get('method_name')}"
-        )
+        logger.info(f"已选择目标: {target.get('class_name')}.{target.get('method_name')}")
         return target
 
     def generate_mutants(
@@ -1279,14 +1230,12 @@ class AgentTools:
             class_name: 类名
             method_name: 目标方法名（可选，如果指定则只生成该方法的变异体）
         """
-        if not all(
-            [self.project_path, self.mutant_generator, self.static_guard, self.db]
-        ):
+        if not all([self.project_path, self.mutant_generator, self.static_guard, self.db]):
             logger.warning("generate_mutants: 缺少必要组件")
             return {"generated": 0}
 
-        from ..utils.project_utils import find_java_file
         from ..utils.code_utils import extract_class_from_file
+        from ..utils.project_utils import find_java_file
 
         # 查找类文件（支持同一文件中的多个类）
         file_path = find_java_file(self.project_path, class_name, db=self.db)
@@ -1363,9 +1312,7 @@ class AgentTools:
 
         if not result["success"]:
             # 验证失败，主空间完全不受影响
-            logger.warning(
-                f"✗ 测试在验证沙箱中验证失败: {result.get('error', 'Unknown')}"
-            )
+            logger.warning(f"✗ 测试在验证沙箱中验证失败: {result.get('error', 'Unknown')}")
 
             # 清理沙箱
             if result.get("sandbox_id"):
@@ -1376,12 +1323,8 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = (
-                    f"{class_name}.{method_name}" if method_name else class_name
-                )
-                if not any(
-                    ft.get("target") == target_key for ft in self.state.failed_targets
-                ):
+                target_key = f"{class_name}.{method_name}" if method_name else class_name
+                if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
                     self.state.failed_targets.append(
                         {
                             "target": target_key,
@@ -1397,18 +1340,14 @@ class AgentTools:
                     # 如果当前目标是被加入黑名单的目标，清除当前目标选中
                     if self.state.current_target:
                         current_class = self.state.current_target.get("class_name")
-                        current_method = self.state.current_target.get(
-                            "method_name", ""
-                        )
+                        current_method = self.state.current_target.get("method_name", "")
                         current_target_key = (
                             f"{current_class}.{current_method}"
                             if current_method and current_class
                             else (current_class if current_class else None)
                         )
                         if current_target_key == target_key:
-                            logger.info(
-                                f"当前目标 {target_key} 已被加入黑名单，清除目标选中"
-                            )
+                            logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
                             self.state.update_target(None)
 
             return {
@@ -1462,8 +1401,7 @@ class AgentTools:
             logger.warning(f"清理验证沙箱失败: {e}")
 
         logger.info(
-            f"✓ 测试生成完成: {class_name}.{method_name} "
-            f"({len(test_case.methods)} 个测试方法)"
+            f"✓ 测试生成完成: {class_name}.{method_name} ({len(test_case.methods)} 个测试方法)"
         )
 
         return {
@@ -1506,9 +1444,7 @@ class AgentTools:
 
         if not result["success"]:
             # 验证失败，主空间完全不受影响
-            logger.warning(
-                f"✗ 测试在验证沙箱中验证失败: {result.get('error', 'Unknown')}"
-            )
+            logger.warning(f"✗ 测试在验证沙箱中验证失败: {result.get('error', 'Unknown')}")
 
             # 清理沙箱
             if result.get("sandbox_id"):
@@ -1519,12 +1455,8 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = (
-                    f"{class_name}.{method_name}" if method_name else class_name
-                )
-                if not any(
-                    ft.get("target") == target_key for ft in self.state.failed_targets
-                ):
+                target_key = f"{class_name}.{method_name}" if method_name else class_name
+                if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
                     self.state.failed_targets.append(
                         {
                             "target": target_key,
@@ -1540,18 +1472,14 @@ class AgentTools:
                     # 如果当前目标是被加入黑名单的目标，清除当前目标选中
                     if self.state.current_target:
                         current_class = self.state.current_target.get("class_name")
-                        current_method = self.state.current_target.get(
-                            "method_name", ""
-                        )
+                        current_method = self.state.current_target.get("method_name", "")
                         current_target_key = (
                             f"{current_class}.{current_method}"
                             if current_method and current_class
                             else (current_class if current_class else None)
                         )
                         if current_target_key == target_key:
-                            logger.info(
-                                f"当前目标 {target_key} 已被加入黑名单，清除目标选中"
-                            )
+                            logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
                             self.state.update_target(None)
 
             return {
@@ -1620,9 +1548,7 @@ class AgentTools:
             "refined": len(refined_test_case.methods),
             "test_id": refined_test_case.id,
             "compile_success": refined_test_case.compile_success,
-            "previous_count": (
-                len(original_test_case.methods) if original_test_case else 0
-            ),
+            "previous_count": (len(original_test_case.methods) if original_test_case else 0),
         }
 
         # 添加当前方法的覆盖率信息
@@ -1639,9 +1565,7 @@ class AgentTools:
         注意：此方法假设所有测试用例都已在 generate_tests/refine_tests 阶段验证通过。
         如果测试失败，说明项目源代码可能被修改，需要用户检查。
         """
-        if not all(
-            [self.project_path, self.mutation_evaluator, self.java_executor, self.db]
-        ):
+        if not all([self.project_path, self.mutation_evaluator, self.java_executor, self.db]):
             logger.warning("run_evaluation: 缺少必要组件")
             return {"evaluated": 0}
 
@@ -1713,9 +1637,7 @@ class AgentTools:
                 if result:
                     # 统计方法数量
                     method_count = len(tc.methods) if tc.methods else 0
-                    logger.debug(
-                        f"✓ 同步测试类: {tc.class_name} ({method_count} 个方法)"
-                    )
+                    logger.debug(f"✓ 同步测试类: {tc.class_name} ({method_count} 个方法)")
                 else:
                     logger.warning(f"✗ 同步测试类失败: {tc.class_name}")
 
@@ -1769,26 +1691,19 @@ class AgentTools:
         logger.info("步骤2: 收集覆盖率信息...")
         coverage_data = None
         try:
-            coverage_result = self.java_executor.run_tests_with_coverage(
-                self.project_path
-            )
+            coverage_result = self.java_executor.run_tests_with_coverage(self.project_path)
 
             if coverage_result.get("success"):
                 coverage_data = coverage_result
 
                 # 解析覆盖率报告
-                from pathlib import Path
-                from ..executor.coverage_parser import CoverageParser
                 import time
+                from pathlib import Path
+
+                from ..executor.coverage_parser import CoverageParser
 
                 parser = CoverageParser()
-                jacoco_path = (
-                    Path(self.project_path)
-                    / "target"
-                    / "site"
-                    / "jacoco"
-                    / "jacoco.xml"
-                )
+                jacoco_path = Path(self.project_path) / "target" / "site" / "jacoco" / "jacoco.xml"
 
                 # 等待 JaCoCo 报告文件生成（带重试）
                 # Maven 命令返回成功后，文件可能还在缓冲区/正在写入磁盘
@@ -1806,9 +1721,7 @@ class AgentTools:
 
                 if file_found:
                     logger.info(f"解析 JaCoCo 报告: {jacoco_path}")
-                    method_coverages = parser.parse_jacoco_xml_with_lines(
-                        str(jacoco_path)
-                    )
+                    method_coverages = parser.parse_jacoco_xml_with_lines(str(jacoco_path))
 
                     # 保存到数据库
                     iteration = self.state.iteration if self.state else 0
@@ -1818,9 +1731,7 @@ class AgentTools:
                     logger.info(f"已保存 {len(method_coverages)} 个方法的覆盖率数据")
 
                     # 直接从 XML 计算全局覆盖率（最准确的方式）
-                    coverage_data = parser.aggregate_global_coverage_from_xml(
-                        str(jacoco_path)
-                    )
+                    coverage_data = parser.aggregate_global_coverage_from_xml(str(jacoco_path))
                     logger.info(
                         f"全局覆盖率（从 XML）: 行覆盖率 {coverage_data['line_coverage']:.1%}, "
                         f"分支覆盖率 {coverage_data['branch_coverage']:.1%}"
@@ -1992,9 +1903,7 @@ class AgentTools:
             killed_mutants = [m for m in mutants if not m.survived]
             survived_mutants = [m for m in mutants if m.survived]
 
-            logger.info(
-                f"自动学习: {len(killed_mutants)} 个被击杀, {len(survived_mutants)} 个幸存"
-            )
+            logger.info(f"自动学习: {len(killed_mutants)} 个被击杀, {len(survived_mutants)} 个幸存")
 
             # 从幸存变异体学习新模式（限制数量，避免过多）
             if self.pattern_extractor and survived_mutants:
@@ -2053,9 +1962,7 @@ class AgentTools:
             # 索引到 RAG
             for cls in analysis_result.get("classes", []):
                 if cls.get("name") == class_name or not class_name:
-                    self.knowledge_base.index_source_analysis(
-                        cls.get("name", class_name), cls
-                    )
+                    self.knowledge_base.index_source_analysis(cls.get("name", class_name), cls)
 
             logger.info(f"已索引源代码分析结果: {class_name}")
             return {"updated": True, "class_name": class_name}
@@ -2104,14 +2011,12 @@ class AgentTools:
         Returns:
             结果字典
         """
-        if not all(
-            [self.project_path, self.mutant_generator, self.static_guard, self.db]
-        ):
+        if not all([self.project_path, self.mutant_generator, self.static_guard, self.db]):
             logger.warning("refine_mutants: 缺少必要组件")
             return {"generated": 0}
 
-        from ..utils.project_utils import find_java_file
         from ..utils.code_utils import extract_class_from_file
+        from ..utils.project_utils import find_java_file
 
         # 查找类文件（支持同一文件中的多个类）
         file_path = find_java_file(self.project_path, class_name, db=self.db)

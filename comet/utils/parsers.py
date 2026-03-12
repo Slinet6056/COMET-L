@@ -1,8 +1,8 @@
 """LLM 输出解析器 - 解析代码生成的各种输出格式"""
 
-import re
 import logging
-from typing import List, Dict, Any, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +62,7 @@ def parse_mutation_response(response: str) -> List[Dict[str, Any]]:
 
             # 提取 ORIGINAL 和 MUTATED 代码
             # 查找 ORIGINAL: 和 MUTATED: 标记的位置
-            original_match = re.search(
-                r"ORIGINAL:\s*\n(.*?)\n(?:MUTATED:|$)", part, re.DOTALL
-            )
+            original_match = re.search(r"ORIGINAL:\s*\n(.*?)\n(?:MUTATED:|$)", part, re.DOTALL)
             mutated_match = re.search(r"MUTATED:\s*\n(.*?)$", part, re.DOTALL)
 
             if not original_match or not mutated_match:
@@ -151,9 +149,7 @@ def parse_test_methods_response(response: str) -> List[str]:
                 continue
 
             # 验证代码看起来像一个方法
-            if not re.search(
-                r"(public|protected|private)?\s*(static\s+)?\w+\s+\w+\s*\(", part
-            ):
+            if not re.search(r"(public|protected|private)?\s*(static\s+)?\w+\s+\w+\s*\(", part):
                 logger.warning("跳过：代码不像是一个完整的方法")
                 continue
 

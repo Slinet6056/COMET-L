@@ -11,9 +11,7 @@ from pydantic import BaseModel, Field
 class LLMConfig(BaseModel):
     """LLM 配置"""
 
-    base_url: str = Field(
-        default="https://api.openai.com/v1", description="API 基础 URL"
-    )
+    base_url: str = Field(default="https://api.openai.com/v1", description="API 基础 URL")
     api_key: str = Field(description="API 密钥")
     model: str = Field(default="gpt-4", description="模型名称")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
@@ -45,9 +43,7 @@ class ExecutionConfig(BaseModel):
 
     timeout: int = Field(default=300, ge=1, description="超时时间（秒）")
     test_timeout: int = Field(default=30, ge=1, description="测试执行超时时间（秒）")
-    coverage_timeout: int = Field(
-        default=300, ge=1, description="覆盖率收集超时时间（秒）"
-    )
+    coverage_timeout: int = Field(default=300, ge=1, description="覆盖率收集超时时间（秒）")
     max_retries: int = Field(default=3, ge=0, description="最大重试次数")
     runtime_java_home: Optional[str] = Field(
         default=None, description="运行 COMET-L Java Runtime 使用的 Java 安装路径"
@@ -122,9 +118,7 @@ class ExecutionConfig(BaseModel):
     ) -> Dict[str, str]:
         return self._build_subprocess_env(self._resolve_target_java_home(), base_env)
 
-    def build_subprocess_env(
-        self, base_env: Optional[Dict[str, str]] = None
-    ) -> Dict[str, str]:
+    def build_subprocess_env(self, base_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         return self.build_target_subprocess_env(base_env)
 
     def resolve_runtime_java_cmd(self) -> str:
@@ -174,9 +168,7 @@ class EvolutionConfig(BaseModel):
         description="最小改进绝对阈值（比例值，0.01 表示提升 1 个百分点）",
     )
     budget_llm_calls: int = Field(default=1000, ge=1, description="LLM 调用预算")
-    stop_on_no_improvement_rounds: int = Field(
-        default=3, ge=1, description="无改进时停止的轮数"
-    )
+    stop_on_no_improvement_rounds: int = Field(default=3, ge=1, description="无改进时停止的轮数")
 
     # 优秀水平阈值（用于提前停止）
     excellent_mutation_score: float = Field(
@@ -198,15 +190,9 @@ class EvolutionConfig(BaseModel):
 class EmbeddingConfig(BaseModel):
     """Embedding 配置"""
 
-    base_url: str = Field(
-        default="https://api.openai.com/v1", description="Embedding API 基础 URL"
-    )
-    api_key: Optional[str] = Field(
-        default=None, description="API 密钥，留空则使用 llm.api_key"
-    )
-    model: str = Field(
-        default="text-embedding-3-small", description="Embedding 模型名称"
-    )
+    base_url: str = Field(default="https://api.openai.com/v1", description="Embedding API 基础 URL")
+    api_key: Optional[str] = Field(default=None, description="API 密钥，留空则使用 llm.api_key")
+    model: str = Field(default="text-embedding-3-small", description="Embedding 模型名称")
     batch_size: int = Field(default=100, ge=1, description="批量 embedding 的大小")
 
 
@@ -221,9 +207,7 @@ class RetrievalConfig(BaseModel):
     """检索配置"""
 
     top_k: int = Field(default=5, ge=1, description="每次检索返回的文档数")
-    score_threshold: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="相似度阈值"
-    )
+    score_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="相似度阈值")
 
 
 class KnowledgeConfig(BaseModel):
@@ -238,12 +222,8 @@ class KnowledgeConfig(BaseModel):
     embedding: EmbeddingConfig = Field(
         default_factory=EmbeddingConfig, description="Embedding 配置"
     )
-    vector_db: VectorDBConfig = Field(
-        default_factory=VectorDBConfig, description="向量数据库配置"
-    )
-    retrieval: RetrievalConfig = Field(
-        default_factory=RetrievalConfig, description="检索配置"
-    )
+    vector_db: VectorDBConfig = Field(default_factory=VectorDBConfig, description="向量数据库配置")
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig, description="检索配置")
 
 
 class LoggingConfig(BaseModel):
@@ -260,24 +240,16 @@ class PreprocessingConfig(BaseModel):
     max_workers: Optional[int] = Field(
         default=None, description="最大并发数，null表示自动（cpu_count）"
     )
-    timeout_per_method: int = Field(
-        default=300, ge=1, description="单个方法的超时时间（秒）"
-    )
+    timeout_per_method: int = Field(default=300, ge=1, description="单个方法的超时时间（秒）")
 
 
 class AgentParallelConfig(BaseModel):
     """Agent 并行配置"""
 
     enabled: bool = Field(default=False, description="是否启用并行 Agent 模式")
-    max_parallel_targets: int = Field(
-        default=4, ge=1, le=16, description="最大并行目标数"
-    )
-    max_eval_workers: int = Field(
-        default=4, ge=1, le=16, description="变异体评估并行度"
-    )
-    timeout_per_target: int = Field(
-        default=300, ge=1, description="单个目标的超时时间（秒）"
-    )
+    max_parallel_targets: int = Field(default=4, ge=1, le=16, description="最大并行目标数")
+    max_eval_workers: int = Field(default=4, ge=1, le=16, description="变异体评估并行度")
+    timeout_per_target: int = Field(default=300, ge=1, description="单个目标的超时时间（秒）")
 
 
 class AgentConfig(BaseModel):

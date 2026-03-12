@@ -7,9 +7,7 @@ from comet.web.log_router import RunLogRouter
 
 
 class ParallelPreprocessingLifecycleTests(TestCase):
-    def _build_preprocessor(
-        self, *, publisher: Mock | None = None
-    ) -> ParallelPreprocessor:
+    def _build_preprocessor(self, *, publisher: Mock | None = None) -> ParallelPreprocessor:
         config = SimpleNamespace(
             preprocessing=SimpleNamespace(max_workers=1, timeout_per_method=30),
             evolution=SimpleNamespace(min_method_lines=1),

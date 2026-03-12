@@ -1,9 +1,9 @@
 """向量存储模块 - ChromaDB 封装"""
 
 import logging
-from pathlib import Path
-from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings

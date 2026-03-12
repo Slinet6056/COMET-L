@@ -1,11 +1,11 @@
 """知识库持久化存储"""
 
-import sqlite3
 import json
 import logging
-from pathlib import Path
-from typing import Optional, List
+import sqlite3
 from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
 
 from ..models import Contract, Pattern
 
@@ -128,9 +128,7 @@ class KnowledgeStore:
         cursor.execute("SELECT * FROM contracts WHERE class_name = ?", (class_name,))
         return [self._row_to_contract(row) for row in cursor.fetchall()]
 
-    def get_contracts_by_method(
-        self, class_name: str, method_name: str
-    ) -> List[Contract]:
+    def get_contracts_by_method(self, class_name: str, method_name: str) -> List[Contract]:
         """获取方法的契约"""
         cursor = self.conn.cursor()
         cursor.execute(
@@ -187,9 +185,7 @@ class KnowledgeStore:
     def get_all_patterns(self) -> List[Pattern]:
         """获取所有模式"""
         cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT * FROM patterns ORDER BY success_rate DESC, usage_count DESC"
-        )
+        cursor.execute("SELECT * FROM patterns ORDER BY success_rate DESC, usage_count DESC")
         return [self._row_to_pattern(row) for row in cursor.fetchall()]
 
     def update_pattern_stats(self, pattern_id: str, success: bool) -> None:
@@ -214,12 +210,8 @@ class KnowledgeStore:
             class_name=row["class_name"],
             method_name=row["method_name"],
             method_signature=row["method_signature"],
-            preconditions=(
-                json.loads(row["preconditions"]) if row["preconditions"] else []
-            ),
-            postconditions=(
-                json.loads(row["postconditions"]) if row["postconditions"] else []
-            ),
+            preconditions=(json.loads(row["preconditions"]) if row["preconditions"] else []),
+            postconditions=(json.loads(row["postconditions"]) if row["postconditions"] else []),
             exceptions=json.loads(row["exceptions"]) if row["exceptions"] else [],
             description=row["description"],
             source=row["source"],

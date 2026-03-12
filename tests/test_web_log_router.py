@@ -32,9 +32,7 @@ class LogRouterTests(unittest.TestCase):
             worker_messages = [
                 entry["message"] for entry in router.get_logs("Worker:Calculator.add")
             ]
-            other_messages = [
-                entry["message"] for entry in router.get_logs("Worker:Order.submit")
-            ]
+            other_messages = [entry["message"] for entry in router.get_logs("Worker:Order.submit")]
 
             self.assertEqual(worker_messages, ["worker only"])
             self.assertEqual(other_messages, ["other worker"])
@@ -90,9 +88,7 @@ class LogRouterTests(unittest.TestCase):
             logger.info("second")
             logger.info("third")
 
-        messages = [
-            entry["message"] for entry in router.get_logs("Worker:Calculator.add")
-        ]
+        messages = [entry["message"] for entry in router.get_logs("Worker:Calculator.add")]
         self.assertEqual(messages, ["second", "third"])
 
         snapshot = router.snapshot()
@@ -107,12 +103,8 @@ class LogRouterTests(unittest.TestCase):
 
     def test_snapshot_uses_stream_order_instead_of_alphabetical_task_ids(self) -> None:
         router = RunLogRouter(max_entries_per_stream=5)
-        router.ensure_stream(
-            "task-z", status="running", started_at="2026-01-01T00:00:01+00:00"
-        )
-        router.ensure_stream(
-            "task-a", status="running", started_at="2026-01-01T00:00:02+00:00"
-        )
+        router.ensure_stream("task-z", status="running", started_at="2026-01-01T00:00:01+00:00")
+        router.ensure_stream("task-a", status="running", started_at="2026-01-01T00:00:02+00:00")
 
         snapshot = router.snapshot()
 

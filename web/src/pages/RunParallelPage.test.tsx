@@ -279,7 +279,8 @@ describe('Run page parallel mode', () => {
             targetId:
               'Calculator.withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
             className: 'Calculator',
-            methodName: 'withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
+            methodName:
+              'withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
             success: true,
             error: null,
             testsGenerated: 2,

@@ -38,13 +38,9 @@ def configure_runtime_environment(config: Settings) -> dict[str, str]:
 
 def parse_args():
     """解析命令行参数"""
-    parser = argparse.ArgumentParser(
-        description="COMET-L: 基于 LLM 的测试变异协同进化系统"
-    )
+    parser = argparse.ArgumentParser(description="COMET-L: 基于 LLM 的测试变异协同进化系统")
 
-    parser.add_argument(
-        "--project-path", type=str, required=True, help="目标 Java Maven 项目路径"
-    )
+    parser.add_argument("--project-path", type=str, required=True, help="目标 Java Maven 项目路径")
 
     parser.add_argument(
         "--config",
@@ -57,21 +53,13 @@ def parse_args():
         "--max-iterations", type=int, default=None, help="最大迭代次数（覆盖配置文件）"
     )
 
-    parser.add_argument(
-        "--budget", type=int, default=None, help="LLM 调用预算（覆盖配置文件）"
-    )
+    parser.add_argument("--budget", type=int, default=None, help="LLM 调用预算（覆盖配置文件）")
 
-    parser.add_argument(
-        "--resume", type=str, default=None, help="从保存的状态恢复（状态文件路径）"
-    )
+    parser.add_argument("--resume", type=str, default=None, help="从保存的状态恢复（状态文件路径）")
 
-    parser.add_argument(
-        "--output-dir", type=str, default=None, help="输出目录（覆盖配置文件）"
-    )
+    parser.add_argument("--output-dir", type=str, default=None, help="输出目录（覆盖配置文件）")
 
-    parser.add_argument(
-        "--debug", action="store_true", help="启用调试日志（DEBUG级别）"
-    )
+    parser.add_argument("--debug", action="store_true", help="启用调试日志（DEBUG级别）")
 
     parser.add_argument(
         "--bug-reports-dir",
@@ -196,9 +184,7 @@ def initialize_system(
     test_generator = TestGenerator(llm_client, knowledge_base)
 
     # 初始化 Java 运行时
-    java_runtime_jar = (
-        "java-runtime/target/comet-runtime-1.0.0-jar-with-dependencies.jar"
-    )
+    java_runtime_jar = "java-runtime/target/comet-runtime-1.0.0-jar-with-dependencies.jar"
     if not Path(java_runtime_jar).exists():
         logger.warning(
             f"Java 运行时 JAR 不存在: {java_runtime_jar}\n"
@@ -333,8 +319,7 @@ def run_evolution(
     logger.info("扫描项目，建立类到文件的映射...")
     scan_result = project_scanner.scan_project(project_path, use_cache=True)
     logger.info(
-        f"项目扫描完成: {scan_result['total_classes']} 个类, "
-        f"{scan_result['total_files']} 个文件"
+        f"项目扫描完成: {scan_result['total_classes']} 个类, {scan_result['total_files']} 个文件"
     )
 
     # 创建工作空间沙箱
@@ -490,9 +475,7 @@ def run_evolution(
 
                     for attempt in range(1, max_retries + 1):
                         try:
-                            logger.info(
-                                f"尝试运行覆盖率测试 ({attempt}/{max_retries})..."
-                            )
+                            logger.info(f"尝试运行覆盖率测试 ({attempt}/{max_retries})...")
                             coverage_result = java_executor.run_tests_with_coverage(
                                 workspace_sandbox
                             )
@@ -500,9 +483,7 @@ def run_evolution(
                             if coverage_result.get("success"):
                                 logger.info("初始覆盖率测试成功")
                                 if planner_type == "parallel":
-                                    synced = planner.sync_workspace_coverage(
-                                        wait_for_report=True
-                                    )
+                                    synced = planner.sync_workspace_coverage(wait_for_report=True)
                                     if not synced:
                                         logger.warning(
                                             "初始覆盖率报告同步失败，首批目标可能回退到默认选择策略"

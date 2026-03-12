@@ -119,9 +119,7 @@ class JavaExecutor:
                 "error": str(e),
             }
 
-    def _try_parse_json_stdout(
-        self, result: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _try_parse_json_stdout(self, result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         尝试从 _run_java_command 的 stdout 解析 JSON。
 

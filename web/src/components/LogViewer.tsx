@@ -159,10 +159,13 @@ function getStreamLogStateLabel(stream: RunLogStream, runStatus: string): string
     return '运行结束但无日志';
   }
 
-    return '等待首条日志';
+  return '等待首条日志';
 }
 
-function getEmptyStateCopy(stream: RunLogStream, runStatus: string): { title: string; detail: string } {
+function getEmptyStateCopy(
+  stream: RunLogStream,
+  runStatus: string,
+): { title: string; detail: string } {
   if (stream.taskId === 'main') {
     if (stream.totalEntryCount > 0) {
       return {
@@ -173,55 +176,55 @@ function getEmptyStateCopy(stream: RunLogStream, runStatus: string): { title: st
 
     if (runStatus === 'completed' || runStatus === 'failed') {
       return {
-          title: '未捕获到主协调器日志。',
-          detail: '运行结束时，主协调器流尚未产生可缓冲的日志输出。',
-        };
+        title: '未捕获到主协调器日志。',
+        detail: '运行结束时，主协调器流尚未产生可缓冲的日志输出。',
+      };
     }
 
     return {
-        title: '主协调器暂未输出日志。',
-        detail: '主协调器流当前还没有输出任何可缓冲的日志内容。',
-      };
+      title: '主协调器暂未输出日志。',
+      detail: '主协调器流当前还没有输出任何可缓冲的日志内容。',
+    };
   }
 
   if (stream.totalEntryCount > 0) {
     return {
-        title: '当前没有可用的工作线程缓冲日志行。',
-        detail: `工作线程 ${stream.taskId} 报告过活动，但当前缓冲区为空。`,
+      title: '当前没有可用的工作线程缓冲日志行。',
+      detail: `工作线程 ${stream.taskId} 报告过活动，但当前缓冲区为空。`,
     };
   }
 
   if (stream.status === 'pending') {
     return {
-        title: '工作线程尚未开始记录日志。',
-        detail: `工作线程 ${stream.taskId} 尚未启动，因此没有可显示的缓冲输出。`,
+      title: '工作线程尚未开始记录日志。',
+      detail: `工作线程 ${stream.taskId} 尚未启动，因此没有可显示的缓冲输出。`,
     };
   }
 
   if (stream.status === 'completed') {
     return {
-        title: '工作线程已完成，但没有缓冲日志。',
-        detail: `工作线程 ${stream.taskId} 已完成任务，但未输出可缓冲的日志内容。`,
+      title: '工作线程已完成，但没有缓冲日志。',
+      detail: `工作线程 ${stream.taskId} 已完成任务，但未输出可缓冲的日志内容。`,
     };
   }
 
   if (stream.status === 'failed') {
     return {
-        title: '工作线程在捕获日志前失败。',
-        detail: `工作线程 ${stream.taskId} 在记录任何缓冲日志输出前就已停止。`,
+      title: '工作线程在捕获日志前失败。',
+      detail: `工作线程 ${stream.taskId} 在记录任何缓冲日志输出前就已停止。`,
     };
   }
 
   if (runStatus === 'completed' || runStatus === 'failed') {
     return {
-        title: '运行结束时尚未捕获到工作线程日志。',
-        detail: `在运行结束前，工作线程 ${stream.taskId} 没有留下可缓冲的日志输出。`,
+      title: '运行结束时尚未捕获到工作线程日志。',
+      detail: `在运行结束前，工作线程 ${stream.taskId} 没有留下可缓冲的日志输出。`,
     };
   }
 
   return {
-      title: '工作线程正在等待输出日志。',
-      detail: `工作线程 ${stream.taskId} 当前处于活动状态，但尚未输出可缓冲的日志内容。`,
+    title: '工作线程正在等待输出日志。',
+    detail: `工作线程 ${stream.taskId} 当前处于活动状态，但尚未输出可缓冲的日志内容。`,
   };
 }
 
@@ -365,11 +368,16 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
     () => taskIds.filter((taskId) => expandedTaskIds[taskId]).sort(),
     [expandedTaskIds, taskIds],
   );
-  const expandedStreamIdsKey = useMemo(() => JSON.stringify(expandedStreamIds), [expandedStreamIds]);
+  const expandedStreamIdsKey = useMemo(
+    () => JSON.stringify(expandedStreamIds),
+    [expandedStreamIds],
+  );
 
   const now = Date.now();
   const axisRange = useMemo(() => {
-    const starts = streamItems.map((stream) => toMillis(stream.startedAt)).filter((value) => value !== null);
+    const starts = streamItems
+      .map((stream) => toMillis(stream.startedAt))
+      .filter((value) => value !== null);
     const ends = streamItems
       .map((stream) => getStreamEnd(stream, now))
       .filter((value) => value !== null);
@@ -406,8 +414,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
       }
 
       const responses: Array<
-        | { taskId: string; response: RunLogsStreamResponse }
-        | { taskId: string; error: string }
+        { taskId: string; response: RunLogsStreamResponse } | { taskId: string; error: string }
       > = await Promise.all(
         expandedIds.map(async (taskId) => {
           try {
@@ -416,10 +423,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
           } catch (loadError) {
             return {
               taskId,
-              error:
-                loadError instanceof Error
-                  ? loadError.message
-                  : '无法加载日志流详情。',
+              error: loadError instanceof Error ? loadError.message : '无法加载日志流详情。',
             };
           }
         }),
@@ -453,7 +457,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
       setErrorByTaskId((current) => {
         const next = { ...current };
         responses.forEach((result) => {
-            next[result.taskId] = 'error' in result ? result.error ?? '无法加载日志流详情。' : null;
+          next[result.taskId] = 'error' in result ? (result.error ?? '无法加载日志流详情。') : null;
         });
         return next;
       });
@@ -521,9 +525,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
         </div>
       </div>
 
-      <p className="muted-copy run-log-viewer__hint">
-        展开任意流行即可查看其缓冲日志输出。
-      </p>
+      <p className="muted-copy run-log-viewer__hint">展开任意流行即可查看其缓冲日志输出。</p>
 
       {isSummaryLoading ? <p className="muted-copy">正在加载日志流...</p> : null}
       {!isSummaryLoading && summaryError ? <p role="alert">{summaryError}</p> : null}
@@ -533,7 +535,11 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
           <div className="run-log-timeline">
             <div className="run-log-timeline__axis" aria-hidden="true">
               <span>{formatAxisTimestamp(axisRange.min)}</span>
-              <span>{formatAxisTimestamp(axisRange.min !== null ? axisRange.min + axisRange.span / 2 : null)}</span>
+              <span>
+                {formatAxisTimestamp(
+                  axisRange.min !== null ? axisRange.min + axisRange.span / 2 : null,
+                )}
+              </span>
               <span>{formatAxisTimestamp(axisRange.max)}</span>
             </div>
 
@@ -572,8 +578,12 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                     >
                       <span className="run-log-row__info">
                         <span className="run-log-row__title">
-                          <strong title={rowStream.taskId}>{formatTaskLabel(rowStream.taskId)}</strong>
-                          <span className={`worker-pill worker-pill--${getStreamStatusTone(rowStream.status)}`}>
+                          <strong title={rowStream.taskId}>
+                            {formatTaskLabel(rowStream.taskId)}
+                          </strong>
+                          <span
+                            className={`worker-pill worker-pill--${getStreamStatusTone(rowStream.status)}`}
+                          >
                             {formatStatusLabel(rowStream.status)}
                           </span>
                         </span>
@@ -589,19 +599,30 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                         {hasBar ? (
                           <span
                             className="run-log-row__bar"
-                            style={{ left: `${offset}%`, width: `${Math.min(width, 100 - offset)}%` }}
+                            style={{
+                              left: `${offset}%`,
+                              width: `${Math.min(width, 100 - offset)}%`,
+                            }}
                           />
                         ) : (
                           <span className="run-log-row__idle">暂无时间数据</span>
                         )}
                       </span>
 
-                      <span className="run-log-row__toggle">{isExpanded ? '收起日志' : '展开日志'}</span>
+                      <span className="run-log-row__toggle">
+                        {isExpanded ? '收起日志' : '展开日志'}
+                      </span>
                     </button>
 
                     {isExpanded ? (
-                      <section id={panelId} className="run-log-row__panel" aria-label={`${displayStream.taskId} 的日志`}>
-                        {isEntriesLoading ? <p className="muted-copy">正在加载日志条目...</p> : null}
+                      <section
+                        id={panelId}
+                        className="run-log-row__panel"
+                        aria-label={`${displayStream.taskId} 的日志`}
+                      >
+                        {isEntriesLoading ? (
+                          <p className="muted-copy">正在加载日志条目...</p>
+                        ) : null}
                         {!isEntriesLoading && entryError ? <p role="alert">{entryError}</p> : null}
                         {!isEntriesLoading && !entryError ? (
                           entries.length > 0 ? (
@@ -620,8 +641,13 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                               }}
                             >
                               {entries.map((entry) => (
-                                <div key={`${entry.taskId}-${entry.sequence}`} className="run-log-line">
-                                  <span className="run-log-line__time">{formatTimestamp(entry.timestamp)}</span>
+                                <div
+                                  key={`${entry.taskId}-${entry.sequence}`}
+                                  className="run-log-line"
+                                >
+                                  <span className="run-log-line__time">
+                                    {formatTimestamp(entry.timestamp)}
+                                  </span>
                                   <span className="run-log-line__level">{entry.level}</span>
                                   <code>{entry.message}</code>
                                 </div>

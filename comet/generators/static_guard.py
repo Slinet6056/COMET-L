@@ -94,10 +94,7 @@ class StaticGuard:
                             mutated_code += "\n"
                         mutated_lines.append(mutated_code)
                         mutation_applied = True
-                    elif (
-                        line_num > mutant.patch.line_start
-                        and line_num <= mutant.patch.line_end
-                    ):
+                    elif line_num > mutant.patch.line_start and line_num <= mutant.patch.line_end:
                         # 在变异范围内（起始行之后），跳过这些行
                         continue
                     else:
@@ -107,9 +104,7 @@ class StaticGuard:
                 tmp_file.writelines(mutated_lines)
 
                 if not mutation_applied:
-                    logger.warning(
-                        f"变异体 {mutant.id} 未成功应用（行号范围可能不正确）"
-                    )
+                    logger.warning(f"变异体 {mutant.id} 未成功应用（行号范围可能不正确）")
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     return False
 

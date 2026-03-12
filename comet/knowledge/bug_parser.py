@@ -6,7 +6,7 @@
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +61,7 @@ class BugReportParser:
         file_name = Path(file_path).stem
         return f"bug_{file_name}_{self._id_counter}"
 
-    def _extract_title(
-        self, content: str, file_path: str, metadata: Dict[str, Any]
-    ) -> str:
+    def _extract_title(self, content: str, file_path: str, metadata: Dict[str, Any]) -> str:
         """
         提取标题
 

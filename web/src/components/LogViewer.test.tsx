@@ -1201,7 +1201,9 @@ describe('Log viewer', () => {
   });
 
   it('clears expanded log state when the run id changes', async () => {
-    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async (requestedRunId) => buildSummary(requestedRunId));
+    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async (requestedRunId) =>
+      buildSummary(requestedRunId),
+    );
     vi.spyOn(api, 'fetchRunLogsForTask').mockImplementation(async (_runId, taskId) => ({
       ...buildStreamResponse(['first line']),
       taskId,

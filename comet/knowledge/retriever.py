@@ -1,9 +1,9 @@
 """知识检索器模块"""
 
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from .vector_store import VectorStore, KnowledgeType, SearchResult
+from .vector_store import KnowledgeType, SearchResult, VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,7 @@ class KnowledgeRetriever:
         Returns:
             格式化的知识文本，可直接注入到 prompt
         """
-        query = self._build_test_gen_query(
-            class_name, method_name, method_signature, source_code
-        )
+        query = self._build_test_gen_query(class_name, method_name, method_signature, source_code)
 
         results = {}
 

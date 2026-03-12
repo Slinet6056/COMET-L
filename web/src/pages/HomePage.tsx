@@ -45,7 +45,11 @@ function valueToInputString(value: unknown): string {
   return String(value);
 }
 
-function parseFieldValue(field: ConfigFieldDefinition, rawValue: string, checked: boolean): unknown {
+function parseFieldValue(
+  field: ConfigFieldDefinition,
+  rawValue: string,
+  checked: boolean,
+): unknown {
   if (field.kind === 'boolean') {
     return checked;
   }
@@ -105,11 +109,7 @@ export function HomePage() {
         if (!active) {
           return;
         }
-        setPageError(
-          error instanceof Error
-            ? error.message
-            : '无法加载默认配置。',
-        );
+        setPageError(error instanceof Error ? error.message : '无法加载默认配置。');
       } finally {
         if (active) {
           setIsLoadingDefaults(false);
@@ -158,7 +158,9 @@ export function HomePage() {
     }
 
     const nextValue = parseFieldValue(field, rawValue, checked);
-    setConfig((current) => (current === null ? current : setNestedValue(current, field.path, nextValue)));
+    setConfig((current) =>
+      current === null ? current : setNestedValue(current, field.path, nextValue),
+    );
     setFieldErrors((current) => {
       const nextErrors = { ...current };
       delete nextErrors[getFieldKey(field.path)];
@@ -217,8 +219,8 @@ export function HomePage() {
           <p className="eyebrow">配置</p>
           <h2>运行配置首页</h2>
           <p>
-            上传 YAML 配置后，后端会进行规范化并回填表单。你可以继续调整分组设置，
-            然后使用本地 Maven 项目路径启动一次运行。
+            上传 YAML 配置后，后端会进行规范化并回填表单。你可以继续调整分组设置， 然后使用本地
+            Maven 项目路径启动一次运行。
           </p>
         </div>
 
@@ -365,9 +367,9 @@ export function HomePage() {
                         value={value === null || value === undefined ? '' : String(value)}
                         onChange={(event) => handleFieldChange(field, event.target.value, false)}
                       >
-                         <option value="">继承默认值</option>
-                         <option value="true">是</option>
-                         <option value="false">否</option>
+                        <option value="">继承默认值</option>
+                        <option value="true">是</option>
+                        <option value="false">否</option>
                       </select>
                     ) : (
                       <input
@@ -392,7 +394,12 @@ export function HomePage() {
       </div>
 
       <div className="action-row">
-        <button type="button" className="primary-button" onClick={handleSubmit} disabled={isSubmitting}>
+        <button
+          type="button"
+          className="primary-button"
+          onClick={handleSubmit}
+          disabled={isSubmitting}
+        >
           {isSubmitting ? '正在启动运行...' : '启动运行'}
         </button>
       </div>

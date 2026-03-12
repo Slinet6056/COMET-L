@@ -1,9 +1,9 @@
 """类到文件映射管理器"""
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +32,8 @@ class ClassMapper:
     def __init__(self):
         """初始化映射器"""
         self._class_to_file: Dict[str, ClassInfo] = {}  # 完整类名 -> ClassInfo
-        self._simple_name_to_classes: Dict[str, List[ClassInfo]] = (
-            {}
-        )  # 简单类名 -> ClassInfo 列表
-        self._file_to_classes: Dict[str, List[ClassInfo]] = (
-            {}
-        )  # 文件路径 -> ClassInfo 列表
+        self._simple_name_to_classes: Dict[str, List[ClassInfo]] = {}  # 简单类名 -> ClassInfo 列表
+        self._file_to_classes: Dict[str, List[ClassInfo]] = {}  # 文件路径 -> ClassInfo 列表
 
     def add_class(
         self,
@@ -108,9 +104,7 @@ class ClassMapper:
         if "$" in class_name:
             # 提取外部类名（保留包名部分）
             class_name = class_name.split("$")[0]
-            logger.debug(
-                f"检测到内部类 {original_class_name}，使用外部类 {class_name} 查找文件"
-            )
+            logger.debug(f"检测到内部类 {original_class_name}，使用外部类 {class_name} 查找文件")
 
         # 先尝试完整类名
         if class_name in self._class_to_file:
@@ -124,8 +118,7 @@ class ClassMapper:
                 return classes[0].file_path
             elif len(classes) > 1:
                 logger.warning(
-                    f"类名 {simple_name} 有多个匹配: "
-                    f"{', '.join(c.class_name for c in classes)}"
+                    f"类名 {simple_name} 有多个匹配: {', '.join(c.class_name for c in classes)}"
                 )
                 # 优先返回 public 类
                 public_classes = [c for c in classes if c.is_public]
@@ -149,9 +142,7 @@ class ClassMapper:
         original_class_name = class_name
         if "$" in class_name:
             class_name = class_name.split("$")[0]
-            logger.debug(
-                f"检测到内部类 {original_class_name}，使用外部类 {class_name} 查找信息"
-            )
+            logger.debug(f"检测到内部类 {original_class_name}，使用外部类 {class_name} 查找信息")
 
         if class_name in self._class_to_file:
             return self._class_to_file[class_name]
@@ -203,12 +194,8 @@ class ClassMapper:
         return {
             "total_classes": len(self._class_to_file),
             "total_files": len(self._file_to_classes),
-            "public_classes": sum(
-                1 for c in self._class_to_file.values() if c.is_public
-            ),
-            "interfaces": sum(
-                1 for c in self._class_to_file.values() if c.is_interface
-            ),
+            "public_classes": sum(1 for c in self._class_to_file.values() if c.is_public),
+            "interfaces": sum(1 for c in self._class_to_file.values() if c.is_interface),
         }
 
     def __len__(self) -> int:

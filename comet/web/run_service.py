@@ -1,13 +1,13 @@
 import copy
-import logging
 import json
+import logging
 import sqlite3
 import sys
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
-import threading
 from uuid import uuid4
 
 from comet.agent.state import AgentState, ParallelAgentState
@@ -118,9 +118,7 @@ class RunLifecycleService:
         self,
         request: RunRequest,
         *,
-        settings_loader: Callable[
-            [Optional[str]], Settings
-        ] = Settings.from_yaml_or_default,
+        settings_loader: Callable[[Optional[str]], Settings] = Settings.from_yaml_or_default,
     ) -> RunSession:
         with self._lock:
             if self._active_run_id is not None:
@@ -199,9 +197,7 @@ class RunLifecycleService:
         parallel_enabled = bool(
             request.parallel
             or request.parallel_targets is not None
-            or session.config_snapshot.get("agent", {})
-            .get("parallel", {})
-            .get("enabled", False)
+            or session.config_snapshot.get("agent", {}).get("parallel", {}).get("enabled", False)
         )
         return "parallel" if parallel_enabled else "standard"
 
@@ -241,9 +237,7 @@ class RunLifecycleService:
         main_duration: float | None = None
         if session.started_at and (session.completed_at or session.failed_at):
             started_at = datetime.fromisoformat(session.started_at)
-            ended_at = datetime.fromisoformat(
-                session.completed_at or session.failed_at or ""
-            )
+            ended_at = datetime.fromisoformat(session.completed_at or session.failed_at or "")
             main_duration = max((ended_at - started_at).total_seconds(), 0.0)
 
         main_status = "running"
@@ -494,9 +488,7 @@ class RunLifecycleService:
             session.error = error
             if self._active_run_id == run_id:
                 self._active_run_id = None
-        self.publish_runtime_snapshot(
-            run_id, state=self._load_state_snapshot(run_id), error=error
-        )
+        self.publish_runtime_snapshot(run_id, state=self._load_state_snapshot(run_id), error=error)
 
     def _run_in_background(
         self,
@@ -566,9 +558,7 @@ class RunLifecycleService:
             "completed": ("completed", "Completed"),
             "failed": ("failed", "Failed"),
         }
-        key, label = phase_map.get(
-            session.status, (session.status, session.status.title())
-        )
+        key, label = phase_map.get(session.status, (session.status, session.status.title()))
         return {
             "key": key,
             "label": label,
@@ -608,12 +598,8 @@ class RunLifecycleService:
         artifacts: dict[str, dict[str, object]] = {}
         for name, path in paths.items():
             artifacts[name] = {"exists": Path(path).exists()}
-        artifacts["finalState"]["downloadUrl"] = (
-            f"/api/runs/{session.run_id}/artifacts/final-state"
-        )
-        artifacts["log"]["downloadUrl"] = (
-            f"/api/runs/{session.run_id}/artifacts/run-log"
-        )
+        artifacts["finalState"]["downloadUrl"] = f"/api/runs/{session.run_id}/artifacts/final-state"
+        artifacts["log"]["downloadUrl"] = f"/api/runs/{session.run_id}/artifacts/run-log"
         return artifacts
 
     def _build_download_artifact(
@@ -772,9 +758,7 @@ class RunLifecycleService:
             "outdated": int(row["outdated"] or 0),
         }
 
-    def _summarize_coverage(
-        self, cursor: sqlite3.Cursor
-    ) -> dict[str, int | float | None]:
+    def _summarize_coverage(self, cursor: sqlite3.Cursor) -> dict[str, int | float | None]:
         if not self._has_table(cursor, "method_coverage"):
             return {
                 "latestIteration": None,
@@ -871,9 +855,7 @@ class RunLifecycleService:
             Path(scoped_paths[key]).mkdir(parents=True, exist_ok=True)
         Path(scoped_paths["log"]).parent.mkdir(parents=True, exist_ok=True)
 
-    def _write_config_snapshot(
-        self, config: Settings, config_snapshot_path: str
-    ) -> None:
+    def _write_config_snapshot(self, config: Settings, config_snapshot_path: str) -> None:
         snapshot_path = Path(config_snapshot_path)
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_path.write_text(

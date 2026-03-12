@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
@@ -74,9 +74,7 @@ class EmbeddingService:
                 logger.warning(f"加载 embedding 缓存失败: {e}")
                 with self._cache_lock:
                     self._cache = {}
-                corrupt_file = (
-                    self.cache_dir / f"embedding_cache.corrupt-{int(time.time())}.json"
-                )
+                corrupt_file = self.cache_dir / f"embedding_cache.corrupt-{int(time.time())}.json"
                 try:
                     cache_file.replace(corrupt_file)
                     logger.warning(f"已隔离损坏的 embedding 缓存文件: {corrupt_file}")

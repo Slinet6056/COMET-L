@@ -93,7 +93,10 @@ class MockEventSource {
 describe('Run page standard mode', () => {
   beforeEach(() => {
     MockEventSource.instances = [];
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(buildSnapshot())));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(buildSnapshot())),
+    );
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
   });
 
@@ -110,7 +113,9 @@ describe('Run page standard mode', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
-    expect(screen.getByText('Prioritize Calculator.add because recent mutants survived.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Prioritize Calculator.add because recent mutants survived.'),
+    ).toBeInTheDocument();
     expect(screen.getByText('Calculator.add')).toBeInTheDocument();
     expect(screen.getByText('阶段：运行中')).toBeInTheDocument();
     expect(screen.getByText('45.0%')).toBeInTheDocument();
@@ -265,7 +270,8 @@ describe('Run page standard mode', () => {
                   key: 'preprocessing',
                   label: 'Preprocessing',
                 },
-                decisionReasoning: 'Collect preprocessing artifacts before resuming target selection.',
+                decisionReasoning:
+                  'Collect preprocessing artifacts before resuming target selection.',
               }),
         );
       }),
@@ -285,7 +291,9 @@ describe('Run page standard mode', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Collect preprocessing artifacts before resuming target selection.')).toBeInTheDocument();
+      expect(
+        screen.getByText('Collect preprocessing artifacts before resuming target selection.'),
+      ).toBeInTheDocument();
       expect(screen.getByText('阶段：预处理中')).toBeInTheDocument();
     });
   });
@@ -357,7 +365,9 @@ describe('Run page standard mode', () => {
     });
 
     expect(screen.getByRole('heading', { name: '决策面板' })).toBeInTheDocument();
-    expect(screen.getByText('Prioritize Calculator.add because recent mutants survived.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Prioritize Calculator.add because recent mutants survived.'),
+    ).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1600);
@@ -365,7 +375,9 @@ describe('Run page standard mode', () => {
 
     expect(fetchCalls).toBe(2);
     expect(screen.getByRole('heading', { name: '决策面板' })).toBeInTheDocument();
-    expect(screen.getByText('Prioritize Calculator.add because recent mutants survived.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Prioritize Calculator.add because recent mutants survived.'),
+    ).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('fallback poll failed');
   });
 });

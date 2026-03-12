@@ -1,8 +1,8 @@
 """哈希工具函数"""
 
 import hashlib
-from typing import Any
 import json
+from typing import Any
 
 
 def code_hash(code: str) -> str:

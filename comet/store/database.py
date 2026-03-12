@@ -1,14 +1,14 @@
 """SQLite 数据库封装"""
 
-import sqlite3
 import json
 import logging
+import sqlite3
 import threading
-from pathlib import Path
-from typing import Optional, List, Dict, Any
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from ..models import Mutant, TestCase, TestMethod, EvaluationResult
+from ..models import EvaluationResult, Mutant, TestCase, TestMethod
 
 logger = logging.getLogger(__name__)
 
@@ -479,9 +479,7 @@ class Database:
         )
         self.conn.commit()
 
-        logger.info(
-            f"已保存测试用例 {test_case.id}，包含 {len(test_case.methods)} 个测试方法"
-        )
+        logger.info(f"已保存测试用例 {test_case.id}，包含 {len(test_case.methods)} 个测试方法")
 
     def get_test_case(self, test_id: str) -> Optional[TestCase]:
         """获取测试用例"""
@@ -523,9 +521,7 @@ class Database:
                 logger.debug(f"查询到 {len(results)} 个测试用例: {results[0].id}")
             return results
 
-    def get_tests_by_target_method(
-        self, class_name: str, method_name: str
-    ) -> List[TestCase]:
+    def get_tests_by_target_method(self, class_name: str, method_name: str) -> List[TestCase]:
         """
         获取针对指定方法的测试用例
 
@@ -555,16 +551,12 @@ class Database:
             for row in rows:
                 test_case = self._row_to_test_case(row)
                 # 检查这个测试用例是否包含针对指定方法的测试方法
-                has_target_method = any(
-                    tm.target_method == method_name for tm in test_case.methods
-                )
+                has_target_method = any(tm.target_method == method_name for tm in test_case.methods)
                 if has_target_method:
                     results.append(test_case)
 
             if results:
-                logger.debug(
-                    f"查询到 {len(results)} 个针对 {class_name}.{method_name} 的测试用例"
-                )
+                logger.debug(f"查询到 {len(results)} 个针对 {class_name}.{method_name} 的测试用例")
             return results
 
     def delete_test_case(self, test_id: str) -> None:
@@ -573,9 +565,7 @@ class Database:
             cursor = self.conn.cursor()
             try:
                 # 删除测试方法
-                cursor.execute(
-                    "DELETE FROM test_methods WHERE test_case_id = ?", (test_id,)
-                )
+                cursor.execute("DELETE FROM test_methods WHERE test_case_id = ?", (test_id,))
                 # 删除测试用例
                 cursor.execute("DELETE FROM test_cases WHERE id = ?", (test_id,))
                 self.conn.commit()
@@ -600,13 +590,9 @@ class Database:
             cursor = self.conn.cursor()
             try:
                 # 先更新变异体的击杀信息
-                updated_mutants = self.batch_update_mutant_kill_info(
-                    test_case_id, method_name
-                )
+                updated_mutants = self.batch_update_mutant_kill_info(test_case_id, method_name)
                 if updated_mutants > 0:
-                    logger.info(
-                        f"删除测试方法前，已更新 {updated_mutants} 个变异体的击杀信息"
-                    )
+                    logger.info(f"删除测试方法前，已更新 {updated_mutants} 个变异体的击杀信息")
 
                 # 删除该方法
                 cursor.execute(
@@ -641,9 +627,7 @@ class Database:
                 self.conn.rollback()
                 raise
 
-    def update_mutant_kill_info(
-        self, mutant_id: str, test_method_to_remove: str
-    ) -> bool:
+    def update_mutant_kill_info(self, mutant_id: str, test_method_to_remove: str) -> bool:
         """
         从变异体的 killed_by 列表中移除指定测试方法
 
@@ -658,9 +642,7 @@ class Database:
             cursor = self.conn.cursor()
             try:
                 # 获取当前的 killed_by 列表
-                cursor.execute(
-                    "SELECT killed_by, status FROM mutants WHERE id = ?", (mutant_id,)
-                )
+                cursor.execute("SELECT killed_by, status FROM mutants WHERE id = ?", (mutant_id,))
                 row = cursor.fetchone()
                 if not row:
                     logger.warning(f"变异体不存在: {mutant_id}")
@@ -730,9 +712,7 @@ class Database:
             try:
                 # 构造测试方法的完整标识（TestClassName.testMethodName）
                 # 先获取测试用例的类名
-                cursor.execute(
-                    "SELECT class_name FROM test_cases WHERE id = ?", (test_case_id,)
-                )
+                cursor.execute("SELECT class_name FROM test_cases WHERE id = ?", (test_case_id,))
                 row = cursor.fetchone()
                 if not row:
                     logger.warning(f"测试用例不存在: {test_case_id}")
@@ -830,14 +810,10 @@ class Database:
             survived=bool(row["survived"]),
             compile_error=row["compile_error"],
             created_at=(
-                datetime.fromisoformat(row["created_at"])
-                if row["created_at"]
-                else datetime.now()
+                datetime.fromisoformat(row["created_at"]) if row["created_at"] else datetime.now()
             ),
             evaluated_at=(
-                datetime.fromisoformat(row["evaluated_at"])
-                if row["evaluated_at"]
-                else None
+                datetime.fromisoformat(row["evaluated_at"]) if row["evaluated_at"] else None
             ),
         )
 
@@ -891,21 +867,15 @@ class Database:
             compile_success=bool(row["compile_success"]),
             compile_error=row["compile_error"],
             kills=json.loads(row["kills"]) if row["kills"] else [],
-            coverage_lines=(
-                json.loads(row["coverage_lines"]) if row["coverage_lines"] else []
-            ),
+            coverage_lines=(json.loads(row["coverage_lines"]) if row["coverage_lines"] else []),
             coverage_branches=(
                 json.loads(row["coverage_branches"]) if row["coverage_branches"] else []
             ),
             created_at=(
-                datetime.fromisoformat(row["created_at"])
-                if row["created_at"]
-                else datetime.now()
+                datetime.fromisoformat(row["created_at"]) if row["created_at"] else datetime.now()
             ),
             updated_at=(
-                datetime.fromisoformat(row["updated_at"])
-                if row["updated_at"]
-                else datetime.now()
+                datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else datetime.now()
             ),
         )
 
@@ -1078,9 +1048,7 @@ class Database:
         return MethodCoverage(
             class_name=row["class_name"],
             method_name=row["method_name"],
-            covered_lines=(
-                json.loads(row["covered_lines"]) if row["covered_lines"] else []
-            ),
+            covered_lines=(json.loads(row["covered_lines"]) if row["covered_lines"] else []),
             missed_lines=json.loads(row["missed_lines"]) if row["missed_lines"] else [],
             total_lines=row["total_lines"],
             covered_branches=row["covered_branches"],

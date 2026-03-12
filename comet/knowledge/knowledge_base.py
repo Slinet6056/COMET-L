@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from ..config.settings import KnowledgeConfig
 from ..models import Contract, Pattern
 from ..store.knowledge_store import KnowledgeStore
-from ..config.settings import KnowledgeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +57,10 @@ class KnowledgeBase:
             契约列表
         """
         if class_name not in self._contracts_cache:
-            self._contracts_cache[class_name] = self.store.get_contracts_by_class(
-                class_name
-            )
+            self._contracts_cache[class_name] = self.store.get_contracts_by_class(class_name)
         return self._contracts_cache[class_name]
 
-    def get_contracts_for_method(
-        self, class_name: str, method_name: str
-    ) -> List[Contract]:
+    def get_contracts_for_method(self, class_name: str, method_name: str) -> List[Contract]:
         """
         获取方法的契约
 
@@ -113,9 +108,7 @@ class KnowledgeBase:
         """
         return self.store.get_patterns_by_category(category)
 
-    def get_top_patterns(
-        self, n: int = 5, min_confidence: float = 0.5
-    ) -> List[Pattern]:
+    def get_top_patterns(self, n: int = 5, min_confidence: float = 0.5) -> List[Pattern]:
         """
         获取最佳模式（根据成功率和置信度）
 
@@ -143,9 +136,7 @@ class KnowledgeBase:
         self._patterns_cache = None
         logger.debug(f"更新模式统计: {pattern_id}, 成功={success}")
 
-    def get_relevant_patterns(
-        self, class_code: str, max_patterns: int = 10
-    ) -> List[Pattern]:
+    def get_relevant_patterns(self, class_code: str, max_patterns: int = 10) -> List[Pattern]:
         """
         获取与代码相关的模式（简化版：返回高成功率的模式）
 
@@ -262,13 +253,11 @@ class RAGKnowledgeBase(KnowledgeBase):
 
             try:
                 from .embedding import EmbeddingService
-                from .vector_store import VectorStore
                 from .retriever import KnowledgeRetriever
+                from .vector_store import VectorStore
 
                 # 初始化 Embedding 服务
-                cache_dir = str(
-                    Path(config.vector_db.persist_directory) / "embedding_cache"
-                )
+                cache_dir = str(Path(config.vector_db.persist_directory) / "embedding_cache")
                 embedding_service = EmbeddingService.from_config(
                     config.embedding,
                     llm_api_key=self.llm_api_key,
@@ -282,9 +271,7 @@ class RAGKnowledgeBase(KnowledgeBase):
                 )
 
                 # 初始化检索器
-                retriever = KnowledgeRetriever.from_config(
-                    config.retrieval, vector_store
-                )
+                retriever = KnowledgeRetriever.from_config(config.retrieval, vector_store)
 
                 self._embedding_service = embedding_service
                 self._vector_store = vector_store
@@ -410,9 +397,7 @@ class RAGKnowledgeBase(KnowledgeBase):
 
         return "\n".join(parts)
 
-    def get_relevant_patterns(
-        self, class_code: str, max_patterns: int = 10
-    ) -> List[Pattern]:
+    def get_relevant_patterns(self, class_code: str, max_patterns: int = 10) -> List[Pattern]:
         """
         获取与代码相关的模式（使用 RAG 检索）
 
@@ -501,9 +486,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         if not self._ensure_initialized():
             return ""
 
-        return self.retriever.retrieve_for_mutation_generation(
-            class_name, method_name, source_code
-        )
+        return self.retriever.retrieve_for_mutation_generation(class_name, method_name, source_code)
 
     def index_source_analysis(
         self,
@@ -520,8 +503,8 @@ class RAGKnowledgeBase(KnowledgeBase):
         if not self._ensure_initialized():
             return
 
-        from .vector_store import Document, KnowledgeType
         from .chunker import MethodAnalysisChunker
+        from .vector_store import Document, KnowledgeType
 
         chunker = MethodAnalysisChunker()
 
@@ -590,9 +573,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         for pattern in all_patterns:
             self._index_pattern(pattern)
 
-        logger.info(
-            f"同步完成: {len(all_contracts)} 个契约, {len(all_patterns)} 个模式"
-        )
+        logger.info(f"同步完成: {len(all_contracts)} 个契约, {len(all_patterns)} 个模式")
 
     def get_stats(self) -> Dict[str, Any]:
         """获取知识库统计信息（包括 RAG 统计）"""

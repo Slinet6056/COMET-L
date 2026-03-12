@@ -1,13 +1,13 @@
 """沙箱管理器"""
 
+import logging
 import os
 import shutil
-import logging
 import threading
-from pathlib import Path
-from typing import Optional, Dict
-import uuid
 import time
+import uuid
+from pathlib import Path
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +34,7 @@ class SandboxManager:
         self._sandboxes: Dict[str, str] = {}  # sandbox_id -> sandbox_path
         self._project_path: Optional[str] = None  # 源项目路径（用于创建新沙箱）
 
-    def create_sandbox(
-        self, project_path: str, sandbox_id: Optional[str] = None
-    ) -> str:
+    def create_sandbox(self, project_path: str, sandbox_id: Optional[str] = None) -> str:
         """
         创建新的沙箱环境（线程安全）
 
@@ -155,9 +153,7 @@ class SandboxManager:
             self.sandbox_root.mkdir(parents=True, exist_ok=True)
             logger.info("清理所有沙箱")
 
-    def copy_file_to_sandbox(
-        self, sandbox_id: str, source_file: str, target_rel_path: str
-    ) -> str:
+    def copy_file_to_sandbox(self, sandbox_id: str, source_file: str, target_rel_path: str) -> str:
         """
         复制文件到沙箱
 
@@ -292,9 +288,7 @@ class SandboxManager:
         """清理所有目标沙箱（保留 workspace 沙箱）"""
         with self._lock:
             target_sandboxes = [
-                sandbox_id
-                for sandbox_id in self._sandboxes.keys()
-                if sandbox_id != "workspace"
+                sandbox_id for sandbox_id in self._sandboxes.keys() if sandbox_id != "workspace"
             ]
 
             for sandbox_id in target_sandboxes:

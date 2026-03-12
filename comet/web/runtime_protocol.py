@@ -59,9 +59,7 @@ class RuntimeEventBus:
 
     def list_events(self, after_sequence: int = 0) -> list[dict[str, Any]]:
         with self._lock:
-            return [
-                event for event in self._events if event["sequence"] > after_sequence
-            ]
+            return [event for event in self._events if event["sequence"] > after_sequence]
 
 
 def build_run_snapshot(
@@ -107,9 +105,7 @@ def build_run_snapshot(
         snapshot["logStreams"] = log_router.snapshot()
 
     if isinstance(state, ParallelAgentState):
-        batch_results = [
-            [result.to_dict() for result in batch] for batch in state.batch_results
-        ]
+        batch_results = [[result.to_dict() for result in batch] for batch in state.batch_results]
         parallel_payload = {
             "currentBatch": state.current_batch,
             "parallelStats": dict(state.parallel_stats),

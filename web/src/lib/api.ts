@@ -332,10 +332,7 @@ type RunEventsSubscription = {
   onError?: () => void;
 };
 
-export function subscribeToRunEvents(
-  runId: string,
-  handlers: RunEventsSubscription,
-): () => void {
+export function subscribeToRunEvents(runId: string, handlers: RunEventsSubscription): () => void {
   const eventSource = new EventSource(`/api/runs/${runId}/events`);
   const listener = (message: MessageEvent<string>) => {
     handlers.onEvent(JSON.parse(message.data) as RunEvent);

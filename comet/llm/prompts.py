@@ -1,7 +1,9 @@
 """提示词模板管理"""
 
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
 from jinja2 import Template
+
 from ..utils.code_utils import add_line_numbers
 
 
@@ -1077,9 +1079,7 @@ LLM 调用次数: {{ state.llm_calls }} / {{ state.budget }}
         return system, user
 
     @classmethod
-    def render_agent_planner(
-        cls, state: Dict[str, Any], tools_description: str
-    ) -> tuple[str, str]:
+    def render_agent_planner(cls, state: Dict[str, Any], tools_description: str) -> tuple[str, str]:
         """
         渲染 Agent 调度提示词
 

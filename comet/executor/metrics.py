@@ -1,10 +1,10 @@
 """度量收集器"""
 
 import logging
-from typing import List, Dict, Any, Optional
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from ..models import Mutant, TestCase, KillMatrix, Metrics, CoverageInfo
+from ..models import CoverageInfo, KillMatrix, Metrics, Mutant, TestCase
 
 logger = logging.getLogger(__name__)
 
@@ -135,8 +135,7 @@ class MetricsCollector:
             "total_iterations": len(self.history),
             "initial_mutation_score": initial.mutation_score,
             "final_mutation_score": latest.mutation_score,
-            "mutation_score_improvement": latest.mutation_score
-            - initial.mutation_score,
+            "mutation_score_improvement": latest.mutation_score - initial.mutation_score,
             "initial_coverage": initial.line_coverage,
             "final_coverage": latest.line_coverage,
             "coverage_improvement": latest.line_coverage - initial.line_coverage,

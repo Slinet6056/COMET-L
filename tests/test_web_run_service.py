@@ -1,10 +1,10 @@
 import argparse
+import json
 import logging
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-import json
 
 import main
 from comet.config.settings import LLMConfig, LoggingConfig, PathsConfig, Settings
@@ -85,16 +85,10 @@ class RunServiceIsolationTests(unittest.TestCase):
             self.assertEqual(captured["project_path"], str(project_path))
             self.assertEqual(settings.paths.output, str(root / "run-output"))
             self.assertEqual(len(managed_file_handlers), 1)
-            self.assertEqual(
-                Path(managed_file_handlers[0].baseFilename), scoped_log_path.resolve()
-            )
+            self.assertEqual(Path(managed_file_handlers[0].baseFilename), scoped_log_path.resolve())
             self.assertTrue(scoped_log_path.exists())
-            self.assertNotEqual(
-                scoped_log_path.resolve(), (root / "comet.log").resolve()
-            )
-            self.assertEqual(
-                [event["type"] for event in events], ["run.started", "run.completed"]
-            )
+            self.assertNotEqual(scoped_log_path.resolve(), (root / "comet.log").resolve())
+            self.assertEqual([event["type"] for event in events], ["run.started", "run.completed"])
             self.assertEqual(events[0]["log_file"], str(scoped_log_path.resolve()))
             self.assertEqual(events[0]["project_path"], str(project_path))
 
@@ -145,9 +139,7 @@ class RunServiceIsolationTests(unittest.TestCase):
                     observer=events.append,
                 )
 
-            self.assertEqual(
-                [event["type"] for event in events], ["run.started", "run.failed"]
-            )
+            self.assertEqual([event["type"] for event in events], ["run.started", "run.failed"])
             self.assertEqual(events[1]["error"], "boom")
 
     def test_cli_entry_uses_shared_runner(self) -> None:
@@ -206,18 +198,10 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(session.status, "created")
             self.assertEqual(service.active_run_id(), run_id)
 
-            self.assertEqual(
-                session.paths["cache"], str(root / "cache" / "runs" / run_id)
-            )
-            self.assertEqual(
-                session.paths["output"], str(root / "output" / "runs" / run_id)
-            )
-            self.assertEqual(
-                session.paths["sandbox"], str(root / "sandbox" / "runs" / run_id)
-            )
-            self.assertEqual(
-                session.paths["log"], str(root / "logs" / "runs" / run_id / "run.log")
-            )
+            self.assertEqual(session.paths["cache"], str(root / "cache" / "runs" / run_id))
+            self.assertEqual(session.paths["output"], str(root / "output" / "runs" / run_id))
+            self.assertEqual(session.paths["sandbox"], str(root / "sandbox" / "runs" / run_id))
+            self.assertEqual(session.paths["log"], str(root / "logs" / "runs" / run_id / "run.log"))
             self.assertEqual(
                 session.paths["database"],
                 str(root / "cache" / "runs" / run_id / "comet.db"),
@@ -230,18 +214,10 @@ class RunLifecycleTests(unittest.TestCase):
 
             resolved_config_path = Path(session.paths["resolved_config"])
             self.assertTrue(resolved_config_path.exists())
-            resolved_snapshot = json.loads(
-                resolved_config_path.read_text(encoding="utf-8")
-            )
-            self.assertEqual(
-                resolved_snapshot["paths"]["cache"], session.paths["cache"]
-            )
-            self.assertEqual(
-                resolved_snapshot["paths"]["output"], session.paths["output"]
-            )
-            self.assertEqual(
-                resolved_snapshot["paths"]["sandbox"], session.paths["sandbox"]
-            )
+            resolved_snapshot = json.loads(resolved_config_path.read_text(encoding="utf-8"))
+            self.assertEqual(resolved_snapshot["paths"]["cache"], session.paths["cache"])
+            self.assertEqual(resolved_snapshot["paths"]["output"], session.paths["output"])
+            self.assertEqual(resolved_snapshot["paths"]["sandbox"], session.paths["sandbox"])
             self.assertEqual(resolved_snapshot["logging"]["file"], session.paths["log"])
 
     def test_second_active_run_is_rejected(self) -> None:
@@ -269,9 +245,7 @@ class RunLifecycleTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ActiveRunConflictError, first.run_id):
                 service.create_run(
-                    RunRequest(
-                        project_path=str(project_path), config_path="config.yaml"
-                    ),
+                    RunRequest(project_path=str(project_path), config_path="config.yaml"),
                     settings_loader=lambda _: settings,
                 )
 

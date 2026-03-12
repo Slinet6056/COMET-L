@@ -1,5 +1,5 @@
 :root {
-  font-family: "Segoe UI", sans-serif;
+  font-family: 'Segoe UI', sans-serif;
   color: #14213d;
   background: linear-gradient(180deg, #f7f9fc 0%, #edf2f7 100%);
   line-height: 1.5;
@@ -26,7 +26,7 @@ a:hover {
 }
 
 code {
-  font-family: "SFMono-Regular", monospace;
+  font-family: 'SFMono-Regular', monospace;
 }
 
 #root {
@@ -674,7 +674,7 @@ code {
   border: 1px solid #1f2937;
   background: #111827;
   color: #e5edf7;
-  font-family: "SFMono-Regular", monospace;
+  font-family: 'SFMono-Regular', monospace;
   font-size: 0.74rem;
   line-height: 1.35;
 }
