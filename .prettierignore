@@ -1,0 +1,9 @@
+.beads
+cache
+java-runtime/target
+logs
+node_modules
+pnpm-lock.yaml
+sandbox
+web/coverage
+web/dist

@@ -1,0 +1,23 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: web-prettier
+        name: web prettier
+        entry: pnpm --dir web run format
+        language: system
+        files: ^web/
+        pass_filenames: false
+
+      - id: just-check-java
+        name: just check-java
+        entry: just check-java
+        language: system
+        files: ^(java-runtime/|examples/)
+        pass_filenames: false
