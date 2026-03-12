@@ -623,7 +623,6 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                                 <div key={`${entry.taskId}-${entry.sequence}`} className="run-log-line">
                                   <span className="run-log-line__time">{formatTimestamp(entry.timestamp)}</span>
                                   <span className="run-log-line__level">{entry.level}</span>
-                                  <span className="run-log-line__logger">{entry.logger}</span>
                                   <code>{entry.message}</code>
                                 </div>
                               ))}

@@ -417,8 +417,7 @@ code {
 }
 
 .worker-output-table th,
-.run-log-line__level,
-.run-log-line__logger {
+.run-log-line__level {
   color: #52606d;
   font-size: 0.85rem;
 }
@@ -691,16 +690,19 @@ code {
 
 .run-log-line {
   display: grid;
-  grid-template-columns: auto auto minmax(8rem, 16rem) minmax(0, 1fr);
+  grid-template-columns: 8ch 7ch minmax(0, 1fr);
   gap: 0.65rem;
   align-items: start;
 }
 
 .run-log-line__time,
-.run-log-line__level,
-.run-log-line__logger {
+.run-log-line__level {
   color: #9fb3c8;
   white-space: nowrap;
+}
+
+.run-log-line__time {
+  font-variant-numeric: tabular-nums;
 }
 
 .run-log-line code {

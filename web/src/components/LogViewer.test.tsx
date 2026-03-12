@@ -218,6 +218,7 @@ describe('Log viewer', () => {
     await user.click(mainButton);
 
     expect(await screen.findByText('main log line')).toBeInTheDocument();
+    expect(screen.queryByText('comet.main')).not.toBeInTheDocument();
     expect(mainButton).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('log', { name: 'main 的日志条目' })).toBeInTheDocument();
 
@@ -225,6 +226,7 @@ describe('Log viewer', () => {
 
     expect(await screen.findByText('worker log line')).toBeInTheDocument();
     expect(screen.getByText('main log line')).toBeInTheDocument();
+    expect(screen.queryByText('comet.worker')).not.toBeInTheDocument();
     expect(workerButton).toHaveAttribute('aria-expanded', 'true');
     expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-1', 'main');
     expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-1', 'task-7');
