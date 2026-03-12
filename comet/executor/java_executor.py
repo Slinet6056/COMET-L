@@ -192,7 +192,7 @@ class JavaExecutor:
             try:
                 process.kill()
                 process.wait(timeout=1)
-            except:
+            except Exception:
                 pass
 
     def analyze_code(self, file_path: str) -> Optional[Dict[str, Any]]:
@@ -322,7 +322,7 @@ class JavaExecutor:
 
         # 记录详细信息
         if not result.get("success", False):
-            logger.warning(f"变异应用失败:")
+            logger.warning("变异应用失败:")
             logger.warning(f"  源文件: {source_file}")
             logger.warning(f"  输出路径: {output_path}")
             logger.warning(f"  补丁: {patch_json[:200]}...")
@@ -412,7 +412,7 @@ class JavaExecutor:
 
         # 修复：如果所有输出都是空的，返回更详细的错误信息
         if not error_msg and not stderr and not stdout:
-            logger.warning(f"编译失败但没有任何输出信息，可能是进程被中断或超时")
+            logger.warning("编译失败但没有任何输出信息，可能是进程被中断或超时")
             logger.warning(f"  项目路径: {project_path}")
             return {
                 "success": False,

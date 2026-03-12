@@ -1,7 +1,6 @@
 """沙箱管理器"""
 
 import logging
-import os
 import shutil
 import threading
 import time

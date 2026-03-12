@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from comet.agent import AgentState, AgentTools, ParallelPlannerAgent, PlannerAgent
+from comet.agent import AgentTools, ParallelPlannerAgent, PlannerAgent
 from comet.agent.target_selector import TargetSelector
 from comet.config import Settings
 from comet.executor import JavaExecutor, MetricsCollector, MutationEvaluator
@@ -239,10 +239,6 @@ def initialize_system(
     max_iterations = config.evolution.max_iterations
     budget = config.evolution.budget_llm_calls
 
-    # 初始化目标选择器（并行模式需要）
-    # 注意：project_path 将在 run_evolution 中设置
-    target_selector = None
-
     # 根据模式选择 Agent
     if parallel_mode or config.agent.parallel.enabled:
         logger.info("使用并行 Agent 模式")
@@ -462,8 +458,6 @@ def run_evolution(
                         logger.warning(f"清理临时沙箱失败（非致命错误）: {e}")
 
                     # 等待一小段时间，让系统回收文件描述符和进程资源
-                    import time
-
                     logger.info("等待系统回收资源...")
                     time.sleep(3)
 
@@ -503,7 +497,7 @@ def run_evolution(
                                 )
 
                                 if attempt < max_retries:
-                                    logger.info(f"等待 5 秒后重试...")
+                                    logger.info("等待 5 秒后重试...")
                                     time.sleep(5)
                                 else:
                                     error_msg = f"初始覆盖率测试失败（已重试 {max_retries} 次）: {error_detail[:500]}"
@@ -516,7 +510,7 @@ def run_evolution(
                                 f"运行初始覆盖率测试异常 (尝试 {attempt}/{max_retries}): {e}"
                             )
                             if attempt < max_retries:
-                                logger.info(f"等待 5 秒后重试...")
+                                logger.info("等待 5 秒后重试...")
                                 time.sleep(5)
                             else:
                                 raise RuntimeError(
@@ -583,7 +577,7 @@ def run_evolution(
         try:
             logger.info("尝试导出已生成的测试文件...")
             sandbox_manager.export_test_files("workspace", project_path)
-        except:
+        except Exception:
             pass
         raise
     finally:

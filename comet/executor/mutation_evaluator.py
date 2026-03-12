@@ -4,10 +4,9 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
-from ..models import EvaluationResult, KillMatrix, Mutant, TestCase
+from ..models import KillMatrix, Mutant, TestCase
 from ..utils.log_context import log_context
 from ..utils.sandbox import SandboxManager
 from .java_executor import JavaExecutor
@@ -175,7 +174,7 @@ class MutationEvaluator:
                     if not failed_tests:
                         # 有报告但没有失败的测试，可能是其他错误（如测试超时）
                         # 保守策略：标记所有测试为失败
-                        logger.debug(f"  未找到具体失败的测试，保守策略标记所有测试为失败")
+                        logger.debug("  未找到具体失败的测试，保守策略标记所有测试为失败")
                         for test_case in test_cases:
                             results[test_case.id] = False
                     else:
