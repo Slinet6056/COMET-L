@@ -2,12 +2,12 @@
 
 import logging
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import List, Optional, Union, cast
 
 from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
-from ..models import Contract, Mutant, MutationPatch, Pattern, TestCase
+from ..models import Mutant, MutationPatch, TestCase
 from ..utils.code_utils import add_line_numbers
 from ..utils.hash_utils import generate_id
 from ..utils.parsers import parse_mutation_response
@@ -56,7 +56,8 @@ class MutantGenerator:
             return ""
 
         try:
-            context = self.kb.retrieve_for_mutation_generation(
+            rag_kb = cast(RAGKnowledgeBase, self.kb)
+            context = rag_kb.retrieve_for_mutation_generation(
                 class_name, method_name or "", source_code
             )
             if context:

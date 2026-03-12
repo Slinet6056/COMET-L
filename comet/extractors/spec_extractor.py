@@ -140,10 +140,6 @@ class SpecExtractor:
                 logger.warning(f"无法从 {file_path} 提取方法")
                 return []
 
-            # 读取源代码
-            with open(file_path, "r", encoding="utf-8") as f:
-                source_code = f.read()
-
             contracts = []
             for method in methods_data:
                 method_name = method.get("name")

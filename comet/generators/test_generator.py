@@ -2,12 +2,12 @@
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
-from ..models import Contract, Mutant, TestCase, TestMethod
+from ..models import Mutant, TestCase, TestMethod
 from ..utils.code_utils import build_test_class, extract_imports, parse_java_class
 from ..utils.hash_utils import generate_id
 from ..utils.parsers import (
@@ -63,7 +63,8 @@ class TestGenerator:
             return ""
 
         try:
-            context = self.kb.retrieve_for_test_generation(
+            rag_kb = cast(RAGKnowledgeBase, self.kb)
+            context = rag_kb.retrieve_for_test_generation(
                 class_name, method_name, method_signature, source_code
             )
             if context:
@@ -158,7 +159,7 @@ class TestGenerator:
                     updated_at=datetime.now(),
                 )
                 test_methods.append(test_method)
-            logger.debug(f"成功创建测试方法: {test_method_name}")
+            logger.debug(f"成功创建测试方法: {len(test_methods)} 个")
 
             # 解析类信息
             class_info = parse_java_class(class_code)
