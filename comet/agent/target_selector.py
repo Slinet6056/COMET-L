@@ -9,6 +9,9 @@ from ..utils.project_utils import get_all_java_classes
 
 logger = logging.getLogger(__name__)
 
+MethodInfo = dict[str, Any]
+TargetInfo = dict[str, Any]
+
 
 class TargetSelector:
     """目标选择器 - 实现多种目标选择策略"""
@@ -38,9 +41,9 @@ class TargetSelector:
     def select(
         self,
         criteria: str = "coverage",
-        blacklist: Optional[set] = None,
-        processed_targets: Optional[set] = None,
-    ) -> Dict[str, Any]:
+        blacklist: Optional[set[str]] = None,
+        processed_targets: Optional[set[str]] = None,
+    ) -> TargetInfo:
         """
         根据策略选择目标
 
@@ -72,8 +75,8 @@ class TargetSelector:
             return self.select_by_priority(blacklist, processed_targets)
 
     def select_by_coverage(
-        self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None
-    ) -> Dict[str, Any]:
+        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+    ) -> TargetInfo:
         """
         选择覆盖率最低的方法
 
@@ -284,8 +287,8 @@ class TargetSelector:
         return {"class_name": None, "method_name": None}
 
     def select_by_mutations(
-        self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None
-    ) -> Dict[str, Any]:
+        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+    ) -> TargetInfo:
         """
         选择变异体最少的类
 
@@ -347,8 +350,8 @@ class TargetSelector:
         return {"class_name": None, "method_name": None}
 
     def select_by_priority(
-        self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None
-    ) -> Dict[str, Any]:
+        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+    ) -> TargetInfo:
         """
         综合评分选择目标
 
@@ -415,8 +418,8 @@ class TargetSelector:
         return {"class_name": None, "method_name": None}
 
     def select_random(
-        self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None
-    ) -> Dict[str, Any]:
+        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+    ) -> TargetInfo:
         """
         随机选择目标
 
@@ -484,8 +487,8 @@ class TargetSelector:
         }
 
     def select_by_killrate(
-        self, blacklist: Optional[set] = None, processed_targets: Optional[set] = None
-    ) -> Dict[str, Any]:
+        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+    ) -> TargetInfo:
         """
         按杀死率选择目标（优先选择杀死率低的方法）
 
@@ -615,7 +618,7 @@ class TargetSelector:
             logger.info(f"找到 {len(self._class_cache)} 个 Java 类（不含接口）")
         return self._class_cache
 
-    def _get_public_methods(self, class_name: str) -> List[str]:
+    def _get_public_methods(self, class_name: str) -> List[str | MethodInfo]:
         """
         获取类的所有 public 方法
 
@@ -679,11 +682,11 @@ class TargetSelector:
     def _get_first_available_method(
         self,
         class_name: str,
-        blacklist: set,
-        processed_targets: Optional[set] = None,
+        blacklist: set[str],
+        processed_targets: Optional[set[str]] = None,
         prefer_unprocessed: bool = True,
         allow_first_only: bool = True,
-    ) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
+    ) -> Tuple[Optional[MethodInfo], Optional[str], Optional[str]]:
         """
         获取指定类中未命中黑名单的第一个 public 方法
 

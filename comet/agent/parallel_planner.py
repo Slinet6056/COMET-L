@@ -240,11 +240,17 @@ class ParallelPlannerAgent:
             目标列表
         """
         targets = []
-        blacklist = set(ft.get("target") for ft in self.state.failed_targets)
-        processed = set(self.state.processed_targets)
+        blacklist = {
+            target
+            for target in (ft.get("target") for ft in self.state.failed_targets)
+            if isinstance(target, str)
+        }
+        processed = {target for target in self.state.processed_targets if isinstance(target, str)}
 
         # 获取当前活跃的目标，避免重复选择
-        active_targets = set(self.state.get_active_targets())
+        active_targets = {
+            target for target in self.state.get_active_targets() if isinstance(target, str)
+        }
 
         for _ in range(self.max_parallel_targets):
             # 使用目标选择器选择下一个目标

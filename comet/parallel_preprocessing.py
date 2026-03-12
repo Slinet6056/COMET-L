@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypedDict, cast
 
-from .utils.log_context import log_context
 from .models import TestCase, TestMethod
+from .utils.log_context import log_context
 
 logger = logging.getLogger(__name__)
 
