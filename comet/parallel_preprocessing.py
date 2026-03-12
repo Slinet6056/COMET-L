@@ -8,11 +8,29 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypedDict, cast
 
 from .utils.log_context import log_context
+from .models import TestCase, TestMethod
 
 logger = logging.getLogger(__name__)
+
+
+class PreprocessStats(TypedDict):
+    total_methods: int
+    success: int
+    failed: int
+    total_tests: int
+    total_mutants: int
+    processing_times: list[float]
+
+
+class ProcessResult(TypedDict, total=False):
+    success: bool
+    tests: int
+    mutants: int
+    elapsed: float
+    error: str
 
 
 class ParallelPreprocessor:
@@ -46,7 +64,7 @@ class ParallelPreprocessor:
         self.spec_extractor = components.get("spec_extractor")
 
         # 统计信息
-        self._stats = {
+        self._stats: PreprocessStats = {
             "total_methods": 0,
             "success": 0,
             "failed": 0,
@@ -57,8 +75,11 @@ class ParallelPreprocessor:
         self._stats_lock = threading.Lock()
 
         # 已分析的类（避免重复分析）
-        self._analyzed_classes: set = set()
+        self._analyzed_classes: set[str] = set()
         self._analyzed_classes_lock = threading.Lock()
+
+        self.project_path: str = ""
+        self.workspace_sandbox: str = ""
 
         # 获取并发配置
         try:
@@ -127,7 +148,7 @@ class ParallelPreprocessor:
         )
         self._publish_runtime_snapshot()
 
-    def _get_formatting_config(self) -> tuple:
+    def _get_formatting_config(self) -> tuple[bool | None, str | None]:
         """
         获取格式化配置
 
@@ -233,7 +254,7 @@ class ParallelPreprocessor:
 
         if not all_methods:
             logger.warning("未找到任何公共方法，跳过预处理")
-            return self._stats
+            return cast(Dict[str, Any], dict(self._stats))
 
         self._stats["total_methods"] = len(all_methods)
         logger.info(f"找到 {len(all_methods)} 个公共方法")
@@ -274,7 +295,7 @@ class ParallelPreprocessor:
         logger.info(f"平均每个方法: {avg_time:.2f}秒")
         logger.info("=" * 60)
 
-        return self._stats
+        return cast(Dict[str, Any], dict(self._stats))
 
     def _get_all_target_methods(self) -> List[Tuple[str, str, Dict[str, Any]]]:
         """
@@ -414,7 +435,7 @@ class ParallelPreprocessor:
                     if not future.done() and not future.cancelled():
                         try:
                             future.result(timeout=max(0, 5 - (time.time() - wait_start)))
-                        except:
+                        except Exception:
                             pass
 
                 # 重新抛出中断异常，让上层处理
@@ -461,7 +482,7 @@ class ParallelPreprocessor:
                     ended_at=datetime.now(timezone.utc).isoformat(),
                     duration_seconds=duration_seconds,
                 )
-                return result
+                return cast(Dict[str, Any], dict(result))
             except Exception as e:
                 logger.warning(f"方法处理异常: {e}")
                 with self._stats_lock:
@@ -475,7 +496,9 @@ class ParallelPreprocessor:
                 )
                 return {"success": False, "error": str(e)}
 
-    def _cleanup_timeout_data(self, class_name: str, method_name: str, start_time) -> None:
+    def _cleanup_timeout_data(
+        self, class_name: str, method_name: str, start_time: datetime
+    ) -> None:
         """
         清理超时任务产生的数据库数据
 
@@ -518,8 +541,8 @@ class ParallelPreprocessor:
         class_name: str,
         method_name: str,
         method_info: Dict[str, Any],
-        task_start_time=None,
-    ) -> Dict[str, Any]:
+        task_start_time: Optional[datetime] = None,
+    ) -> ProcessResult:
         """
         处理单个方法：生成测试、变异体并评估
 
@@ -544,11 +567,11 @@ class ParallelPreprocessor:
         start_time = time.time()
         sandbox_path = None
         sandbox_id = None
-        result = {
+        result: ProcessResult = {
             "success": False,
             "tests": 0,
             "mutants": 0,
-            "elapsed": 0,
+            "elapsed": 0.0,
         }
 
         try:
@@ -741,7 +764,7 @@ class ParallelPreprocessor:
             if result["tests"] > 0 and result["mutants"] > 0:
                 try:
                     # 构建击杀矩阵
-                    kill_matrix = self.mutation_evaluator.build_kill_matrix(
+                    self.mutation_evaluator.build_kill_matrix(
                         mutants=valid_mutants,
                         test_cases=[test_case],
                         project_path=sandbox_path,
@@ -802,9 +825,6 @@ class ParallelPreprocessor:
         from .utils.code_utils import build_test_class
         from .utils.project_utils import clear_test_directory, write_test_file
 
-        # 使用已有的 java_executor
-        java_executor = self.java_executor
-
         # 1. 从数据库获取所有测试用例
         logger.info("步骤 1: 从数据库加载所有测试用例...")
         all_test_cases = self.db.get_all_test_cases()
@@ -820,9 +840,8 @@ class ParallelPreprocessor:
         validated_tests = {}  # {class_name: (valid_methods, test_case)}
 
         for test_case in all_test_cases:
+            class_name = test_case.class_name
             try:
-                class_name = test_case.class_name
-
                 # 检查full_code是否存在
                 if not test_case.full_code:
                     logger.warning(f"测试类 {class_name} 没有full_code，跳过")
@@ -1003,8 +1022,6 @@ class ParallelPreprocessor:
         Returns:
             删除的测试方法数量
         """
-        from .utils.project_utils import clear_test_directory
-
         # 获取所有测试用例
         all_test_cases = self.db.get_all_test_cases()
         if not all_test_cases:
@@ -1040,7 +1057,7 @@ class ParallelPreprocessor:
 
         return total_removed
 
-    def _binary_search_failed_test_classes(self, test_cases: List) -> List[str]:
+    def _binary_search_failed_test_classes(self, test_cases: List[TestCase]) -> List[str]:
         """
         使用二分查找定位编译失败的测试类
 
@@ -1092,7 +1109,7 @@ class ParallelPreprocessor:
 
         return failed
 
-    def _validate_test_classes_in_sandbox(self, test_cases: List) -> bool:
+    def _validate_test_classes_in_sandbox(self, test_cases: List[TestCase]) -> bool:
         """
         在独立沙箱中验证一组测试类是否可以编译
 
@@ -1115,10 +1132,15 @@ class ParallelPreprocessor:
             # 写入所有测试类
             formatting_enabled, formatting_style = self._get_formatting_config()
             for test_case in test_cases:
+                package_name = test_case.package_name
+                full_code = test_case.full_code
+                if package_name is None or full_code is None:
+                    logger.warning(f"测试类信息不完整，跳过写入: {test_case.class_name}")
+                    return False
                 write_test_file(
                     project_path=validation_sandbox,
-                    package_name=test_case.package_name,
-                    test_code=test_case.full_code,
+                    package_name=package_name,
+                    test_code=full_code,
                     test_class_name=test_case.class_name,
                     formatting_enabled=formatting_enabled,
                     formatting_style=formatting_style,
@@ -1177,9 +1199,9 @@ class ParallelPreprocessor:
         test_class_name: str,
         target_class: str,
         package_name: str,
-        imports: list,
-        all_methods: list,
-    ) -> list:
+        imports: list[str],
+        all_methods: list[TestMethod],
+    ) -> list[TestMethod]:
         """
         在独立验证沙箱中构建和验证合并后的测试文件
 
@@ -1193,9 +1215,6 @@ class ParallelPreprocessor:
         Returns:
             验证通过的方法列表，如果验证失败返回空列表
         """
-        from .utils.code_utils import build_test_class
-        from .utils.project_utils import write_test_file
-
         sandbox_path = None
         sandbox_id = None
 
@@ -1234,14 +1253,14 @@ class ParallelPreprocessor:
 
     def _write_and_validate_merged_test(
         self,
-        java_executor,
+        java_executor: Any,
         test_class_name: str,
         target_class: str,
         package_name: str,
-        imports: list,
-        all_methods: list,
+        imports: list[str],
+        all_methods: list[TestMethod],
         sandbox_path: Optional[str] = None,
-    ) -> list:
+    ) -> list[TestMethod]:
         """
         写入合并的测试文件并验证编译和测试，无限重试直到全部通过或无方法可删
 
@@ -1257,8 +1276,6 @@ class ParallelPreprocessor:
         Returns:
             验证通过的方法列表
         """
-        import os
-
         from .utils.code_utils import build_test_class
         from .utils.project_utils import write_test_file
 
@@ -1268,22 +1285,6 @@ class ParallelPreprocessor:
         valid_methods = list(all_methods)
         iteration = 0
         last_method_count = len(valid_methods)
-
-        # 计算测试文件路径
-        if package_name:
-            package_path = package_name.replace(".", os.sep)
-            test_file_path = os.path.join(
-                project_path,
-                "src",
-                "test",
-                "java",
-                package_path,
-                f"{test_class_name}.java",
-            )
-        else:
-            test_file_path = os.path.join(
-                project_path, "src", "test", "java", f"{test_class_name}.java"
-            )
 
         while valid_methods:
             iteration += 1
@@ -1433,11 +1434,11 @@ class ParallelPreprocessor:
 
     def _binary_search_failed_methods(
         self,
-        methods: List,
+        methods: List[TestMethod],
         test_class_name: str,
         target_class: str,
         package_name: str,
-        imports: list,
+        imports: list[str],
     ) -> List[str]:
         """
         二分查找失败的测试方法（支持并行递归）
@@ -1527,7 +1528,7 @@ class ParallelPreprocessor:
                     return failed_in_individual
                 else:
                     # 所有方法单独都通过，说明是组合问题，保守删除所有
-                    logger.warning(f"所有方法单独都通过但合并失败，删除所有方法")
+                    logger.warning("所有方法单独都通过但合并失败，删除所有方法")
                     return [m.method_name for m in methods]
             else:
                 # 方法较多，继续递归二分（每侧再细分）
@@ -1580,11 +1581,11 @@ class ParallelPreprocessor:
 
     def _validate_methods_in_sandbox(
         self,
-        methods: List,
+        methods: List[TestMethod],
         test_class_name: str,
         target_class: str,
         package_name: str,
-        imports: list,
+        imports: list[str],
     ) -> bool:
         """
         在独立沙箱中验证一组测试方法
@@ -1689,7 +1690,7 @@ class ParallelPreprocessor:
 
     def _identify_failed_test_methods(
         self, test_class_name: str, project_path: Optional[str] = None
-    ) -> set:
+    ) -> set[str]:
         """
         从Surefire报告中识别失败的测试方法
 
@@ -1700,8 +1701,6 @@ class ParallelPreprocessor:
         Returns:
             失败的测试方法名集合
         """
-        import os
-
         from comet.executor.surefire_parser import SurefireParser
 
         failed_methods = set()
@@ -1739,7 +1738,7 @@ class ParallelPreprocessor:
             return failed_methods
 
     def _get_method_line_ranges_by_regex(
-        self, test_file_path: str, methods: list
+        self, test_file_path: str, methods: list[TestMethod]
     ) -> Dict[str, Tuple[int, int]]:
         """
         使用正则表达式从文件中提取方法行号范围（当 javalang 解析失败时的备用策略）
@@ -1806,7 +1805,9 @@ class ParallelPreprocessor:
         Returns:
             方法名到 (起始行, 结束行) 的映射
         """
-        import javalang
+        from javalang.parse import parse
+        from javalang.parser import JavaSyntaxError
+        from javalang.tree import MethodDeclaration
 
         method_ranges: Dict[str, Tuple[int, int]] = {}
 
@@ -1816,13 +1817,15 @@ class ParallelPreprocessor:
                 source_lines = source_code.split("\n")
                 total_lines = len(source_lines)
 
-            tree = javalang.parse.parse(source_code)
+            tree = parse(source_code)
 
             # 收集所有方法声明及其起始行
-            methods_with_positions = []
-            for path, node in tree.filter(javalang.tree.MethodDeclaration):  # type: ignore
-                if node.position:  # type: ignore
-                    methods_with_positions.append((node.name, node.position.line))  # type: ignore
+            methods_with_positions: list[tuple[str, int]] = []
+            for _path, node in tree.filter(MethodDeclaration):
+                position = getattr(node, "position", None)
+                method_name = getattr(node, "name", None)
+                if position is not None and method_name is not None:
+                    methods_with_positions.append((method_name, position.line))
 
             # 按行号排序
             methods_with_positions.sort(key=lambda x: x[1])
@@ -1845,7 +1848,7 @@ class ParallelPreprocessor:
 
                 method_ranges[method_name] = (start_line, end_line)
 
-        except javalang.parser.JavaSyntaxError as e:
+        except JavaSyntaxError as e:
             logger.warning(f"javalang 解析失败（语法错误），尝试从错误位置提取信息: {e}")
             # 如果解析失败，返回空字典，让调用者使用备用策略
         except Exception as e:
@@ -1854,8 +1857,8 @@ class ParallelPreprocessor:
         return method_ranges
 
     def _identify_failed_methods_from_compile_error(
-        self, error_output: str, test_file_path: str, methods: list
-    ) -> set:
+        self, error_output: str, test_file_path: str, methods: list[TestMethod]
+    ) -> set[str]:
         """
         从编译错误输出中识别失败的方法
 
