@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import {
@@ -697,6 +697,19 @@ export function RunPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
   const [actionHistory, setActionHistory] = useState<ActionEntry[]>([]);
+  const snapshotStatus = snapshot?.status ?? null;
+  const snapshotRef = useRef<RunSnapshot | null>(null);
+  const snapshotSignatureRef = useRef<string | null>(null);
+  const pageErrorRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    snapshotRef.current = snapshot;
+    snapshotSignatureRef.current = snapshot ? JSON.stringify(snapshot) : null;
+  }, [snapshot]);
+
+  useEffect(() => {
+    pageErrorRef.current = pageError;
+  }, [pageError]);
 
   useEffect(() => {
     let active = true;
@@ -713,6 +726,8 @@ export function RunPage() {
           return;
         }
 
+        snapshotSignatureRef.current = JSON.stringify(initialSnapshot);
+        snapshotRef.current = initialSnapshot;
         setSnapshot(initialSnapshot);
         setIsLoading(false);
 
@@ -765,9 +780,9 @@ export function RunPage() {
   useEffect(() => {
     if (
       snapshot === null ||
-      snapshot.status === 'completed' ||
-      snapshot.status === 'failed' ||
-      connectionState === 'live'
+      snapshotStatus === 'completed' ||
+      snapshotStatus === 'failed' ||
+      (connectionState !== 'unavailable' && connectionState !== 'error')
     ) {
       return;
     }
@@ -781,8 +796,18 @@ export function RunPage() {
           return;
         }
 
-        setSnapshot(nextSnapshot);
-        setPageError(null);
+        const nextSnapshotSignature = JSON.stringify(nextSnapshot);
+
+        if (snapshotSignatureRef.current !== nextSnapshotSignature) {
+          snapshotSignatureRef.current = nextSnapshotSignature;
+          snapshotRef.current = nextSnapshot;
+          setSnapshot(nextSnapshot);
+        }
+
+        if (pageErrorRef.current !== null) {
+          pageErrorRef.current = null;
+          setPageError(null);
+        }
       } catch (error) {
         if (!active) {
           return;
@@ -800,7 +825,7 @@ export function RunPage() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [connectionState, runId, snapshot]);
+  }, [connectionState, runId, snapshot, snapshotStatus]);
 
   const improvementSummary = useMemo(
     () => (snapshot ? buildImprovementSummary(snapshot) : []),
@@ -819,7 +844,7 @@ export function RunPage() {
     );
   }
 
-  if (pageError || snapshot === null) {
+  if (snapshot === null) {
     return (
       <section className="panel run-page">
         <p className="eyebrow">运行</p>
@@ -831,6 +856,7 @@ export function RunPage() {
 
   return (
     <section className="panel run-page">
+      {pageError ? <p role="alert">{pageError}</p> : null}
       {snapshot.mode === 'parallel' ? (
         <ParallelRunView runId={runId} snapshot={snapshot} connectionState={connectionState} />
       ) : (

@@ -1,3 +1,4 @@
+import { Profiler } from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -223,5 +224,84 @@ describe('Run page standard mode', () => {
       expect(screen.getByText('Collect preprocessing artifacts before resuming target selection.')).toBeInTheDocument();
       expect(screen.getByText('阶段：预处理中')).toBeInTheDocument();
     });
+  });
+
+  it('skips fallback rerenders when polled snapshots are unchanged', async () => {
+    vi.useFakeTimers();
+
+    let fetchCalls = 0;
+    const onRender = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        fetchCalls += 1;
+        return jsonResponse(buildSnapshot());
+      }),
+    );
+    vi.stubGlobal('EventSource', undefined);
+
+    render(
+      <Profiler id="run-page" onRender={onRender}>
+        <MemoryRouter initialEntries={['/runs/run-42']}>
+          <App />
+        </MemoryRouter>
+      </Profiler>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('heading', { name: '决策面板' })).toBeInTheDocument();
+    const renderCountAfterLoad = onRender.mock.calls.length;
+    expect(renderCountAfterLoad).toBeGreaterThan(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
+
+    expect(fetchCalls).toBe(2);
+    expect(onRender).toHaveBeenCalledTimes(renderCountAfterLoad);
+  });
+
+  it('keeps the current run view visible when a fallback poll fails', async () => {
+    vi.useFakeTimers();
+
+    let fetchCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        fetchCalls += 1;
+
+        if (fetchCalls === 1) {
+          return jsonResponse(buildSnapshot());
+        }
+
+        throw new Error('fallback poll failed');
+      }),
+    );
+    vi.stubGlobal('EventSource', undefined);
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('heading', { name: '决策面板' })).toBeInTheDocument();
+    expect(screen.getByText('Prioritize Calculator.add because recent mutants survived.')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
+
+    expect(fetchCalls).toBe(2);
+    expect(screen.getByRole('heading', { name: '决策面板' })).toBeInTheDocument();
+    expect(screen.getByText('Prioritize Calculator.add because recent mutants survived.')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('fallback poll failed');
   });
 });
