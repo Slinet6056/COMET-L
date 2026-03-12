@@ -3,9 +3,20 @@ import { Link, useParams } from 'react-router-dom';
 
 import { fetchRunResults, type RunResultsArtifact, type RunResultsResponse } from '../lib/api';
 
+const STATUS_LABELS: Record<string, string> = {
+  created: '已创建',
+  queued: '排队中',
+  preprocessing: '预处理中',
+  running: '运行中',
+  completed: '已完成',
+  failed: '失败',
+  standard: '标准单目标演化',
+  parallel: '并行批次演化',
+};
+
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
-    return 'N/A';
+    return '暂无';
   }
 
   return `${(value * 100).toFixed(1)}%`;
@@ -13,7 +24,7 @@ function formatPercent(value: number | null | undefined): string {
 
 function formatCount(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
-    return 'N/A';
+    return '暂无';
   }
 
   return value.toLocaleString();
@@ -21,7 +32,7 @@ function formatCount(value: number | null | undefined): string {
 
 function formatDate(value: string | null | undefined): string {
   if (!value) {
-    return 'Unavailable';
+    return '不可用';
   }
 
   const date = new Date(value);
@@ -34,7 +45,7 @@ function formatDate(value: string | null | undefined): string {
 
 function formatBytes(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
-    return 'Unavailable';
+    return '不可用';
   }
 
   if (value < 1024) {
@@ -52,16 +63,32 @@ function formatBytes(value: number | null | undefined): string {
   return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
+function translateStatus(value: string | null | undefined): string {
+  if (!value) {
+    return '未知';
+  }
+
+  return STATUS_LABELS[value] ?? value;
+}
+
+function translatePhaseLabel(label: string | null | undefined): string {
+  if (!label) {
+    return '未知';
+  }
+
+  return STATUS_LABELS[label.toLowerCase()] ?? label;
+}
+
 function buildTerminalMessage(results: RunResultsResponse): string {
   if (results.status === 'failed') {
-    return 'This run ended in failure. Final-state data and the run log remain available when the backend produced them.';
+    return '本次运行以失败结束。如果后端已生成 final-state 数据和运行日志，仍可在此获取。';
   }
 
   if (results.status === 'completed') {
-    return 'This run reached a terminal completed state. The summary below reflects the final snapshot and any run-scoped database aggregates.';
+    return '本次运行已完成。下方摘要展示最终快照以及按本次运行聚合的数据库统计。';
   }
 
-  return 'This run has not reached a terminal state yet. The page still shows the latest available result payload.';
+  return '本次运行尚未进入终态。页面仍会展示当前可获得的最新结果数据。';
 }
 
 function buildModeHighlights(results: RunResultsResponse): Array<{ label: string; value: string }> {
@@ -69,18 +96,18 @@ function buildModeHighlights(results: RunResultsResponse): Array<{ label: string
 
   if (results.mode === 'parallel') {
     return [
-      { label: 'Execution mode', value: 'Parallel batch evolution' },
-      { label: 'Global mutation score', value: formatPercent(metrics.globalMutationScore) },
-      { label: 'Global killed mutants', value: formatCount(metrics.globalKilledMutants) },
-      { label: 'Global survived mutants', value: formatCount(metrics.globalSurvivedMutants) },
+      { label: '执行模式', value: '并行批次演化' },
+      { label: '全局变异分数', value: formatPercent(metrics.globalMutationScore) },
+      { label: '全局已杀死变异体', value: formatCount(metrics.globalKilledMutants) },
+      { label: '全局存活变异体', value: formatCount(metrics.globalSurvivedMutants) },
     ];
   }
 
   return [
-    { label: 'Execution mode', value: 'Standard single-target evolution' },
-    { label: 'Current method coverage', value: formatPercent(metrics.currentMethodCoverage) },
-    { label: 'Killed mutants', value: formatCount(metrics.killedMutants) },
-    { label: 'Survived mutants', value: formatCount(metrics.survivedMutants) },
+    { label: '执行模式', value: '标准单目标演化' },
+    { label: '当前方法覆盖率', value: formatPercent(metrics.currentMethodCoverage) },
+    { label: '已杀死变异体', value: formatCount(metrics.killedMutants) },
+    { label: '存活变异体', value: formatCount(metrics.survivedMutants) },
   ];
 }
 
@@ -119,7 +146,7 @@ function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact }) {
     return (
       <article className="artifact-card">
         <h4>{title}</h4>
-        <p className="muted-copy">Artifact metadata is unavailable.</p>
+        <p className="muted-copy">工件元数据当前不可用。</p>
       </article>
     );
   }
@@ -136,27 +163,27 @@ function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact }) {
             artifact.exists ? 'worker-pill worker-pill--success' : 'worker-pill worker-pill--error'
           }
         >
-          {artifact.exists ? 'Available' : 'Missing'}
+          {artifact.exists ? '可用' : '缺失'}
         </span>
       </div>
 
       <dl className="detail-grid artifact-card__details">
         <div>
-          <dt>Updated</dt>
+          <dt>更新时间</dt>
           <dd>{formatDate(artifact.updatedAt)}</dd>
         </div>
         <div>
-          <dt>Size</dt>
+          <dt>大小</dt>
           <dd>{formatBytes(artifact.sizeBytes)}</dd>
         </div>
       </dl>
 
       {artifact.exists ? (
         <a className="artifact-link" href={artifact.downloadUrl}>
-          Download {artifact.filename}
+          下载 {artifact.filename}
         </a>
       ) : (
-        <p className="muted-copy">This artifact was not generated for the run.</p>
+        <p className="muted-copy">本次运行未生成该工件。</p>
       )}
     </article>
   );
@@ -188,7 +215,7 @@ export function RunResultsPage() {
           return;
         }
 
-        setPageError(error instanceof Error ? error.message : 'Unable to load run results.');
+        setPageError(error instanceof Error ? error.message : '无法加载运行结果。');
         setIsLoading(false);
       }
     }
@@ -213,10 +240,10 @@ export function RunResultsPage() {
   if (isLoading) {
     return (
       <section className="panel run-page">
-        <p className="eyebrow">Results</p>
-        <h2>Run Results</h2>
+        <p className="eyebrow">结果</p>
+        <h2>运行结果</h2>
         <p>
-          Loading final summary for <code>{runId}</code>...
+          正在加载 <code>{runId}</code> 的最终摘要...
         </p>
       </section>
     );
@@ -225,10 +252,10 @@ export function RunResultsPage() {
   if (pageError || results === null) {
     return (
       <section className="panel run-page">
-        <p className="eyebrow">Results</p>
-        <h2>Run Results</h2>
-        <p role="alert">{pageError ?? 'Run results are unavailable.'}</p>
-        <Link to={`/runs/${runId}`}>Back to run details</Link>
+        <p className="eyebrow">结果</p>
+        <h2>运行结果</h2>
+        <p role="alert">{pageError ?? '运行结果当前不可用。'}</p>
+        <Link to={`/runs/${runId}`}>返回运行详情</Link>
       </section>
     );
   }
@@ -237,19 +264,19 @@ export function RunResultsPage() {
     <section className="panel run-page results-page">
       <div className="run-page__hero">
         <div>
-          <p className="eyebrow">Results</p>
-          <h2>Run Results</h2>
+          <p className="eyebrow">结果</p>
+          <h2>运行结果</h2>
           <p className="run-page__lead">
-            Terminal summary for <code>{results.runId}</code>. This page combines the final run
-            snapshot, database-backed aggregates, and downloadable artifacts.
+            <code>{results.runId}</code> 的终态摘要。此页面汇总最终运行快照、数据库聚合结果，
+            以及可下载的工件。
           </p>
         </div>
 
         <div className="run-status-badges">
-          <span className="run-badge">Status: {results.status}</span>
-          <span className="run-badge">Phase: {results.phase.label}</span>
-          <span className="run-badge">Mode: {results.mode}</span>
-          <span className="run-badge">Iteration: {results.iteration}</span>
+          <span className="run-badge">状态：{translateStatus(results.status)}</span>
+          <span className="run-badge">阶段：{translatePhaseLabel(results.phase.label)}</span>
+          <span className="run-badge">模式：{translateStatus(results.mode)}</span>
+          <span className="run-badge">迭代次数：{results.iteration}</span>
         </div>
       </div>
 
@@ -261,31 +288,31 @@ export function RunResultsPage() {
       </section>
 
       <section className="run-card" aria-labelledby="results-final-stats">
-        <p className="eyebrow">Final Stats</p>
-        <h3 id="results-final-stats">Final Statistics</h3>
+        <p className="eyebrow">最终统计</p>
+        <h3 id="results-final-stats">最终统计</h3>
         <div className="metric-grid metric-grid--hero">
           <article>
-            <span>Mutation score</span>
+            <span>变异分数</span>
             <strong>{formatPercent(displayMutationScore)}</strong>
           </article>
           <article>
-            <span>Line coverage</span>
+            <span>行覆盖率</span>
             <strong>{formatPercent(results.summary.metrics.lineCoverage)}</strong>
           </article>
           <article>
-            <span>Branch coverage</span>
+            <span>分支覆盖率</span>
             <strong>{formatPercent(results.summary.metrics.branchCoverage)}</strong>
           </article>
           <article>
-            <span>Total mutants</span>
+            <span>变异体总数</span>
             <strong>{formatCount(displayTotalMutants)}</strong>
           </article>
           <article>
-            <span>Total tests</span>
+            <span>测试总数</span>
             <strong>{formatCount(results.summary.metrics.totalTests)}</strong>
           </article>
           <article>
-            <span>LLM calls</span>
+            <span>LLM 调用次数</span>
             <strong>
               {formatCount(results.llmCalls)} / {formatCount(results.budget)}
             </strong>
@@ -294,8 +321,8 @@ export function RunResultsPage() {
       </section>
 
       <section className="run-card" aria-labelledby="results-mode-summary">
-        <p className="eyebrow">Mode</p>
-        <h3 id="results-mode-summary">Mode Summary</h3>
+        <p className="eyebrow">模式</p>
+        <h3 id="results-mode-summary">模式摘要</h3>
         <ul className="summary-list summary-list--compact summary-list--two-column">
           {modeHighlights.map((entry) => (
             <li key={entry.label}>
@@ -307,80 +334,80 @@ export function RunResultsPage() {
       </section>
 
       <section className="run-card" aria-labelledby="results-test-summary">
-        <p className="eyebrow">Database</p>
-        <h3 id="results-test-summary">Test and Mutant Summary</h3>
+        <p className="eyebrow">数据库</p>
+        <h3 id="results-test-summary">测试与变异体摘要</h3>
         <ul className="summary-list summary-list--compact summary-list--two-column">
           <li>
-            <strong>Compiled cases</strong>
+            <strong>编译通过用例</strong>
             <span>
               {formatCount(results.summary.tests.compiledCases)} /{' '}
               {formatCount(results.summary.tests.totalCases)}
             </span>
           </li>
           <li>
-            <strong>Generated methods</strong>
+            <strong>生成的方法数</strong>
             <span>{formatCount(results.summary.tests.totalMethods)}</span>
           </li>
           <li>
-            <strong>Target methods hit</strong>
+            <strong>命中的目标方法</strong>
             <span>{formatCount(results.summary.tests.targetMethods)}</span>
           </li>
           <li>
-            <strong>Evaluated mutants</strong>
+            <strong>已评估变异体</strong>
             <span>{formatCount(results.summary.mutants.evaluated)}</span>
           </li>
           <li>
-            <strong>Pending mutants</strong>
+            <strong>待评估变异体</strong>
             <span>{formatCount(results.summary.mutants.pending)}</span>
           </li>
           <li>
-            <strong>Invalid mutants</strong>
+            <strong>无效变异体</strong>
             <span>{formatCount(results.summary.mutants.invalid)}</span>
           </li>
         </ul>
       </section>
 
       <section className="run-card" aria-labelledby="results-coverage-summary">
-        <p className="eyebrow">Coverage</p>
-        <h3 id="results-coverage-summary">Coverage Summary</h3>
+        <p className="eyebrow">覆盖率</p>
+        <h3 id="results-coverage-summary">覆盖率摘要</h3>
         <ul className="summary-list summary-list--compact summary-list--two-column">
           <li>
-            <strong>Latest DB iteration</strong>
+            <strong>数据库最新迭代</strong>
             <span>{formatCount(results.summary.coverage.latestIteration)}</span>
           </li>
           <li>
-            <strong>Tracked methods</strong>
+            <strong>已跟踪方法数</strong>
             <span>{formatCount(results.summary.coverage.methodsTracked)}</span>
           </li>
           <li>
-            <strong>Average line coverage</strong>
+            <strong>平均行覆盖率</strong>
             <span>{formatPercent(results.summary.coverage.averageLineCoverage)}</span>
           </li>
           <li>
-            <strong>Average branch coverage</strong>
+            <strong>平均分支覆盖率</strong>
             <span>{formatPercent(results.summary.coverage.averageBranchCoverage)}</span>
           </li>
           <li>
-            <strong>Final state source</strong>
-            <span>{results.summary.sources.finalState ? 'Available' : 'Missing'}</span>
+            <strong>最终状态来源</strong>
+            <span>{results.summary.sources.finalState ? '可用' : '缺失'}</span>
           </li>
           <li>
-            <strong>Run log source</strong>
-            <span>{results.summary.sources.runLog ? 'Available' : 'Missing'}</span>
+            <strong>运行日志来源</strong>
+            <span>{results.summary.sources.runLog ? '可用' : '缺失'}</span>
           </li>
         </ul>
       </section>
 
       <section className="run-card" aria-labelledby="results-artifacts">
-        <p className="eyebrow">Artifacts</p>
-        <h3 id="results-artifacts">Artifact Downloads</h3>
+        <p className="eyebrow">工件</p>
+        <h3 id="results-artifacts">工件下载</h3>
         <div className="artifact-grid">
-          <ArtifactCard title="Final State JSON" artifact={results.artifacts.finalState} />
-          <ArtifactCard title="Run Log" artifact={results.artifacts.runLog} />
+          <ArtifactCard title="最终状态 JSON" artifact={results.artifacts.finalState} />
+          <ArtifactCard title="运行日志" artifact={results.artifacts.runLog} />
         </div>
       </section>
 
-      <Link to={`/runs/${runId}`}>Back to run details</Link>
+      <Link to={`/runs/${runId}`}>返回运行详情</Link>
     </section>
   );
 }

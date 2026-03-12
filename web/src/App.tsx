@@ -10,10 +10,10 @@ export function App() {
       <header className="app-header">
         <div>
           <p className="eyebrow">COMET-L</p>
-          <h1>Web Console Scaffold</h1>
+          <h1>Web 控制台</h1>
         </div>
-        <nav className="app-nav" aria-label="Primary">
-          <Link to="/">Home</Link>
+        <nav className="app-nav" aria-label="主导航">
+          <Link to="/">首页</Link>
         </nav>
       </header>
 

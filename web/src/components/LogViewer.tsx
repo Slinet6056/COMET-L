@@ -21,10 +21,17 @@ function formatTaskLabel(taskId: string): string {
 
 function formatStatusLabel(value: string): string {
   if (value.length === 0) {
-    return 'Unknown';
+    return '未知';
   }
 
-  return value.charAt(0).toUpperCase() + value.slice(1);
+  const labels: Record<string, string> = {
+    pending: '等待中',
+    running: '运行中',
+    completed: '已完成',
+    failed: '失败',
+  };
+
+  return labels[value] ?? value;
 }
 
 function formatTimestamp(value: string): string {
@@ -50,7 +57,7 @@ function formatAxisTimestamp(value: number | null): string {
 
 function formatDuration(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
-    return 'live';
+    return '实时';
   }
 
   return `${value.toFixed(value >= 10 ? 0 : 1)}s`;
@@ -62,14 +69,14 @@ function formatStreamDuration(stream: RunLogStream, runStatus: string): string {
   }
 
   if (stream.endedAt || stream.completedAt || stream.failedAt) {
-    return 'ended';
+    return '已结束';
   }
 
   if ((runStatus === 'completed' || runStatus === 'failed') && stream.status !== 'pending') {
-    return 'ended';
+    return '已结束';
   }
 
-  return 'live';
+  return '实时';
 }
 
 function toMillis(value: string | null | undefined): number | null {
@@ -132,88 +139,88 @@ function getStreamStatusBucket(status: string, runStatus: string): number {
 
 function getStreamLogStateLabel(stream: RunLogStream, runStatus: string): string {
   if (stream.totalEntryCount > 0) {
-    return `${stream.totalEntryCount} ${stream.totalEntryCount === 1 ? 'entry' : 'entries'}`;
+    return `${stream.totalEntryCount} 条日志`;
   }
 
   if (stream.status === 'pending') {
-    return 'Waiting for start';
+    return '等待启动';
   }
 
   if (stream.status === 'completed') {
-    return 'No logs captured';
+    return '未捕获到日志';
   }
 
   if (stream.status === 'failed') {
-    return 'Failed before logs';
+    return '日志前即失败';
   }
 
   if (runStatus === 'completed' || runStatus === 'failed') {
-    return 'Run finished without logs';
+    return '运行结束但无日志';
   }
 
-  return 'Awaiting first log';
+    return '等待首条日志';
 }
 
 function getEmptyStateCopy(stream: RunLogStream, runStatus: string): { title: string; detail: string } {
   if (stream.taskId === 'main') {
     if (stream.totalEntryCount > 0) {
       return {
-        title: 'No buffered log lines available.',
-        detail: 'This stream reported activity, but the current buffer is empty.',
+        title: '当前没有可用的缓冲日志行。',
+        detail: '该流报告过活动，但当前缓冲区为空。',
       };
     }
 
     if (runStatus === 'completed' || runStatus === 'failed') {
       return {
-        title: 'No coordinator logs were captured.',
-        detail: 'The run finished before the coordinator stream produced buffered log output.',
-      };
+          title: '未捕获到主协调器日志。',
+          detail: '运行结束时，主协调器流尚未产生可缓冲的日志输出。',
+        };
     }
 
     return {
-      title: 'No coordinator logs yet.',
-      detail: 'The coordinator stream has not emitted any buffered log output yet.',
-    };
+        title: '主协调器暂未输出日志。',
+        detail: '主协调器流当前还没有输出任何可缓冲的日志内容。',
+      };
   }
 
   if (stream.totalEntryCount > 0) {
     return {
-      title: 'No buffered worker log lines available.',
-      detail: `Worker ${stream.taskId} reported activity, but the current buffer is empty.`,
+        title: '当前没有可用的工作线程缓冲日志行。',
+        detail: `工作线程 ${stream.taskId} 报告过活动，但当前缓冲区为空。`,
     };
   }
 
   if (stream.status === 'pending') {
     return {
-      title: 'Worker has not started logging.',
-      detail: `Worker ${stream.taskId} has not started yet, so there is no buffered output to show.`,
+        title: '工作线程尚未开始记录日志。',
+        detail: `工作线程 ${stream.taskId} 尚未启动，因此没有可显示的缓冲输出。`,
     };
   }
 
   if (stream.status === 'completed') {
     return {
-      title: 'Worker completed without buffered logs.',
-      detail: `Worker ${stream.taskId} finished its work without emitting buffered log output.`,
+        title: '工作线程已完成，但没有缓冲日志。',
+        detail: `工作线程 ${stream.taskId} 已完成任务，但未输出可缓冲的日志内容。`,
     };
   }
 
   if (stream.status === 'failed') {
     return {
-      title: 'Worker failed before logs were captured.',
-      detail: `Worker ${stream.taskId} stopped before any buffered log output was recorded.`,
+        title: '工作线程在捕获日志前失败。',
+        detail: `工作线程 ${stream.taskId} 在记录任何缓冲日志输出前就已停止。`,
     };
   }
 
   if (runStatus === 'completed' || runStatus === 'failed') {
     return {
-      title: 'Run finished before worker logs were captured.',
-      detail: `Worker ${stream.taskId} did not leave buffered log output before the run finished.`,
+        title: '运行结束时尚未捕获到工作线程日志。',
+        detail: `在运行结束前，工作线程 ${stream.taskId} 没有留下可缓冲的日志输出。`,
     };
   }
 
   return {
-    title: 'Worker is waiting to emit logs.',
-    detail: `Worker ${stream.taskId} is active, but it has not emitted buffered log output yet.`,
+      title: '工作线程正在等待输出日志。',
+      detail: `工作线程 ${stream.taskId} 当前处于活动状态，但尚未输出可缓冲的日志内容。`,
   };
 }
 
@@ -262,7 +269,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
           return;
         }
 
-        setSummaryError(loadError instanceof Error ? loadError.message : 'Unable to load run logs.');
+        setSummaryError(loadError instanceof Error ? loadError.message : '无法加载运行日志。');
       } finally {
         if (active && showLoading) {
           setIsSummaryLoading(false);
@@ -378,7 +385,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
               error:
                 loadError instanceof Error
                   ? loadError.message
-                  : 'Unable to load log stream details.',
+                  : '无法加载日志流详情。',
             };
           }
         }),
@@ -411,7 +418,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
       setErrorByTaskId((current) => {
         const next = { ...current };
         responses.forEach((result) => {
-          next[result.taskId] = 'error' in result ? result.error ?? 'Unable to load log stream details.' : null;
+            next[result.taskId] = 'error' in result ? result.error ?? '无法加载日志流详情。' : null;
         });
         return next;
       });
@@ -462,16 +469,16 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
     <section className="run-card" aria-labelledby="run-logs-panel">
       <div className="run-card__header run-card__header--compact">
         <div>
-          <p className="eyebrow">Logs</p>
-          <h3 id="run-logs-panel">Log Timeline</h3>
+          <p className="eyebrow">日志</p>
+          <h3 id="run-logs-panel">日志时间线</h3>
         </div>
       </div>
 
       <p className="muted-copy run-log-viewer__hint">
-        Expand any stream row to inspect its buffered log output.
+        展开任意流行即可查看其缓冲日志输出。
       </p>
 
-      {isSummaryLoading ? <p className="muted-copy">Loading log streams...</p> : null}
+      {isSummaryLoading ? <p className="muted-copy">正在加载日志流...</p> : null}
       {!isSummaryLoading && summaryError ? <p role="alert">{summaryError}</p> : null}
 
       {!isSummaryLoading && !summaryError ? (
@@ -521,7 +528,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                         <span className="run-log-row__stats">
                           <span>{getStreamLogStateLabel(displayStream, runStatus)}</span>
                           <span>{formatStreamDuration(displayStream, runStatus)}</span>
-                          <span>{displayStream.taskId === 'main' ? 'coordinator' : 'worker'}</span>
+                          <span>{displayStream.taskId === 'main' ? '主协调器' : '工作线程'}</span>
                         </span>
                       </span>
 
@@ -533,16 +540,16 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                             style={{ left: `${offset}%`, width: `${Math.min(width, 100 - offset)}%` }}
                           />
                         ) : (
-                          <span className="run-log-row__idle">No timing yet</span>
+                          <span className="run-log-row__idle">暂无时间数据</span>
                         )}
                       </span>
 
-                      <span className="run-log-row__toggle">{isExpanded ? 'Hide logs' : 'Show logs'}</span>
+                      <span className="run-log-row__toggle">{isExpanded ? '收起日志' : '展开日志'}</span>
                     </button>
 
                     {isExpanded ? (
-                      <section id={panelId} className="run-log-row__panel" aria-label={`Logs for ${displayStream.taskId}`}>
-                        {isEntriesLoading ? <p className="muted-copy">Loading log entries...</p> : null}
+                      <section id={panelId} className="run-log-row__panel" aria-label={`${displayStream.taskId} 的日志`}>
+                        {isEntriesLoading ? <p className="muted-copy">正在加载日志条目...</p> : null}
                         {!isEntriesLoading && entryError ? <p role="alert">{entryError}</p> : null}
                         {!isEntriesLoading && !entryError ? (
                           entries.length > 0 ? (
@@ -553,7 +560,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
                               className="run-log-terminal"
                               role="log"
                               aria-live="polite"
-                              aria-label={`Log entries for ${displayStream.taskId}`}
+                              aria-label={`${displayStream.taskId} 的日志条目`}
                             >
                               {entries.map((entry) => (
                                 <div key={`${entry.taskId}-${entry.sequence}`} className="run-log-line">

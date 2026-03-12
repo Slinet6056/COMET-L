@@ -108,7 +108,7 @@ export function HomePage() {
         setPageError(
           error instanceof Error
             ? error.message
-            : 'Unable to load default configuration.',
+            : '无法加载默认配置。',
         );
       } finally {
         if (active) {
@@ -139,13 +139,13 @@ export function HomePage() {
     try {
       const payload = await parseConfigFile(file);
       setConfig(payload.config);
-      setUploadNotice(`${file.name} parsed and loaded into the form.`);
+      setUploadNotice(`${file.name} 已解析并回填到表单中。`);
     } catch (error) {
       if (error instanceof ApiError) {
         setFieldErrors(buildFieldErrors(error));
         setPageError(error.message);
       } else {
-        setPageError('Unable to parse the uploaded configuration file.');
+        setPageError('无法解析上传的配置文件。');
       }
     } finally {
       event.target.value = '';
@@ -183,7 +183,7 @@ export function HomePage() {
         setFieldErrors(buildFieldErrors(error));
         setPageError(error.message);
       } else {
-        setPageError('Unable to create a run.');
+        setPageError('无法创建运行。');
       }
     } finally {
       setIsSubmitting(false);
@@ -193,9 +193,9 @@ export function HomePage() {
   if (isLoadingDefaults) {
     return (
       <section className="panel">
-        <p className="eyebrow">Configuration</p>
-        <h2>Run Configuration Home</h2>
-        <p>Loading default settings from the backend...</p>
+        <p className="eyebrow">配置</p>
+        <h2>运行配置首页</h2>
+        <p>正在从后端加载默认设置...</p>
       </section>
     );
   }
@@ -203,9 +203,9 @@ export function HomePage() {
   if (config === null) {
     return (
       <section className="panel">
-        <p className="eyebrow">Configuration</p>
-        <h2>Run Configuration Home</h2>
-        <p role="alert">{pageError ?? 'Configuration defaults are unavailable.'}</p>
+        <p className="eyebrow">配置</p>
+        <h2>运行配置首页</h2>
+        <p role="alert">{pageError ?? '默认配置当前不可用。'}</p>
       </section>
     );
   }
@@ -214,24 +214,24 @@ export function HomePage() {
     <section className="panel config-page">
       <div className="config-hero">
         <div>
-          <p className="eyebrow">Configuration</p>
-          <h2>Run Configuration Home</h2>
+          <p className="eyebrow">配置</p>
+          <h2>运行配置首页</h2>
           <p>
-            Upload a YAML config for backend-normalized backfill, tune grouped
-            settings, then start a run with a local Maven project path.
+            上传 YAML 配置后，后端会进行规范化并回填表单。你可以继续调整分组设置，
+            然后使用本地 Maven 项目路径启动一次运行。
           </p>
         </div>
 
         <label className="upload-card" htmlFor="config-upload">
-          <span className="upload-card__title">Upload YAML</span>
+          <span className="upload-card__title">上传 YAML</span>
           <span className="upload-card__body">
-            Use <code>/api/config/parse</code> to normalize and refill the form.
+            使用 <code>/api/config/parse</code> 规范化配置并回填表单。
           </span>
           <input
             id="config-upload"
             name="config-upload"
             type="file"
-            aria-label="Upload YAML"
+            aria-label="上传 YAML"
             accept=".yaml,.yml,application/x-yaml,text/yaml,text/x-yaml"
             onChange={handleConfigUpload}
           />
@@ -250,20 +250,20 @@ export function HomePage() {
 
       <div className="panel project-panel">
         <div>
-          <p className="eyebrow">Project</p>
-          <h3>Target project path</h3>
-          <p>Point COMET-L at a local Maven project directory containing `pom.xml`.</p>
+          <p className="eyebrow">项目</p>
+          <h3>目标项目路径</h3>
+          <p>将 COMET-L 指向包含 `pom.xml` 的本地 Maven 项目目录。</p>
         </div>
 
         <label className="field" htmlFor="project-path">
-          <span className="field__label">Project path</span>
+          <span className="field__label">项目路径</span>
           <input
             id="project-path"
             name="projectPath"
             type="text"
-            aria-label="Project path"
+            aria-label="项目路径"
             value={projectPath}
-            placeholder="/path/to/project or examples/calculator-demo"
+            placeholder="/path/to/project 或 examples/calculator-demo"
             onChange={(event) => {
               setProjectPath(event.target.value);
               setFieldErrors((current) => {
@@ -273,7 +273,7 @@ export function HomePage() {
               });
             }}
           />
-          <span className="field__hint">Accepted values resolve on the backend host.</span>
+          <span className="field__hint">接受的路径会在后端所在主机上解析。</span>
           {fieldErrors.projectPath ? (
             <span className="field__error" role="alert">
               {fieldErrors.projectPath}
@@ -282,12 +282,12 @@ export function HomePage() {
         </label>
 
         <label className="field" htmlFor="bug-reports-dir">
-          <span className="field__label">Bug reports directory</span>
+          <span className="field__label">缺陷报告目录</span>
           <input
             id="bug-reports-dir"
             name="bugReportsDir"
             type="text"
-            aria-label="Bug reports directory"
+            aria-label="缺陷报告目录"
             value={bugReportsDir}
             placeholder="examples/calculator-demo/bug-reports"
             onChange={(event) => {
@@ -300,7 +300,7 @@ export function HomePage() {
             }}
           />
           <span className="field__hint">
-            Optional directory of Markdown bug reports to index for the run knowledge base.
+            可选的 Markdown 缺陷报告目录，会为本次运行的知识库建立索引。
           </span>
           {fieldErrors.bugReportsDir ? (
             <span className="field__error" role="alert">
@@ -310,7 +310,7 @@ export function HomePage() {
         </label>
 
         <div>
-          <p className="eyebrow">Examples</p>
+          <p className="eyebrow">示例</p>
           <div className="example-shortcuts">
             {EXAMPLE_PROJECTS.map((example) => (
               <button
@@ -330,7 +330,7 @@ export function HomePage() {
         {groupedSections.map((section) => (
           <section key={section.key} className="panel config-section">
             <div className="section-heading">
-              <p className="eyebrow">Section</p>
+              <p className="eyebrow">分组</p>
               <h3>{section.title}</h3>
               <p>{section.description}</p>
             </div>
@@ -357,7 +357,7 @@ export function HomePage() {
                             handleFieldChange(field, event.target.value, event.target.checked)
                           }
                         />
-                        <span>Enabled</span>
+                        <span>启用</span>
                       </span>
                     ) : field.kind === 'nullable-boolean' ? (
                       <select
@@ -365,9 +365,9 @@ export function HomePage() {
                         value={value === null || value === undefined ? '' : String(value)}
                         onChange={(event) => handleFieldChange(field, event.target.value, false)}
                       >
-                        <option value="">Inherit default</option>
-                        <option value="true">True</option>
-                        <option value="false">False</option>
+                         <option value="">继承默认值</option>
+                         <option value="true">是</option>
+                         <option value="false">否</option>
                       </select>
                     ) : (
                       <input
@@ -393,7 +393,7 @@ export function HomePage() {
 
       <div className="action-row">
         <button type="button" className="primary-button" onClick={handleSubmit} disabled={isSubmitting}>
-          {isSubmitting ? 'Starting run...' : 'Start run'}
+          {isSubmitting ? '正在启动运行...' : '启动运行'}
         </button>
       </div>
     </section>

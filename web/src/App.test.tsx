@@ -229,7 +229,7 @@ describe('App routing scaffold', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByLabelText('Project path')).toBeInTheDocument();
+    expect(await screen.findByLabelText('项目路径')).toBeInTheDocument();
   });
 
   it('renders the run route', async () => {
@@ -239,7 +239,7 @@ describe('App routing scaffold', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Decision Panel' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
     expect(screen.getByText('run-42')).toBeInTheDocument();
   });
 
@@ -250,8 +250,8 @@ describe('App routing scaffold', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText(/Terminal summary for/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Download final_state.json' })).toHaveAttribute(
+    expect(await screen.findByText(/终态摘要/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '下载 final_state.json' })).toHaveAttribute(
       'href',
       '/api/runs/run-42/artifacts/final-state',
     );

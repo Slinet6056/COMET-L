@@ -125,21 +125,21 @@ describe('Run results page', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Final Statistics' })).toBeInTheDocument();
-    expect(screen.getByText('Status: completed')).toBeInTheDocument();
-    expect(screen.getByText('Mutation score')).toBeInTheDocument();
-    expect(screen.getByText('Line coverage')).toBeInTheDocument();
-    expectMetricValue('Mutation score', '50.0%');
-    expectMetricValue('Total mutants', '2');
-    expect(screen.getByRole('link', { name: 'Download final_state.json' })).toHaveAttribute(
+    expect(await screen.findByRole('heading', { name: '最终统计' })).toBeInTheDocument();
+    expect(screen.getByText('状态：已完成')).toBeInTheDocument();
+    expect(screen.getByText('变异分数')).toBeInTheDocument();
+    expect(screen.getByText('行覆盖率')).toBeInTheDocument();
+    expectMetricValue('变异分数', '50.0%');
+    expectMetricValue('变异体总数', '2');
+    expect(screen.getByRole('link', { name: '下载 final_state.json' })).toHaveAttribute(
       'href',
       '/api/runs/run-42/artifacts/final-state',
     );
-    expect(screen.getByRole('link', { name: 'Download run.log' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '下载 run.log' })).toHaveAttribute(
       'href',
       '/api/runs/run-42/artifacts/run-log',
     );
-    expect(screen.getByText('Standard single-target evolution')).toBeInTheDocument();
+    expect(screen.getByText('标准单目标演化')).toBeInTheDocument();
   });
 
   it('handles failed terminal state and missing artifacts gracefully', async () => {
@@ -185,10 +185,10 @@ describe('Run results page', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText(/ended in failure/i)).toBeInTheDocument();
-    expect(screen.getByText('Parallel batch evolution')).toBeInTheDocument();
-    expect(screen.getByText('This artifact was not generated for the run.')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Download final_state.json' })).not.toBeInTheDocument();
+    expect(await screen.findByText(/以失败结束/)).toBeInTheDocument();
+    expect(screen.getByText('并行批次演化')).toBeInTheDocument();
+    expect(screen.getByText('本次运行未生成该工件。')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '下载 final_state.json' })).not.toBeInTheDocument();
   });
 
   it('prefers global and database-backed mutant totals when local final metrics are zero', async () => {
@@ -257,8 +257,8 @@ describe('Run results page', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Final Statistics' })).toBeInTheDocument();
-    expectMetricValue('Mutation score', '80.0%');
-    expectMetricValue('Total mutants', '5');
+    expect(await screen.findByRole('heading', { name: '最终统计' })).toBeInTheDocument();
+    expectMetricValue('变异分数', '80.0%');
+    expectMetricValue('变异体总数', '5');
   });
 });

@@ -108,13 +108,13 @@ describe('Run page standard mode', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Decision Panel' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
     expect(screen.getByText('Prioritize Calculator.add because recent mutants survived.')).toBeInTheDocument();
     expect(screen.getByText('Calculator.add')).toBeInTheDocument();
-    expect(screen.getByText('Phase: Running')).toBeInTheDocument();
+    expect(screen.getByText('阶段：运行中')).toBeInTheDocument();
     expect(screen.getByText('45.0%')).toBeInTheDocument();
-    expect(screen.getByText('Recorded improvements')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Core Metrics' })).toBeInTheDocument();
+    expect(screen.getByText('记录的改进')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '核心指标' })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(MockEventSource.instances).toHaveLength(1);
@@ -128,7 +128,7 @@ describe('Run page standard mode', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole('heading', { name: 'Decision Panel' });
+    await screen.findByRole('heading', { name: '决策面板' });
     await waitFor(() => {
       expect(MockEventSource.instances).toHaveLength(1);
     });
@@ -168,7 +168,7 @@ describe('Run page standard mode', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Calculator.divide')).toBeInTheDocument();
     expect(screen.getByText('60.0%')).toBeInTheDocument();
-    expect(screen.getByText('Phase updated')).toBeInTheDocument();
+    expect(screen.getByText('阶段已更新')).toBeInTheDocument();
   });
 
   it('shows the standard decision panel without parallel worker content', async () => {
@@ -178,11 +178,11 @@ describe('Run page standard mode', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Decision Panel' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Core Metrics' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Action History Summary' })).toBeInTheDocument();
-    expect(screen.queryByText('Current batch')).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Worker Output' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '核心指标' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '操作历史摘要' })).toBeInTheDocument();
+    expect(screen.queryByText('当前批次')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '工作线程输出' })).not.toBeInTheDocument();
   });
 
   it('falls back to snapshot polling when live events are unavailable', async () => {
@@ -213,7 +213,7 @@ describe('Run page standard mode', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Phase: Running')).toBeInTheDocument();
+    expect(await screen.findByText('阶段：运行中')).toBeInTheDocument();
 
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 1600));
@@ -221,7 +221,7 @@ describe('Run page standard mode', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Collect preprocessing artifacts before resuming target selection.')).toBeInTheDocument();
-      expect(screen.getByText('Phase: Preprocessing')).toBeInTheDocument();
+      expect(screen.getByText('阶段：预处理中')).toBeInTheDocument();
     });
   });
 });

@@ -119,10 +119,10 @@ describe('Config page', () => {
       </MemoryRouter>,
     );
 
-    const apiKeyInput = await screen.findByLabelText('API key');
+    const apiKeyInput = await screen.findByLabelText('API 密钥');
     expect(apiKeyInput).toHaveValue('default-key');
 
-    const uploadInput = screen.getByLabelText('Upload YAML');
+    const uploadInput = screen.getByLabelText('上传 YAML');
     const file = new File(['llm:\n  api_key: yaml-key\n'], 'config.yaml', {
       type: 'application/x-yaml',
     });
@@ -130,11 +130,11 @@ describe('Config page', () => {
     await user.upload(uploadInput, file);
 
     await waitFor(() => {
-      expect(screen.getByLabelText('API key')).toHaveValue('yaml-key');
+      expect(screen.getByLabelText('API 密钥')).toHaveValue('yaml-key');
     });
-    expect(screen.getByLabelText('Model')).toHaveValue('gpt-4o-mini');
-    expect(screen.getByLabelText('Max iterations')).toHaveValue(7);
-    expect(screen.getByText('config.yaml parsed and loaded into the form.')).toBeInTheDocument();
+    expect(screen.getByLabelText('模型')).toHaveValue('gpt-4o-mini');
+    expect(screen.getByLabelText('最大迭代次数')).toHaveValue(7);
+    expect(screen.getByText('config.yaml 已解析并回填到表单中。')).toBeInTheDocument();
   });
 
   it('shows backend project path validation errors', async () => {
@@ -162,12 +162,12 @@ describe('Config page', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('Project path');
-    await user.type(screen.getByLabelText('Project path'), '/tmp/missing-project');
-    await user.click(screen.getByRole('button', { name: 'Start run' }));
+    await screen.findByLabelText('项目路径');
+    await user.type(screen.getByLabelText('项目路径'), '/tmp/missing-project');
+    await user.click(screen.getByRole('button', { name: '启动运行' }));
 
     expect(await screen.findByText('Project path does not exist.')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Run Configuration Home' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '运行配置首页' })).toBeInTheDocument();
   });
 
   it('submits config and navigates to the created run page', async () => {
@@ -215,10 +215,10 @@ describe('Config page', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('Project path');
-    await user.click(screen.getByRole('button', { name: 'Calculator demo' }));
-    await user.type(screen.getByLabelText('Bug reports directory'), 'examples/calculator-demo/bug-reports');
-    await user.click(screen.getByRole('button', { name: 'Start run' }));
+    await screen.findByLabelText('项目路径');
+    await user.click(screen.getByRole('button', { name: '计算器示例' }));
+    await user.type(screen.getByLabelText('缺陷报告目录'), 'examples/calculator-demo/bug-reports');
+    await user.click(screen.getByRole('button', { name: '启动运行' }));
 
     await waitFor(() => {
       expect(createRunSpy).toHaveBeenCalledWith(
@@ -230,7 +230,7 @@ describe('Config page', () => {
       expect(fetchRunSnapshotSpy).toHaveBeenCalledWith('run-123');
     });
 
-    expect(await screen.findByRole('heading', { name: 'Decision Panel' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
     expect(screen.getByText('run-123')).toBeInTheDocument();
   });
 });

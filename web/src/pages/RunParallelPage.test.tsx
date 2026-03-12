@@ -199,20 +199,20 @@ describe('Run page parallel mode', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Parallel Run Status' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Core Metrics' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Worker Output' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Log Timeline' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Batch Summary' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Coverage' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '并行运行状态' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '核心指标' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '工作线程输出' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '日志时间线' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '批次摘要' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '覆盖率' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Runtime' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Parallel Stats' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Active Targets' })).not.toBeInTheDocument();
-    expect(screen.getByText('Current batch: 2')).toBeInTheDocument();
+    expect(screen.getByText('当前批次：2')).toBeInTheDocument();
     expect(screen.getByTitle('Calculator.add')).toBeInTheDocument();
     expect(screen.getByText('Calculator.divide')).toBeInTheDocument();
-    expect(screen.getByText('Total workers spawned')).toBeInTheDocument();
-    expect(screen.getByText('Coverage 42.0%')).toBeInTheDocument();
+    expect(screen.getByText('累计工作线程数')).toBeInTheDocument();
+    expect(screen.getByText('覆盖率 42.0%')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(api.subscribeToRunEvents).toHaveBeenCalledWith(
@@ -229,7 +229,7 @@ describe('Run page parallel mode', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole('heading', { name: 'Worker Output' });
+    await screen.findByRole('heading', { name: '工作线程输出' });
 
     await act(async () => {
       onEvent?.({
@@ -265,9 +265,9 @@ describe('Run page parallel mode', () => {
       });
     });
 
-    expect(await screen.findByText('Current batch: 3')).toBeInTheDocument();
+    expect(await screen.findByText('当前批次：3')).toBeInTheDocument();
     expect(screen.getAllByTitle('Calculator.multiply')).toHaveLength(2);
-    expect(screen.getByText('Coverage 50.0%')).toBeInTheDocument();
+    expect(screen.getByText('覆盖率 50.0%')).toBeInTheDocument();
     expect(screen.getByText('Timed out while evaluating mutants.')).toBeInTheDocument();
   });
 
@@ -318,9 +318,9 @@ describe('Run page parallel mode', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Parallel Preprocessing' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Batch Summary' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Worker Output' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Log Timeline' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '并行预处理' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '批次摘要' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '工作线程输出' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '日志时间线' })).toBeInTheDocument();
   });
 });

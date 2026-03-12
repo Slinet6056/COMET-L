@@ -127,7 +127,7 @@ describe('Log viewer', () => {
 
     render(<LogViewer runId="run-logs-1" runStatus="running" />);
 
-    expect(await screen.findByText('Expand any stream row to inspect its buffered log output.')).toBeInTheDocument();
+    expect(await screen.findByText('展开任意流行即可查看其缓冲日志输出。')).toBeInTheDocument();
     expect(screen.queryByText('main log line')).not.toBeInTheDocument();
     expect(screen.queryByText(/^Selected:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Status:/)).not.toBeInTheDocument();
@@ -148,7 +148,7 @@ describe('Log viewer', () => {
 
     expect(await screen.findByText('main log line')).toBeInTheDocument();
     expect(mainButton).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('log', { name: 'Log entries for main' })).toBeInTheDocument();
+    expect(screen.getByRole('log', { name: 'main 的日志条目' })).toBeInTheDocument();
 
     await user.click(workerButton);
 
@@ -224,16 +224,16 @@ describe('Log viewer', () => {
 
     const mainButton = await screen.findByRole('button', { name: /main/i });
     expect(mainButton).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getByText('No logs captured')).toBeInTheDocument();
+    expect(screen.getByText('未捕获到日志')).toBeInTheDocument();
 
     await user.click(mainButton);
 
     await waitFor(() => {
-      expect(screen.queryByText('Loading log entries...')).not.toBeInTheDocument();
+      expect(screen.queryByText('正在加载日志条目...')).not.toBeInTheDocument();
     });
-    expect(screen.getByText('No coordinator logs were captured.')).toBeInTheDocument();
+    expect(screen.getByText('未捕获到主协调器日志。')).toBeInTheDocument();
     expect(
-      screen.getByText('The run finished before the coordinator stream produced buffered log output.'),
+      screen.getByText('运行结束时，主协调器流尚未产生可缓冲的日志输出。'),
     ).toBeInTheDocument();
   });
 
@@ -467,13 +467,13 @@ describe('Log viewer', () => {
     render(<LogViewer runId="run-logs-4" runStatus="failed" />);
 
     const workerButton = await screen.findByRole('button', { name: /task-4/i });
-    expect(workerButton).toHaveTextContent('Failed');
-    expect(workerButton).toHaveTextContent('Failed before logs');
-    expect(workerButton).toHaveTextContent('ended');
+    expect(workerButton).toHaveTextContent('失败');
+    expect(workerButton).toHaveTextContent('日志前即失败');
+    expect(workerButton).toHaveTextContent('已结束');
 
     await user.click(workerButton);
 
-    expect(await screen.findByText('Worker failed before logs were captured.')).toBeInTheDocument();
+    expect(await screen.findByText('工作线程在捕获日志前失败。')).toBeInTheDocument();
   });
 
   it('keeps active streams ahead of finished streams during live runs', async () => {
