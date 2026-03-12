@@ -172,6 +172,70 @@ describe('Run page standard mode', () => {
     expect(screen.getByText('阶段已更新')).toBeInTheDocument();
   });
 
+  it('keeps terminal runs from being reported as realtime connection errors', async () => {
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { name: '决策面板' });
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    const stream = MockEventSource.instances[0];
+    await act(async () => {
+      stream.emit('run.completed', {
+        type: 'run.completed',
+        sequence: 2,
+        status: 'completed',
+        phase: { key: 'completed', label: 'Completed' },
+      });
+    });
+
+    expect(screen.getByText('状态：已完成')).toBeInTheDocument();
+    expect(screen.getByText('实时连接：已结束')).toBeInTheDocument();
+
+    await act(async () => {
+      stream.onerror?.();
+    });
+
+    expect(screen.getByText('实时连接：已结束')).toBeInTheDocument();
+    expect(screen.queryByText('实时连接：异常')).not.toBeInTheDocument();
+  });
+
+  it('marks initially completed runs as having ended realtime updates', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(
+          buildSnapshot({
+            status: 'completed',
+            phase: {
+              key: 'completed',
+              label: 'Completed',
+              createdAt: '2026-03-10T10:00:00Z',
+              startedAt: '2026-03-10T10:00:05Z',
+              completedAt: '2026-03-10T10:05:00Z',
+              failedAt: null,
+            },
+          }),
+        ),
+      ),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('状态：已完成')).toBeInTheDocument();
+    expect(screen.getByText('实时连接：已结束')).toBeInTheDocument();
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
   it('shows the standard decision panel without parallel worker content', async () => {
     render(
       <MemoryRouter initialEntries={['/runs/run-42']}>

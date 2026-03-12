@@ -13,7 +13,7 @@ import {
 } from '../lib/api';
 import { LogViewer } from '../components/LogViewer';
 
-type ConnectionState = 'idle' | 'connecting' | 'live' | 'unavailable' | 'error';
+type ConnectionState = 'idle' | 'connecting' | 'live' | 'ended' | 'unavailable' | 'error';
 const SNAPSHOT_POLL_MS = 1500;
 
 type ActionEntry = {
@@ -43,9 +43,14 @@ const CONNECTION_LABELS: Record<ConnectionState, string> = {
   idle: '空闲',
   connecting: '连接中',
   live: '实时同步中',
+  ended: '已结束',
   unavailable: '不可用',
   error: '异常',
 };
+
+function isTerminalRunStatus(status: string | null | undefined): boolean {
+  return status === 'completed' || status === 'failed';
+}
 
 const KEY_LABELS: Record<string, string> = {
   mutation_score_delta: '变异分数提升',
@@ -731,6 +736,11 @@ export function RunPage() {
         setSnapshot(initialSnapshot);
         setIsLoading(false);
 
+        if (isTerminalRunStatus(initialSnapshot.status)) {
+          setConnectionState('ended');
+          return;
+        }
+
         if (typeof EventSource === 'undefined') {
           setConnectionState('unavailable');
           return;
@@ -747,10 +757,16 @@ export function RunPage() {
 
               setSnapshot((current) => (current ? applyRunEvent(current, event) : current));
               setActionHistory((current) => [buildActionEntry(event), ...current].slice(0, 6));
+
+              if (isTerminalRunStatus(event.status) || event.type === 'run.completed' || event.type === 'run.failed') {
+                setConnectionState('ended');
+                return;
+              }
+
               setConnectionState('live');
             },
             onError: () => {
-              if (active) {
+              if (active && !isTerminalRunStatus(snapshotRef.current?.status)) {
                 setConnectionState('error');
               }
             },
@@ -780,8 +796,7 @@ export function RunPage() {
   useEffect(() => {
     if (
       snapshot === null ||
-      snapshotStatus === 'completed' ||
-      snapshotStatus === 'failed' ||
+      isTerminalRunStatus(snapshotStatus) ||
       (connectionState !== 'unavailable' && connectionState !== 'error')
     ) {
       return;
