@@ -46,7 +46,7 @@ class ConfigApiTests(unittest.TestCase):
         payload = response.json()
         self.assertIn("config", payload)
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4")
-        self.assertEqual(payload["config"]["paths"]["state"], "./state")
+        self.assertNotIn("paths", payload["config"])
 
     def test_parse_valid_yaml_returns_normalized_config(self) -> None:
         client = TestClient(create_app(run_service=RunLifecycleService()))
@@ -79,7 +79,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4o-mini")
         self.assertEqual(payload["config"]["execution"]["timeout"], 123)
         self.assertTrue(payload["config"]["agent"]["parallel"]["enabled"])
-        self.assertEqual(payload["config"]["paths"]["output"], "./output")
+        self.assertNotIn("paths", payload["config"])
 
     def test_parse_invalid_yaml_returns_field_errors(self) -> None:
         client = TestClient(create_app(run_service=RunLifecycleService()))
@@ -105,6 +105,29 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(error_map[("llm", "api_key")], "missing")
         self.assertEqual(error_map[("llm", "temperature")], "less_than_equal")
         self.assertEqual(error_map[("execution", "timeout")], "greater_than_equal")
+
+    def test_parse_yaml_rejects_removed_paths_field(self) -> None:
+        client = TestClient(create_app(run_service=RunLifecycleService()))
+
+        response = client.post(
+            "/api/config/parse",
+            files={
+                "file": (
+                    "config.yaml",
+                    BytesIO(
+                        ("llm:\n  api_key: test-key\npaths:\n  output: ./custom-output\n").encode(
+                            "utf-8"
+                        )
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "invalid_config")
+        self.assertTrue(any(item["path"] == ["paths"] for item in payload["error"]["fieldErrors"]))
 
 
 class SnapshotTests(unittest.TestCase):
@@ -479,7 +502,7 @@ class RunApiTests(unittest.TestCase):
             state.mutation_score = 5 / 6
             state.line_coverage = 0.8
             state.branch_coverage = 0.6
-            output_path = Path(config.paths.output)
+            output_path = config.resolve_output_root()
             output_path.mkdir(parents=True, exist_ok=True)
             (output_path / "final_state.json").write_text(
                 json.dumps(state.to_dict(), ensure_ascii=False, indent=2),

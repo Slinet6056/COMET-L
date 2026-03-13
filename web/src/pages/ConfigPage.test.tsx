@@ -28,11 +28,6 @@ const defaultConfig = {
     target_java_home: null,
     maven_home: null,
   },
-  paths: {
-    state: './state',
-    output: './output',
-    sandbox: './sandbox',
-  },
   evolution: {
     max_iterations: 10,
     min_improvement_threshold: 0.01,

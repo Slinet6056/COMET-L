@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import main
-from comet.config.settings import LLMConfig, LoggingConfig, PathsConfig, Settings
+from comet.config.settings import LLMConfig, LoggingConfig, Settings
 from comet.web.run_service import (
     ActiveRunConflictError,
     RunLifecycleService,
@@ -32,11 +32,6 @@ class RunServiceIsolationTests(unittest.TestCase):
             settings = Settings(
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
-                paths=PathsConfig(
-                    state=str(root / "state"),
-                    output=str(root / "output"),
-                    sandbox=str(root / "sandbox"),
-                ),
             )
             captured: dict[str, object] = {}
             events: list[dict[str, object]] = []
@@ -65,7 +60,6 @@ class RunServiceIsolationTests(unittest.TestCase):
                     project_path=str(project_path),
                     config_path="config.yaml",
                     log_file=str(scoped_log_path),
-                    path_overrides={"output": str(root / "run-output")},
                 ),
                 settings_loader=lambda _: settings,
                 system_initializer=fake_initialize,
@@ -83,7 +77,6 @@ class RunServiceIsolationTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(captured["config_log_file"], str(scoped_log_path))
             self.assertEqual(captured["project_path"], str(project_path))
-            self.assertEqual(settings.paths.output, str(root / "run-output"))
             self.assertEqual(len(managed_file_handlers), 1)
             self.assertEqual(Path(managed_file_handlers[0].baseFilename), scoped_log_path.resolve())
             self.assertTrue(scoped_log_path.exists())
@@ -103,11 +96,6 @@ class RunServiceIsolationTests(unittest.TestCase):
             settings = Settings(
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
-                paths=PathsConfig(
-                    state=str(root / "state"),
-                    output=str(root / "output"),
-                    sandbox=str(root / "sandbox"),
-                ),
             )
 
             def fake_initialize(
@@ -149,7 +137,6 @@ class RunServiceIsolationTests(unittest.TestCase):
             max_iterations=5,
             budget=12,
             resume=None,
-            output_dir="/tmp/output",
             debug=True,
             bug_reports_dir=None,
             parallel=False,
@@ -180,11 +167,6 @@ class RunLifecycleTests(unittest.TestCase):
             settings = Settings(
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
-                paths=PathsConfig(
-                    state=str(root / "state"),
-                    output=str(root / "output"),
-                    sandbox=str(root / "sandbox"),
-                ),
             )
 
             service = RunLifecycleService(workspace_root=root)
@@ -215,11 +197,9 @@ class RunLifecycleTests(unittest.TestCase):
             resolved_config_path = Path(session.paths["resolved_config"])
             self.assertTrue(resolved_config_path.exists())
             resolved_snapshot = json.loads(resolved_config_path.read_text(encoding="utf-8"))
-            self.assertEqual(resolved_snapshot["paths"]["state"], session.paths["state"])
-            self.assertEqual(resolved_snapshot["paths"]["output"], session.paths["output"])
-            self.assertEqual(resolved_snapshot["paths"]["sandbox"], session.paths["sandbox"])
             self.assertEqual(resolved_snapshot["logging"]["file"], session.paths["log"])
             self.assertNotIn("vector_db", resolved_snapshot["knowledge"])
+            self.assertNotIn("paths", resolved_snapshot)
 
     def test_second_active_run_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -231,11 +211,6 @@ class RunLifecycleTests(unittest.TestCase):
             settings = Settings(
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
-                paths=PathsConfig(
-                    state=str(root / "state"),
-                    output=str(root / "output"),
-                    sandbox=str(root / "sandbox"),
-                ),
             )
 
             service = RunLifecycleService(workspace_root=root)
@@ -250,6 +225,55 @@ class RunLifecycleTests(unittest.TestCase):
                     settings_loader=lambda _: settings,
                 )
 
+    def test_start_run_replays_scoped_runtime_roots_with_fresh_settings_loader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+            config_path = root / "config.yaml"
+            config_path.write_text("llm:\n  api_key: test-key\n", encoding="utf-8")
+
+            service = RunLifecycleService(workspace_root=root)
+            session = service.create_run(
+                RunRequest(project_path=str(project_path), config_path=str(config_path)),
+                settings_loader=Settings.from_yaml_or_default,
+            )
+
+            def fake_initialize(
+                config: Settings,
+                bug_reports_dir: str | None = None,
+                parallel_mode: bool = False,
+            ) -> dict[str, object]:
+                self.assertEqual(config.resolve_state_root(), Path(session.paths["state"]))
+                self.assertEqual(config.resolve_output_root(), Path(session.paths["output"]))
+                self.assertEqual(config.resolve_sandbox_root(), Path(session.paths["sandbox"]))
+                return {"config": config}
+
+            def fake_run(
+                project_path: str,
+                components: dict[str, object],
+                resume_state: str | None = None,
+            ) -> None:
+                del project_path, resume_state
+                config = components["config"]
+                assert isinstance(config, Settings)
+                output_path = config.resolve_output_root()
+                output_path.mkdir(parents=True, exist_ok=True)
+                (output_path / "final_state.json").write_text("{}", encoding="utf-8")
+
+            service.start_run(
+                session.run_id,
+                settings_loader=Settings.from_yaml_or_default,
+                system_initializer=fake_initialize,
+                evolution_runner=fake_run,
+            )
+            service._threads[session.run_id].join(timeout=5)
+
+            restored_final_state = Path(session.paths["final_state"])
+            self.assertTrue(restored_final_state.exists())
+            self.assertEqual(service.get_session(session.run_id).status, "completed")
+
     def test_persisted_sessions_are_restored_after_service_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -260,11 +284,6 @@ class RunLifecycleTests(unittest.TestCase):
             settings = Settings(
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
-                paths=PathsConfig(
-                    state=str(root / "state"),
-                    output=str(root / "output"),
-                    sandbox=str(root / "sandbox"),
-                ),
             )
 
             service = RunLifecycleService(workspace_root=root)
@@ -312,11 +331,6 @@ class RunLifecycleTests(unittest.TestCase):
             settings = Settings(
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
-                paths=PathsConfig(
-                    state=str(root / "state"),
-                    output=str(root / "output"),
-                    sandbox=str(root / "sandbox"),
-                ),
             )
 
             service = RunLifecycleService(workspace_root=root)
@@ -344,11 +358,6 @@ class RunLifecycleTests(unittest.TestCase):
             settings = Settings(
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
-                paths=PathsConfig(
-                    state=str(root / "state"),
-                    output=str(root / "output"),
-                    sandbox=str(root / "sandbox"),
-                ),
             )
 
             service = RunLifecycleService(workspace_root=root)

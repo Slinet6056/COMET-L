@@ -57,8 +57,6 @@ def parse_args():
 
     parser.add_argument("--resume", type=str, default=None, help="从保存的状态恢复（状态文件路径）")
 
-    parser.add_argument("--output-dir", type=str, default=None, help="输出目录（覆盖配置文件）")
-
     parser.add_argument("--debug", action="store_true", help="启用调试日志（DEBUG级别）")
 
     parser.add_argument(
@@ -208,7 +206,7 @@ def initialize_system(
     )
 
     # 初始化沙箱和执行器
-    sandbox_manager = SandboxManager(config.paths.sandbox)
+    sandbox_manager = SandboxManager(str(config.resolve_sandbox_root()))
     mutation_evaluator = MutationEvaluator(java_executor, sandbox_manager)
     metrics_collector = MetricsCollector()
 
@@ -548,8 +546,8 @@ def run_evolution(
         publish_runtime_snapshot()
 
         # 保存最终状态
-        state_file = f"{config.paths.output}/final_state.json"
-        planner.save_state(state_file)
+        state_file = config.resolve_output_root() / "final_state.json"
+        planner.save_state(str(state_file))
         logger.info(f"最终状态已保存: {state_file}")
 
         # 导出测试文件到原项目
@@ -560,8 +558,8 @@ def run_evolution(
 
     except KeyboardInterrupt:
         logger.info("\n用户中断，保存当前状态...")
-        state_file = f"{config.paths.output}/interrupted_state.json"
-        planner.save_state(state_file)
+        state_file = config.resolve_output_root() / "interrupted_state.json"
+        planner.save_state(str(state_file))
         logger.info(f"状态已保存: {state_file}")
         publish_runtime_snapshot(phase_key="failed", phase_label="Interrupted")
 

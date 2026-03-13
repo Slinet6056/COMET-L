@@ -19,11 +19,6 @@ execution:
   target_java_home: null
   maven_home: null # 留空使用系统默认
 
-paths:
-  state: "./state"
-  output: "./output"
-  sandbox: "./sandbox"
-
 evolution:
   max_iterations: 10
   min_improvement_threshold: 0.01 # 绝对增量阈值，0.01 表示提升 1 个百分点

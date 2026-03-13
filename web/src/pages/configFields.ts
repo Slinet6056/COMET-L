@@ -138,21 +138,6 @@ export const CONFIG_SECTIONS: ConfigSectionDefinition[] = [
     ],
   },
   {
-    key: 'paths',
-    title: '路径',
-    description: '状态、输出和沙箱目录。',
-    fields: [
-      { path: ['paths', 'state'], label: '状态目录', description: '运行状态目录。', kind: 'text' },
-      { path: ['paths', 'output'], label: '输出目录', description: '运行输出目录。', kind: 'text' },
-      {
-        path: ['paths', 'sandbox'],
-        label: '沙箱目录',
-        description: '沙箱工作目录。',
-        kind: 'text',
-      },
-    ],
-  },
-  {
     key: 'evolution',
     title: '演化',
     description: '迭代限制、停止规则和质量目标。',

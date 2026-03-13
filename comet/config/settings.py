@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
+STATE_ROOT = Path("./state")
+OUTPUT_ROOT = Path("./output")
+SANDBOX_ROOT = Path("./sandbox")
 
 
 class LLMConfig(BaseModel):
@@ -149,21 +153,6 @@ class ExecutionConfig(BaseModel):
         return self._resolve_bin_command(maven_home, "mvn")
 
 
-class PathsConfig(BaseModel):
-    """路径配置"""
-
-    state: str = Field(default="./state", description="状态目录")
-    output: str = Field(default="./output", description="输出目录")
-    sandbox: str = Field(default="./sandbox", description="沙箱目录")
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_legacy_cache_key(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "cache" in data:
-            raise ValueError("`paths.cache` 已移除，请改用 `paths.state`")
-        return data
-
-
 class EvolutionConfig(BaseModel):
     """进化配置"""
 
@@ -260,17 +249,21 @@ class AgentConfig(BaseModel):
 
 
 class Settings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     """系统配置"""
 
     llm: LLMConfig
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
-    paths: PathsConfig = Field(default_factory=PathsConfig)
     evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
     formatting: FormattingConfig = Field(default_factory=FormattingConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    _state_root: Path = PrivateAttr(default=STATE_ROOT)
+    _output_root: Path = PrivateAttr(default=OUTPUT_ROOT)
+    _sandbox_root: Path = PrivateAttr(default=SANDBOX_ROOT)
 
     @classmethod
     def from_yaml(cls, config_path: str) -> "Settings":
@@ -329,13 +322,26 @@ class Settings(BaseModel):
         )
 
     def ensure_directories(self) -> None:
-        """确保所有配置的目录存在"""
-        for path_name in ["state", "output", "sandbox"]:
-            path = Path(getattr(self.paths, path_name))
+        for path in (
+            self.resolve_state_root(),
+            self.resolve_output_root(),
+            self.resolve_sandbox_root(),
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
     def resolve_state_root(self) -> Path:
-        return Path(self.paths.state)
+        return self._state_root
+
+    def resolve_output_root(self) -> Path:
+        return self._output_root
+
+    def resolve_sandbox_root(self) -> Path:
+        return self._sandbox_root
+
+    def set_runtime_roots(self, *, state: Path, output: Path, sandbox: Path) -> None:
+        self._state_root = state
+        self._output_root = output
+        self._sandbox_root = sandbox
 
     def resolve_database_path(self) -> Path:
         return self.resolve_state_root() / "comet.db"

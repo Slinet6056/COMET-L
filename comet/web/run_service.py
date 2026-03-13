@@ -73,13 +73,12 @@ class RunRequest:
     max_iterations: Optional[int] = None
     budget: Optional[int] = None
     resume_state: Optional[str] = None
-    output_dir: Optional[str] = None
     debug: bool = False
     bug_reports_dir: Optional[str] = None
     parallel: bool = False
     parallel_targets: Optional[int] = None
     log_file: Optional[str] = None
-    path_overrides: dict[str, str] = field(default_factory=dict)
+    runtime_roots: dict[str, str] = field(default_factory=dict)
     observer: Optional[Callable[[dict[str, object]], None]] = None
 
 
@@ -136,6 +135,7 @@ class RunLifecycleService:
 
             config = settings_loader(request.config_path)
             scoped_request = self._build_scoped_request(request, scoped_paths)
+            apply_scoped_runtime_paths(config, scoped_paths)
             apply_run_overrides(config, scoped_request)
             config.ensure_directories()
 
@@ -150,11 +150,11 @@ class RunLifecycleService:
                 config_path=request.config_path,
                 paths=scoped_paths,
                 path_snapshot={
-                    "state": config.paths.state,
-                    "output": config.paths.output,
-                    "sandbox": config.paths.sandbox,
-                    "log": config.logging.file,
-                    "database": str(Path(config.paths.state) / "comet.db"),
+                    "state": scoped_paths["state"],
+                    "output": scoped_paths["output"],
+                    "sandbox": scoped_paths["sandbox"],
+                    "log": scoped_paths["log"],
+                    "database": scoped_paths["database"],
                 },
                 config_snapshot=config.to_dict(),
             )
@@ -964,7 +964,11 @@ class RunLifecycleService:
             parallel=parallel_enabled,
             parallel_targets=parallel_targets if isinstance(parallel_targets, int) else None,
             log_file=session.paths.get("log"),
-            path_overrides=dict(session.path_snapshot),
+            runtime_roots={
+                "state": session.paths["state"],
+                "output": session.paths["output"],
+                "sandbox": session.paths["sandbox"],
+            },
         )
 
     def _session_to_stream_status(self, status: str) -> str:
@@ -995,24 +999,22 @@ class RunLifecycleService:
     def _build_scoped_request(
         self, request: RunRequest, scoped_paths: dict[str, str]
     ) -> RunRequest:
-        path_overrides = dict(request.path_overrides)
-        path_overrides["state"] = scoped_paths["state"]
-        path_overrides["output"] = scoped_paths["output"]
-        path_overrides["sandbox"] = scoped_paths["sandbox"]
-
         return RunRequest(
             project_path=request.project_path,
             config_path=request.config_path,
             max_iterations=request.max_iterations,
             budget=request.budget,
             resume_state=request.resume_state,
-            output_dir=request.output_dir,
             debug=request.debug,
             bug_reports_dir=request.bug_reports_dir,
             parallel=request.parallel,
             parallel_targets=request.parallel_targets,
             log_file=scoped_paths["log"],
-            path_overrides=path_overrides,
+            runtime_roots={
+                "state": scoped_paths["state"],
+                "output": scoped_paths["output"],
+                "sandbox": scoped_paths["sandbox"],
+            },
             observer=request.observer,
         )
 
@@ -1103,7 +1105,6 @@ def build_run_request(args: Any) -> RunRequest:
         max_iterations=args.max_iterations,
         budget=args.budget,
         resume_state=args.resume,
-        output_dir=args.output_dir,
         debug=args.debug,
         bug_reports_dir=args.bug_reports_dir,
         parallel=args.parallel,
@@ -1120,15 +1121,31 @@ def apply_run_overrides(config: Settings, request: RunRequest) -> None:
         config.agent.parallel.enabled = True
     if request.parallel_targets is not None:
         config.agent.parallel.max_parallel_targets = request.parallel_targets
-    if request.output_dir:
-        config.paths.output = request.output_dir
-
-    for path_name, path_value in request.path_overrides.items():
-        if hasattr(config.paths, path_name):
-            setattr(config.paths, path_name, path_value)
 
     if request.log_file:
         config.logging.file = request.log_file
+
+
+def apply_scoped_runtime_paths(config: Settings, scoped_paths: dict[str, str]) -> None:
+    config.set_runtime_roots(
+        state=Path(scoped_paths["state"]),
+        output=Path(scoped_paths["output"]),
+        sandbox=Path(scoped_paths["sandbox"]),
+    )
+
+
+def apply_runtime_roots(config: Settings, runtime_roots: dict[str, str]) -> None:
+    state = runtime_roots.get("state")
+    output = runtime_roots.get("output")
+    sandbox = runtime_roots.get("sandbox")
+    if not (state and output and sandbox):
+        return
+
+    config.set_runtime_roots(
+        state=Path(state),
+        output=Path(output),
+        sandbox=Path(sandbox),
+    )
 
 
 def _resolve_bug_reports_dir(
@@ -1173,6 +1190,7 @@ def run_request(
     event_sink = observer or request.observer
 
     config = settings_loader(request.config_path)
+    apply_runtime_roots(config, request.runtime_roots)
     apply_run_overrides(config, request)
 
     log_level = "DEBUG" if request.debug else config.logging.level
