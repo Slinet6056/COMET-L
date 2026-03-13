@@ -14,8 +14,20 @@ type LogViewerProps = {
   runStatus: string;
 };
 
+type LogViewerView = 'main' | 'running' | 'finished';
+
+type AxisRange = {
+  min: number | null;
+  max: number | null;
+  span: number;
+};
+
+type TimelineView = Exclude<LogViewerView, 'main'>;
+
 const LIVE_LOG_POLL_MS = 1000;
 const AUTO_SCROLL_THRESHOLD_PX = 24;
+const FINISHED_STREAMS_PAGE_SIZE = 20;
+
 function formatTaskLabel(taskId: string): string {
   return taskId === 'main' ? 'main' : taskId;
 }
@@ -241,11 +253,65 @@ function isPanelNearBottom(panel: HTMLDivElement): boolean {
   return panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= AUTO_SCROLL_THRESHOLD_PX;
 }
 
+function buildAxisRange(streamItems: RunLogStream[], now: number): AxisRange {
+  const starts = streamItems
+    .map((stream) => toMillis(stream.startedAt))
+    .filter((value): value is number => value !== null);
+  const ends = streamItems
+    .map((stream) => getStreamEnd(stream, now))
+    .filter((value): value is number => value !== null);
+
+  const min = starts.length > 0 ? Math.min(...starts) : null;
+  const max = ends.length > 0 ? Math.max(...ends) : min;
+
+  if (min === null || max === null) {
+    return { min: null, max: null, span: 1 };
+  }
+
+  return { min, max, span: Math.max(max - min, 1) };
+}
+
+function getViewEmptyState(view: Exclude<LogViewerView, 'main'>): {
+  title: string;
+  detail: string;
+} {
+  if (view === 'running') {
+    return {
+      title: '当前没有运行中的工作线程。',
+      detail: '新的工作线程启动后，会在这里显示实时状态和缓冲日志。',
+    };
+  }
+
+  return {
+    title: '当前没有已结束的工作线程。',
+    detail: '已完成或失败的工作线程会按页展示在这里。',
+  };
+}
+
+function isTerminalRun(runStatus: string): boolean {
+  return runStatus === 'completed' || runStatus === 'failed';
+}
+
+function isRunningStream(stream: RunLogStream, runStatus: string): boolean {
+  if (isTerminalRun(runStatus)) {
+    return false;
+  }
+
+  return stream.status === 'running' || stream.status === 'pending';
+}
+
+function isFinishedStream(stream: RunLogStream, runStatus: string): boolean {
+  return stream.taskId !== 'main' && !isRunningStream(stream, runStatus);
+}
+
 export function LogViewer({ runId, runStatus }: LogViewerProps) {
   const [streams, setStreams] = useState<RunLogStreamsSummary | null>(null);
   const [isSummaryLoading, setIsSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [expandedTaskIds, setExpandedTaskIds] = useState<Record<string, boolean>>({});
+  const [currentView, setCurrentView] = useState<LogViewerView>('main');
+  const [selectedRunningTaskId, setSelectedRunningTaskId] = useState<string | null>(null);
+  const [selectedFinishedTaskId, setSelectedFinishedTaskId] = useState<string | null>(null);
+  const [finishedPage, setFinishedPage] = useState(0);
   const [entriesByTaskId, setEntriesByTaskId] = useState<Record<string, RunLogEntry[]>>({});
   const [streamByTaskId, setStreamByTaskId] = useState<Record<string, RunLogStream | null>>({});
   const [loadingByTaskId, setLoadingByTaskId] = useState<Record<string, boolean>>({});
@@ -254,7 +320,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
   const latestStreamsRef = useRef<RunLogStreamsSummary | null>(null);
   const previousEntryCountByTaskId = useRef<Record<string, number>>({});
   const shouldAutoScrollByTaskId = useRef<Record<string, boolean>>({});
-  const isLiveRun = runStatus !== 'completed' && runStatus !== 'failed';
+  const isLiveRun = !isTerminalRun(runStatus);
 
   useEffect(() => {
     if (runId.length === 0) {
@@ -264,7 +330,10 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
     setStreams(null);
     setIsSummaryLoading(true);
     setSummaryError(null);
-    setExpandedTaskIds({});
+    setCurrentView('main');
+    setSelectedRunningTaskId(null);
+    setSelectedFinishedTaskId(null);
+    setFinishedPage(0);
     setEntriesByTaskId({});
     setStreamByTaskId({});
     setLoadingByTaskId({});
@@ -294,9 +363,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
           return;
         }
 
-        const nextStreams = response.streams;
-
-        setStreams(nextStreams);
+        setStreams(response.streams);
         setSummaryError(null);
       } catch (loadError) {
         if (!active) {
@@ -364,49 +431,99 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
       .map((item) => item.stream);
   }, [runStatus, streams, taskIds]);
 
-  const expandedStreamIds = useMemo(
-    () => taskIds.filter((taskId) => expandedTaskIds[taskId]).sort(),
-    [expandedTaskIds, taskIds],
+  const mainStream = useMemo(() => {
+    return (
+      streamItems.find((stream) => stream.taskId === 'main') ?? buildFallbackStream('main', streams)
+    );
+  }, [streamItems, streams]);
+
+  const runningStreams = useMemo(() => {
+    return streamItems.filter(
+      (stream) => stream.taskId !== 'main' && isRunningStream(stream, runStatus),
+    );
+  }, [runStatus, streamItems]);
+
+  const finishedStreams = useMemo(() => {
+    return streamItems.filter((stream) => isFinishedStream(stream, runStatus));
+  }, [runStatus, streamItems]);
+
+  const finishedPageCount = Math.max(
+    1,
+    Math.ceil(finishedStreams.length / FINISHED_STREAMS_PAGE_SIZE),
   );
-  const expandedStreamIdsKey = useMemo(
-    () => JSON.stringify(expandedStreamIds),
-    [expandedStreamIds],
-  );
-
-  const now = Date.now();
-  const axisRange = useMemo(() => {
-    const starts = streamItems
-      .map((stream) => toMillis(stream.startedAt))
-      .filter((value) => value !== null);
-    const ends = streamItems
-      .map((stream) => getStreamEnd(stream, now))
-      .filter((value) => value !== null);
-
-    const min = starts.length > 0 ? Math.min(...starts) : null;
-    const max = ends.length > 0 ? Math.max(...ends) : min;
-
-    if (min === null || max === null) {
-      return { min: null, max: null, span: 1 };
-    }
-
-    return { min, max, span: Math.max(max - min, 1) };
-  }, [now, streamItems]);
 
   useEffect(() => {
-    const expandedIds = JSON.parse(expandedStreamIdsKey) as string[];
+    setFinishedPage((current) => Math.min(current, finishedPageCount - 1));
+  }, [finishedPageCount]);
 
-    if (isSummaryLoading || expandedIds.length === 0) {
+  const visibleFinishedStreams = useMemo(() => {
+    const startIndex = finishedPage * FINISHED_STREAMS_PAGE_SIZE;
+    return finishedStreams.slice(startIndex, startIndex + FINISHED_STREAMS_PAGE_SIZE);
+  }, [finishedPage, finishedStreams]);
+
+  useEffect(() => {
+    if (runningStreams.length === 0) {
+      setSelectedRunningTaskId(null);
+      return;
+    }
+
+    setSelectedRunningTaskId((current) =>
+      current && runningStreams.some((stream) => stream.taskId === current) ? current : null,
+    );
+  }, [runningStreams]);
+
+  useEffect(() => {
+    if (visibleFinishedStreams.length === 0) {
+      setSelectedFinishedTaskId(null);
+      return;
+    }
+
+    setSelectedFinishedTaskId((current) =>
+      current && visibleFinishedStreams.some((stream) => stream.taskId === current)
+        ? current
+        : null,
+    );
+  }, [visibleFinishedStreams]);
+
+  const activeDetailTaskIds = useMemo(() => {
+    if (currentView === 'main') {
+      return ['main'];
+    }
+
+    if (currentView === 'running' && selectedRunningTaskId) {
+      return [selectedRunningTaskId];
+    }
+
+    if (currentView === 'finished' && selectedFinishedTaskId) {
+      return [selectedFinishedTaskId];
+    }
+
+    return [];
+  }, [currentView, selectedFinishedTaskId, selectedRunningTaskId]);
+
+  const now = Date.now();
+  const runningAxisRange = useMemo(
+    () => buildAxisRange(runningStreams, now),
+    [now, runningStreams],
+  );
+  const finishedAxisRange = useMemo(
+    () => buildAxisRange(visibleFinishedStreams, now),
+    [now, visibleFinishedStreams],
+  );
+
+  useEffect(() => {
+    if (isSummaryLoading || activeDetailTaskIds.length === 0) {
       return;
     }
 
     let active = true;
     let intervalId: number | null = null;
 
-    async function loadExpandedEntries(showLoading = false) {
+    async function loadEntries(showLoading = false) {
       if (showLoading) {
         setLoadingByTaskId((current) => {
           const next = { ...current };
-          expandedIds.forEach((taskId) => {
+          activeDetailTaskIds.forEach((taskId) => {
             next[taskId] = true;
           });
           return next;
@@ -416,7 +533,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
       const responses: Array<
         { taskId: string; response: RunLogsStreamResponse } | { taskId: string; error: string }
       > = await Promise.all(
-        expandedIds.map(async (taskId) => {
+        activeDetailTaskIds.map(async (taskId) => {
           try {
             const response = await fetchRunLogsForTask(runId, taskId);
             return { taskId, response };
@@ -464,18 +581,18 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
 
       setLoadingByTaskId((current) => {
         const next = { ...current };
-        expandedIds.forEach((taskId) => {
+        activeDetailTaskIds.forEach((taskId) => {
           next[taskId] = false;
         });
         return next;
       });
     }
 
-    void loadExpandedEntries(true);
+    void loadEntries(true);
 
     if (isLiveRun) {
       intervalId = window.setInterval(() => {
-        void loadExpandedEntries(false);
+        void loadEntries(false);
       }, LIVE_LOG_POLL_MS);
     }
 
@@ -485,10 +602,10 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
         window.clearInterval(intervalId);
       }
     };
-  }, [expandedStreamIdsKey, isLiveRun, isSummaryLoading, runId]);
+  }, [activeDetailTaskIds, isLiveRun, isSummaryLoading, runId]);
 
   useEffect(() => {
-    expandedStreamIds.forEach((taskId) => {
+    activeDetailTaskIds.forEach((taskId) => {
       const panel = logPanelRefs.current[taskId];
       const entryCount = entriesByTaskId[taskId]?.length ?? 0;
 
@@ -507,167 +624,308 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
 
       previousEntryCountByTaskId.current[taskId] = entryCount;
     });
-  }, [entriesByTaskId, expandedStreamIds, loadingByTaskId]);
+  }, [activeDetailTaskIds, entriesByTaskId, loadingByTaskId]);
 
-  function toggleTask(taskId: string) {
-    setExpandedTaskIds((current) => ({
-      ...current,
-      [taskId]: !current[taskId],
-    }));
+  function renderLogPanel(stream: RunLogStream, panelId: string, labelledBy?: string) {
+    const detailStream = streamByTaskId[stream.taskId] ?? null;
+    const displayStream = {
+      ...(detailStream ?? stream),
+      status: normalizeStreamStatus(detailStream ?? stream, runStatus),
+    };
+    const entries = entriesByTaskId[stream.taskId] ?? [];
+    const isEntriesLoading = loadingByTaskId[stream.taskId] ?? false;
+    const entryError = errorByTaskId[stream.taskId];
+    const emptyState = getEmptyStateCopy(displayStream, runStatus);
+
+    return (
+      <section
+        id={panelId}
+        className="run-log-viewer__detail"
+        aria-label={`${displayStream.taskId} 的日志`}
+        aria-labelledby={labelledBy}
+      >
+        {isEntriesLoading ? <p className="muted-copy">正在加载日志条目...</p> : null}
+        {!isEntriesLoading && entryError ? <p role="alert">{entryError}</p> : null}
+        {!isEntriesLoading && !entryError ? (
+          entries.length > 0 ? (
+            <div
+              ref={(node) => {
+                logPanelRefs.current[stream.taskId] = node;
+              }}
+              className="run-log-terminal"
+              role="log"
+              aria-live="polite"
+              aria-label={`${displayStream.taskId} 的日志条目`}
+              onScroll={(event) => {
+                shouldAutoScrollByTaskId.current[stream.taskId] = isPanelNearBottom(
+                  event.currentTarget,
+                );
+              }}
+            >
+              {entries.map((entry) => (
+                <div key={`${entry.taskId}-${entry.sequence}`} className="run-log-line">
+                  <span className="run-log-line__time">{formatTimestamp(entry.timestamp)}</span>
+                  <span className="run-log-line__level">{entry.level}</span>
+                  <code>{entry.message}</code>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="run-log-terminal run-log-terminal--empty">
+              <strong>{emptyState.title}</strong>
+              <p className="muted-copy">{emptyState.detail}</p>
+            </div>
+          )
+        ) : null}
+      </section>
+    );
   }
+
+  function renderTimelineRows(
+    view: TimelineView,
+    streamList: RunLogStream[],
+    axisRange: AxisRange,
+    selectedTaskId: string | null,
+    onSelectTaskId: (taskId: string | null) => void,
+  ) {
+    const axisMid = axisRange.min === null ? null : axisRange.min + axisRange.span / 2;
+
+    return (
+      <div className="run-log-timeline">
+        <div className="run-log-timeline__axis" aria-hidden="true">
+          <span className="run-log-timeline__axis-spacer" />
+          <span className="run-log-timeline__axis-labels">
+            <span>{formatAxisTimestamp(axisRange.min)}</span>
+            <span>{formatAxisTimestamp(axisMid)}</span>
+            <span>{formatAxisTimestamp(axisRange.max)}</span>
+          </span>
+          <span className="run-log-timeline__axis-spacer" />
+        </div>
+
+        <ul className="run-log-timeline__rows">
+          {streamList.map((stream) => {
+            const isSelected = selectedTaskId === stream.taskId;
+            const detailPanelId = `${view}-log-panel-${stream.taskId}`;
+            const buttonId = `${view}-log-trigger-${stream.taskId}`;
+            const start = toMillis(stream.startedAt);
+            const end = getStreamEnd(stream, now);
+            const axisStart = axisRange.min;
+            const hasBar = axisStart !== null && start !== null && end !== null;
+            const offset = hasBar ? ((start - axisStart) / axisRange.span) * 100 : 0;
+            const width = hasBar ? Math.max(((end - start) / axisRange.span) * 100, 0.6) : 0;
+
+            return (
+              <li key={stream.taskId} className="run-log-row-group">
+                <button
+                  type="button"
+                  id={buttonId}
+                  className={isSelected ? 'run-log-row run-log-row--expanded' : 'run-log-row'}
+                  aria-expanded={isSelected}
+                  aria-controls={detailPanelId}
+                  onClick={() => onSelectTaskId(isSelected ? null : stream.taskId)}
+                >
+                  <span className="run-log-row__info">
+                    <span className="run-log-row__title">
+                      <strong title={stream.taskId}>{formatTaskLabel(stream.taskId)}</strong>
+                      <span
+                        className={`worker-pill worker-pill--${getStreamStatusTone(stream.status)}`}
+                      >
+                        {formatStatusLabel(stream.status)}
+                      </span>
+                    </span>
+                    <span className="run-log-row__stats">
+                      <span>{getStreamLogStateLabel(stream, runStatus)}</span>
+                      <span>{formatStreamDuration(stream, runStatus)}</span>
+                      <span>工作线程</span>
+                    </span>
+                  </span>
+
+                  <span className="run-log-row__timeline" aria-hidden="true">
+                    <span className="run-log-row__track" />
+                    {hasBar ? (
+                      <span
+                        className="run-log-row__bar"
+                        style={{
+                          left: `${offset}%`,
+                          width: `${Math.min(width, 100 - offset)}%`,
+                        }}
+                      />
+                    ) : (
+                      <span className="run-log-row__idle">暂无时间数据</span>
+                    )}
+                  </span>
+
+                  <span className="run-log-row__toggle">
+                    {isSelected ? '收起日志' : '查看日志'}
+                  </span>
+                </button>
+
+                {isSelected ? renderLogPanel(stream, detailPanelId, buttonId) : null}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  }
+
+  const mainButtonLabel = '主日志';
+  const runningButtonLabel = `运行中${runningStreams.length > 0 ? ` (${runningStreams.length})` : ''}`;
+  const finishedButtonLabel = `已结束${finishedStreams.length > 0 ? ` (${finishedStreams.length})` : ''}`;
+  const activeMainStream = {
+    ...(streamByTaskId.main ?? mainStream),
+    status: normalizeStreamStatus(streamByTaskId.main ?? mainStream, runStatus),
+  };
+  const activeTabId = `run-log-tab-${currentView}`;
+  const activePanelId = `run-log-tabpanel-${currentView}`;
 
   return (
     <section className="run-card" aria-labelledby="run-logs-panel">
       <div className="run-card__header run-card__header--compact">
         <div>
           <p className="eyebrow">日志</p>
-          <h3 id="run-logs-panel">日志时间线</h3>
+          <h3 id="run-logs-panel">日志查看器</h3>
         </div>
       </div>
 
-      <p className="muted-copy run-log-viewer__hint">展开任意流行即可查看其缓冲日志输出。</p>
+      <p className="muted-copy run-log-viewer__hint">
+        一次只显示一个视图，可在主日志、运行中和已结束之间切换。
+      </p>
+
+      <div className="run-log-viewer__toolbar-row">
+        <div className="run-log-viewer__toolbar" role="tablist" aria-label="日志视图切换">
+          <button
+            type="button"
+            id="run-log-tab-main"
+            role="tab"
+            aria-controls="run-log-tabpanel-main"
+            aria-selected={currentView === 'main'}
+            className={
+              currentView === 'main'
+                ? 'secondary-button run-log-viewer__tab run-log-viewer__tab--active'
+                : 'secondary-button run-log-viewer__tab'
+            }
+            onClick={() => setCurrentView('main')}
+          >
+            {mainButtonLabel}
+          </button>
+          <button
+            type="button"
+            id="run-log-tab-running"
+            role="tab"
+            aria-controls="run-log-tabpanel-running"
+            aria-selected={currentView === 'running'}
+            className={
+              currentView === 'running'
+                ? 'secondary-button run-log-viewer__tab run-log-viewer__tab--active'
+                : 'secondary-button run-log-viewer__tab'
+            }
+            onClick={() => setCurrentView('running')}
+          >
+            {runningButtonLabel}
+          </button>
+          <button
+            type="button"
+            id="run-log-tab-finished"
+            role="tab"
+            aria-controls="run-log-tabpanel-finished"
+            aria-selected={currentView === 'finished'}
+            className={
+              currentView === 'finished'
+                ? 'secondary-button run-log-viewer__tab run-log-viewer__tab--active'
+                : 'secondary-button run-log-viewer__tab'
+            }
+            onClick={() => setCurrentView('finished')}
+          >
+            {finishedButtonLabel}
+          </button>
+        </div>
+
+        {currentView === 'finished' && finishedStreams.length > 0 ? (
+          <div className="run-log-viewer__pagination">
+            <button
+              type="button"
+              className="run-log-viewer__pager-button"
+              onClick={() => setFinishedPage((current) => Math.max(current - 1, 0))}
+              disabled={finishedPage === 0}
+            >
+              上一页
+            </button>
+            <span className="muted-copy">
+              第 {finishedPage + 1} / {finishedPageCount} 页
+            </span>
+            <button
+              type="button"
+              className="run-log-viewer__pager-button"
+              onClick={() =>
+                setFinishedPage((current) => Math.min(current + 1, finishedPageCount - 1))
+              }
+              disabled={finishedPage >= finishedPageCount - 1}
+            >
+              下一页
+            </button>
+          </div>
+        ) : null}
+      </div>
 
       {isSummaryLoading ? <p className="muted-copy">正在加载日志流...</p> : null}
       {!isSummaryLoading && summaryError ? <p role="alert">{summaryError}</p> : null}
 
       {!isSummaryLoading && streams ? (
-        <>
-          <div className="run-log-timeline">
-            <div className="run-log-timeline__axis" aria-hidden="true">
-              <span>{formatAxisTimestamp(axisRange.min)}</span>
-              <span>
-                {formatAxisTimestamp(
-                  axisRange.min !== null ? axisRange.min + axisRange.span / 2 : null,
+        <div
+          id={activePanelId}
+          className="run-log-viewer__content"
+          role="tabpanel"
+          aria-labelledby={activeTabId}
+        >
+          {currentView === 'main'
+            ? renderLogPanel(activeMainStream, 'main-log-panel', 'run-log-tab-main')
+            : null}
+
+          {currentView === 'running'
+            ? runningStreams.length > 0
+              ? renderTimelineRows(
+                  'running',
+                  runningStreams,
+                  runningAxisRange,
+                  selectedRunningTaskId,
+                  setSelectedRunningTaskId,
+                )
+              : (() => {
+                  const emptyState = getViewEmptyState('running');
+                  return (
+                    <div className="run-log-terminal run-log-terminal--empty">
+                      <strong>{emptyState.title}</strong>
+                      <p className="muted-copy">{emptyState.detail}</p>
+                    </div>
+                  );
+                })()
+            : null}
+
+          {currentView === 'finished' ? (
+            finishedStreams.length > 0 ? (
+              <>
+                {renderTimelineRows(
+                  'finished',
+                  visibleFinishedStreams,
+                  finishedAxisRange,
+                  selectedFinishedTaskId,
+                  setSelectedFinishedTaskId,
                 )}
-              </span>
-              <span>{formatAxisTimestamp(axisRange.max)}</span>
-            </div>
-
-            <ul className="run-log-timeline__rows">
-              {streamItems.map((stream) => {
-                const isExpanded = Boolean(expandedTaskIds[stream.taskId]);
-                const panelId = `run-log-panel-${stream.taskId}`;
-                const detailStream = streamByTaskId[stream.taskId] ?? null;
-                const resolvedStream = detailStream ?? stream;
-                const rowStream = {
-                  ...stream,
-                  status: normalizeStreamStatus(stream, runStatus),
-                };
-                const displayStream = {
-                  ...resolvedStream,
-                  status: normalizeStreamStatus(resolvedStream, runStatus),
-                };
-                const entries = entriesByTaskId[stream.taskId] ?? [];
-                const isEntriesLoading = loadingByTaskId[stream.taskId] ?? false;
-                const entryError = errorByTaskId[stream.taskId];
-                const emptyState = getEmptyStateCopy(displayStream, runStatus);
-                const start = toMillis(rowStream.startedAt);
-                const end = getStreamEnd(rowStream, now);
-                const hasBar = axisRange.min !== null && start !== null && end !== null;
-                const offset = hasBar ? ((start - axisRange.min) / axisRange.span) * 100 : 0;
-                const width = hasBar ? Math.max(((end - start) / axisRange.span) * 100, 0.6) : 0;
-
+              </>
+            ) : (
+              (() => {
+                const emptyState = getViewEmptyState('finished');
                 return (
-                  <li key={stream.taskId} className="run-log-row-group">
-                    <button
-                      type="button"
-                      className={isExpanded ? 'run-log-row run-log-row--expanded' : 'run-log-row'}
-                      aria-expanded={isExpanded}
-                      aria-controls={panelId}
-                      onClick={() => toggleTask(stream.taskId)}
-                    >
-                      <span className="run-log-row__info">
-                        <span className="run-log-row__title">
-                          <strong title={rowStream.taskId}>
-                            {formatTaskLabel(rowStream.taskId)}
-                          </strong>
-                          <span
-                            className={`worker-pill worker-pill--${getStreamStatusTone(rowStream.status)}`}
-                          >
-                            {formatStatusLabel(rowStream.status)}
-                          </span>
-                        </span>
-                        <span className="run-log-row__stats">
-                          <span>{getStreamLogStateLabel(rowStream, runStatus)}</span>
-                          <span>{formatStreamDuration(rowStream, runStatus)}</span>
-                          <span>{rowStream.taskId === 'main' ? '主协调器' : '工作线程'}</span>
-                        </span>
-                      </span>
-
-                      <span className="run-log-row__timeline" aria-hidden="true">
-                        <span className="run-log-row__track" />
-                        {hasBar ? (
-                          <span
-                            className="run-log-row__bar"
-                            style={{
-                              left: `${offset}%`,
-                              width: `${Math.min(width, 100 - offset)}%`,
-                            }}
-                          />
-                        ) : (
-                          <span className="run-log-row__idle">暂无时间数据</span>
-                        )}
-                      </span>
-
-                      <span className="run-log-row__toggle">
-                        {isExpanded ? '收起日志' : '展开日志'}
-                      </span>
-                    </button>
-
-                    {isExpanded ? (
-                      <section
-                        id={panelId}
-                        className="run-log-row__panel"
-                        aria-label={`${displayStream.taskId} 的日志`}
-                      >
-                        {isEntriesLoading ? (
-                          <p className="muted-copy">正在加载日志条目...</p>
-                        ) : null}
-                        {!isEntriesLoading && entryError ? <p role="alert">{entryError}</p> : null}
-                        {!isEntriesLoading && !entryError ? (
-                          entries.length > 0 ? (
-                            <div
-                              ref={(node) => {
-                                logPanelRefs.current[stream.taskId] = node;
-                              }}
-                              className="run-log-terminal"
-                              role="log"
-                              aria-live="polite"
-                              aria-label={`${displayStream.taskId} 的日志条目`}
-                              onScroll={(event) => {
-                                shouldAutoScrollByTaskId.current[stream.taskId] = isPanelNearBottom(
-                                  event.currentTarget,
-                                );
-                              }}
-                            >
-                              {entries.map((entry) => (
-                                <div
-                                  key={`${entry.taskId}-${entry.sequence}`}
-                                  className="run-log-line"
-                                >
-                                  <span className="run-log-line__time">
-                                    {formatTimestamp(entry.timestamp)}
-                                  </span>
-                                  <span className="run-log-line__level">{entry.level}</span>
-                                  <code>{entry.message}</code>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="run-log-terminal run-log-terminal--empty">
-                              <strong>{emptyState.title}</strong>
-                              <p className="muted-copy">{emptyState.detail}</p>
-                            </div>
-                          )
-                        ) : null}
-                      </section>
-                    ) : null}
-                  </li>
+                  <div className="run-log-terminal run-log-terminal--empty">
+                    <strong>{emptyState.title}</strong>
+                    <p className="muted-copy">{emptyState.detail}</p>
+                  </div>
                 );
-              })}
-            </ul>
-          </div>
-        </>
+              })()
+            )
+          ) : null}
+        </div>
       ) : null}
     </section>
   );

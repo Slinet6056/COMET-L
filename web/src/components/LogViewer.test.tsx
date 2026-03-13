@@ -5,78 +5,70 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LogViewer } from './LogViewer';
 import * as api from '../lib/api';
 
-function buildSummary(runId: string) {
+function buildStream(
+  taskId: string,
+  status: 'pending' | 'running' | 'completed' | 'failed',
+  overrides: Partial<api.RunLogStream> = {},
+): api.RunLogStream {
+  const startedAt = overrides.startedAt ?? (status === 'pending' ? null : '2026-03-10T10:00:00Z');
+  const endedAt =
+    overrides.endedAt ??
+    (status === 'completed' || status === 'failed' ? '2026-03-10T10:00:05Z' : null);
+
+  return {
+    taskId,
+    order: overrides.order ?? 0,
+    status,
+    startedAt,
+    completedAt: overrides.completedAt ?? (status === 'completed' ? endedAt : null),
+    failedAt: overrides.failedAt ?? (status === 'failed' ? endedAt : null),
+    endedAt,
+    durationSeconds:
+      overrides.durationSeconds ?? (status === 'completed' || status === 'failed' ? 5 : null),
+    firstEntryAt: overrides.firstEntryAt ?? startedAt,
+    lastEntryAt: overrides.lastEntryAt ?? endedAt ?? startedAt,
+    bufferedEntryCount: overrides.bufferedEntryCount ?? 0,
+    totalEntryCount: overrides.totalEntryCount ?? 0,
+  };
+}
+
+function buildSummary(runId: string, streams: api.RunLogStream[]) {
   return {
     runId,
     streams: {
-      taskIds: ['main'],
-      counts: { main: 2 },
+      taskIds: streams.map((stream) => stream.taskId),
+      counts: Object.fromEntries(streams.map((stream) => [stream.taskId, stream.totalEntryCount])),
       maxEntriesPerStream: 50,
-      items: [
-        {
-          taskId: 'main',
-          order: 0,
-          status: 'running',
-          startedAt: '2026-03-10T10:00:00Z',
-          completedAt: null,
-          endedAt: null,
-          durationSeconds: null,
-          firstEntryAt: '2026-03-10T10:00:00Z',
-          lastEntryAt: '2026-03-10T10:00:01Z',
-          bufferedEntryCount: 2,
-          totalEntryCount: 2,
-        },
-      ],
-      byTaskId: {
-        main: {
-          taskId: 'main',
-          order: 0,
-          status: 'running',
-          startedAt: '2026-03-10T10:00:00Z',
-          completedAt: null,
-          endedAt: null,
-          durationSeconds: null,
-          firstEntryAt: '2026-03-10T10:00:00Z',
-          lastEntryAt: '2026-03-10T10:00:01Z',
-          bufferedEntryCount: 2,
-          totalEntryCount: 2,
-        },
-      },
+      items: streams,
+      byTaskId: Object.fromEntries(streams.map((stream) => [stream.taskId, stream])),
     },
   };
 }
 
-function buildStreamResponse(messages: string[]) {
+function buildStreamResponse(
+  taskId: string,
+  messages: string[],
+  stream: api.RunLogStream,
+  availableTaskIds: string[],
+) {
   return {
-    runId: 'run-logs-live',
-    taskId: 'main',
-    availableTaskIds: ['main'],
+    runId: 'run-logs-test',
+    taskId,
+    availableTaskIds,
     maxEntriesPerStream: 50,
-    stream: {
-      taskId: 'main',
-      order: 0,
-      status: 'running',
-      startedAt: '2026-03-10T10:00:00Z',
-      completedAt: null,
-      endedAt: null,
-      durationSeconds: null,
-      firstEntryAt: '2026-03-10T10:00:00Z',
-      lastEntryAt: '2026-03-10T10:00:01Z',
-      bufferedEntryCount: messages.length,
-      totalEntryCount: messages.length,
-    },
+    stream,
     entries: messages.map((message, index) => ({
       sequence: index + 1,
       timestamp: `2026-03-10T10:00:0${index}Z`,
-      taskId: 'main',
-      logger: 'comet.main',
+      taskId,
+      logger: `comet.${taskId}`,
       level: 'INFO',
       message,
     })),
   };
 }
 
-describe('Log viewer', () => {
+describe('LogViewer', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -86,1148 +78,295 @@ describe('Log viewer', () => {
     vi.restoreAllMocks();
   });
 
-  it('expands per-stream inline log panels on demand', async () => {
+  it('uses the main view by default and switches between grouped views one at a time', async () => {
     const user = userEvent.setup();
-    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
-      runId: 'run-logs-1',
-      streams: {
-        taskIds: ['task-7', 'main'],
-        counts: { main: 2, 'task-7': 1 },
-        maxEntriesPerStream: 50,
-        items: [
-          {
-            taskId: 'task-7',
-            order: 0,
-            status: 'completed',
-            startedAt: '2026-03-10T10:00:01Z',
-            completedAt: '2026-03-10T10:00:03Z',
-            endedAt: '2026-03-10T10:00:03Z',
-            durationSeconds: 2,
-            firstEntryAt: '2026-03-10T10:00:01Z',
-            lastEntryAt: '2026-03-10T10:00:03Z',
-            bufferedEntryCount: 1,
-            totalEntryCount: 1,
-          },
-          {
-            taskId: 'main',
-            order: 1,
-            status: 'running',
-            startedAt: '2026-03-10T10:00:00Z',
-            completedAt: null,
-            endedAt: null,
-            durationSeconds: null,
-            firstEntryAt: '2026-03-10T10:00:00Z',
-            lastEntryAt: '2026-03-10T10:00:00Z',
-            bufferedEntryCount: 2,
-            totalEntryCount: 2,
-          },
-        ],
-        byTaskId: {
-          'task-7': {
-            taskId: 'task-7',
-            order: 0,
-            status: 'completed',
-            startedAt: '2026-03-10T10:00:01Z',
-            completedAt: '2026-03-10T10:00:03Z',
-            endedAt: '2026-03-10T10:00:03Z',
-            durationSeconds: 2,
-            firstEntryAt: '2026-03-10T10:00:01Z',
-            lastEntryAt: '2026-03-10T10:00:03Z',
-            bufferedEntryCount: 1,
-            totalEntryCount: 1,
-          },
-          main: {
-            taskId: 'main',
-            order: 1,
-            status: 'running',
-            startedAt: '2026-03-10T10:00:00Z',
-            completedAt: null,
-            endedAt: null,
-            durationSeconds: null,
-            firstEntryAt: '2026-03-10T10:00:00Z',
-            lastEntryAt: '2026-03-10T10:00:00Z',
-            bufferedEntryCount: 2,
-            totalEntryCount: 2,
-          },
-        },
-      },
+    const mainStream = buildStream('main', 'running', {
+      order: 0,
+      totalEntryCount: 2,
+      bufferedEntryCount: 2,
     });
+    const runningStream = buildStream('task-live', 'running', {
+      order: 1,
+      startedAt: '2026-03-10T10:00:02Z',
+      lastEntryAt: '2026-03-10T10:00:04Z',
+      totalEntryCount: 1,
+      bufferedEntryCount: 1,
+    });
+    const finishedStream = buildStream('task-done', 'completed', {
+      order: 2,
+      startedAt: '2026-03-10T10:00:05Z',
+      endedAt: '2026-03-10T10:00:08Z',
+      completedAt: '2026-03-10T10:00:08Z',
+      durationSeconds: 3,
+      totalEntryCount: 1,
+      bufferedEntryCount: 1,
+    });
+
+    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue(
+      buildSummary('run-logs-test', [mainStream, runningStream, finishedStream]),
+    );
     const fetchRunLogsForTaskSpy = vi
       .spyOn(api, 'fetchRunLogsForTask')
-      .mockImplementation(async (_runId, taskId) => ({
-        runId: 'run-logs-1',
-        taskId,
-        availableTaskIds: ['main', 'task-7'],
-        maxEntriesPerStream: 50,
-        stream: {
-          taskId,
-          order: taskId === 'main' ? 1 : 0,
-          status: taskId === 'main' ? 'running' : 'completed',
-          startedAt: taskId === 'main' ? '2026-03-10T10:00:00Z' : '2026-03-10T10:00:01Z',
-          completedAt: taskId === 'main' ? null : '2026-03-10T10:00:03Z',
-          endedAt: taskId === 'main' ? null : '2026-03-10T10:00:03Z',
-          durationSeconds: taskId === 'main' ? null : 2,
-          firstEntryAt: taskId === 'main' ? '2026-03-10T10:00:00Z' : '2026-03-10T10:00:01Z',
-          lastEntryAt: taskId === 'main' ? '2026-03-10T10:00:00Z' : '2026-03-10T10:00:03Z',
-          bufferedEntryCount: taskId === 'main' ? 2 : 1,
-          totalEntryCount: taskId === 'main' ? 2 : 1,
-        },
-        entries:
+      .mockImplementation(async (_runId, taskId) => {
+        const stream =
+          taskId === 'main' ? mainStream : taskId === 'task-live' ? runningStream : finishedStream;
+        const message =
           taskId === 'main'
-            ? [
-                {
-                  sequence: 1,
-                  timestamp: '2026-03-10T10:00:00Z',
-                  taskId: 'main',
-                  logger: 'comet.main',
-                  level: 'INFO',
-                  message: 'main log line',
-                },
-              ]
-            : [
-                {
-                  sequence: 2,
-                  timestamp: '2026-03-10T10:00:01Z',
-                  taskId: 'task-7',
-                  logger: 'comet.worker',
-                  level: 'INFO',
-                  message: 'worker log line',
-                },
-              ],
-      }));
+            ? 'main log line'
+            : taskId === 'task-live'
+              ? 'running worker line'
+              : 'finished worker line';
 
-    render(<LogViewer runId="run-logs-1" runStatus="running" />);
+        return buildStreamResponse(taskId, [message], stream, ['main', 'task-live', 'task-done']);
+      });
 
-    expect(await screen.findByText('展开任意流行即可查看其缓冲日志输出。')).toBeInTheDocument();
-    expect(screen.queryByText('main log line')).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Selected:/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Status:/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Start:/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Duration:/)).not.toBeInTheDocument();
-
-    const buttons = screen.getAllByRole('button');
-    expect(buttons[0]).toHaveTextContent('main');
-    expect(buttons[1]).toHaveTextContent('task-7');
-
-    const workerButton = screen.getByRole('button', { name: /task-7/i });
-    const mainButton = screen.getByRole('button', { name: /main/i });
-
-    expect(workerButton).toHaveAttribute('aria-expanded', 'false');
-    expect(mainButton).toHaveAttribute('aria-expanded', 'false');
-
-    await user.click(mainButton);
+    const view = render(<LogViewer runId="run-logs-test" runStatus="running" />);
 
     expect(await screen.findByText('main log line')).toBeInTheDocument();
-    expect(screen.queryByText('comet.main')).not.toBeInTheDocument();
-    expect(mainButton).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('log', { name: 'main 的日志条目' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '主日志' })).toHaveAttribute('aria-selected', 'true');
+    expect(view.container.querySelector('.run-log-timeline__axis')).toBeNull();
+    expect(view.container.querySelector('.run-log-row__bar')).toBeNull();
+    expect(screen.queryByRole('button', { name: /task-live/i })).not.toBeInTheDocument();
 
-    await user.click(workerButton);
+    await user.click(screen.getByRole('tab', { name: '运行中 (1)' }));
 
-    expect(await screen.findByText('worker log line')).toBeInTheDocument();
-    expect(screen.getByText('main log line')).toBeInTheDocument();
-    expect(screen.queryByText('comet.worker')).not.toBeInTheDocument();
-    expect(workerButton).toHaveAttribute('aria-expanded', 'true');
-    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-1', 'main');
-    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-1', 'task-7');
+    const runningButton = await screen.findByRole('button', { name: /task-live/i });
+    expect(runningButton).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('running worker line')).not.toBeInTheDocument();
+
+    await user.click(runningButton);
+
+    expect(runningButton).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('running worker line')).toBeInTheDocument();
+    expect(screen.queryByText('main log line')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /task-done/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: '已结束 (1)' }));
+
+    const finishedButton = await screen.findByRole('button', { name: /task-done/i });
+    expect(finishedButton).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('finished worker line')).not.toBeInTheDocument();
+
+    await user.click(finishedButton);
+
+    expect(finishedButton).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('finished worker line')).toBeInTheDocument();
+    expect(screen.queryByText('running worker line')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /task-live/i })).not.toBeInTheDocument();
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-test', 'main');
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-test', 'task-live');
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-test', 'task-done');
   });
 
-  it('gracefully degrades when only the main stream exists and it is empty', async () => {
+  it('paginates finished streams and scales the timeline from the visible page only', async () => {
     const user = userEvent.setup();
-    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
-      runId: 'run-logs-2',
-      streams: {
-        taskIds: ['main'],
-        counts: { main: 0 },
-        maxEntriesPerStream: 200,
-        items: [
-          {
-            taskId: 'main',
-            order: 0,
-            status: 'completed',
-            startedAt: '2026-03-10T10:00:00Z',
-            completedAt: '2026-03-10T10:00:05Z',
-            endedAt: '2026-03-10T10:00:05Z',
-            durationSeconds: 5,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-        ],
-        byTaskId: {
-          main: {
-            taskId: 'main',
-            order: 0,
-            status: 'completed',
-            startedAt: '2026-03-10T10:00:00Z',
-            completedAt: '2026-03-10T10:00:05Z',
-            endedAt: '2026-03-10T10:00:05Z',
-            durationSeconds: 5,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-        },
-      },
+    const mainStream = buildStream('main', 'completed', {
+      order: 0,
+      endedAt: '2026-03-10T10:00:02Z',
+      completedAt: '2026-03-10T10:00:02Z',
     });
-    vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue({
-      runId: 'run-logs-2',
-      taskId: 'main',
-      availableTaskIds: ['main'],
-      maxEntriesPerStream: 200,
-      stream: {
-        taskId: 'main',
-        order: 0,
-        status: 'completed',
-        startedAt: '2026-03-10T10:00:00Z',
-        completedAt: '2026-03-10T10:00:05Z',
-        endedAt: '2026-03-10T10:00:05Z',
-        durationSeconds: 5,
-        firstEntryAt: null,
-        lastEntryAt: null,
-        bufferedEntryCount: 0,
-        totalEntryCount: 0,
-      },
-      entries: [],
+    const finishedStreams = Array.from({ length: 21 }, (_, index) => {
+      const taskNumber = index + 1;
+      const startSecond = index < 20 ? index * 2 : 120;
+      const endSecond = index < 20 ? startSecond + 2 : startSecond + 10;
+      const isoPrefix = '2026-03-10T10:';
+      const startedAt = `${isoPrefix}${String(Math.floor(startSecond / 60)).padStart(2, '0')}:${String(startSecond % 60).padStart(2, '0')}Z`;
+      const endedAt = `${isoPrefix}${String(Math.floor(endSecond / 60)).padStart(2, '0')}:${String(endSecond % 60).padStart(2, '0')}Z`;
+
+      return buildStream(`task-${taskNumber}`, taskNumber === 20 ? 'failed' : 'completed', {
+        order: taskNumber,
+        startedAt,
+        endedAt,
+        completedAt: taskNumber === 20 ? null : endedAt,
+        failedAt: taskNumber === 20 ? endedAt : null,
+        durationSeconds: index < 20 ? 2 : 10,
+      });
     });
 
-    render(<LogViewer runId="run-logs-2" runStatus="completed" />);
+    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue(
+      buildSummary('run-logs-test', [mainStream, ...finishedStreams]),
+    );
+    vi.spyOn(api, 'fetchRunLogsForTask').mockImplementation(async (_runId, taskId) => {
+      const stream =
+        taskId === 'main' ? mainStream : finishedStreams.find((item) => item.taskId === taskId)!;
+      return buildStreamResponse(taskId, [`${taskId} line`], stream, [
+        'main',
+        ...finishedStreams.map((item) => item.taskId),
+      ]);
+    });
 
-    const mainButton = await screen.findByRole('button', { name: /main/i });
-    expect(mainButton).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getByText('未捕获到日志')).toBeInTheDocument();
+    const view = render(<LogViewer runId="run-logs-test" runStatus="completed" />);
 
-    await user.click(mainButton);
+    await screen.findByRole('log', { name: 'main 的日志条目' });
+    await user.click(screen.getByRole('tab', { name: '已结束 (21)' }));
+
+    expect(await screen.findByText('第 1 / 2 页')).toBeInTheDocument();
+    const firstPageButtons = view.container.querySelectorAll('[id^="finished-log-trigger-"]');
+    expect(firstPageButtons).toHaveLength(20);
+    expect(view.container.querySelector('#finished-log-trigger-task-1')).not.toBeNull();
+    expect(view.container.querySelector('#finished-log-trigger-task-20')).not.toBeNull();
+    expect(view.container.querySelector('#finished-log-trigger-task-21')).toBeNull();
+
+    const firstBar = view.container.querySelector('#finished-log-trigger-task-1 .run-log-row__bar');
+    expect(firstBar).not.toBeNull();
+    expect(firstBar).toHaveAttribute('style', expect.stringContaining('width: 5%'));
+
+    await user.click(screen.getByRole('button', { name: '下一页' }));
+
+    expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument();
+    expect(view.container.querySelector('#finished-log-trigger-task-21')).not.toBeNull();
+    expect(view.container.querySelector('#finished-log-trigger-task-1')).toBeNull();
+
+    const lastBar = view.container.querySelector('#finished-log-trigger-task-21 .run-log-row__bar');
+    expect(lastBar).not.toBeNull();
+    expect(lastBar).toHaveAttribute('style', expect.stringContaining('width: 100%'));
+    expect(view.container.querySelectorAll('.run-log-row').length).toBe(1);
+  });
+
+  it('keeps the main stream accessible when it is the only available stream', async () => {
+    const mainStream = buildStream('main', 'completed', {
+      order: 0,
+      startedAt: '2026-03-10T10:00:00Z',
+      endedAt: '2026-03-10T10:00:05Z',
+      completedAt: '2026-03-10T10:00:05Z',
+      totalEntryCount: 0,
+      bufferedEntryCount: 0,
+      firstEntryAt: null,
+      lastEntryAt: null,
+    });
+
+    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue(buildSummary('run-logs-test', [mainStream]));
+    vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue(
+      buildStreamResponse('main', [], mainStream, ['main']),
+    );
+
+    render(<LogViewer runId="run-logs-test" runStatus="completed" />);
 
     await waitFor(() => {
       expect(screen.queryByText('正在加载日志条目...')).not.toBeInTheDocument();
     });
+
+    expect(screen.getByRole('tab', { name: '主日志' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('未捕获到主协调器日志。')).toBeInTheDocument();
     expect(
       screen.getByText('运行结束时，主协调器流尚未产生可缓冲的日志输出。'),
     ).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '运行中' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '已结束' })).toBeInTheDocument();
   });
 
-  it('discovers new worker streams while the run is still active', async () => {
-    let summaryCalls = 0;
-
-    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () => {
-      summaryCalls += 1;
-      return {
-        runId: 'run-logs-3',
-        streams:
-          summaryCalls === 1
-            ? {
-                taskIds: ['main'],
-                counts: { main: 1, 'task-9': 0 },
-                maxEntriesPerStream: 50,
-                items: [
-                  {
-                    taskId: 'main',
-                    order: 0,
-                    status: 'running',
-                    startedAt: '2026-03-10T10:00:00Z',
-                    completedAt: null,
-                    endedAt: null,
-                    durationSeconds: null,
-                    firstEntryAt: '2026-03-10T10:00:00Z',
-                    lastEntryAt: '2026-03-10T10:00:00Z',
-                    bufferedEntryCount: 1,
-                    totalEntryCount: 1,
-                  },
-                ],
-                byTaskId: {
-                  main: {
-                    taskId: 'main',
-                    order: 0,
-                    status: 'running',
-                    startedAt: '2026-03-10T10:00:00Z',
-                    completedAt: null,
-                    endedAt: null,
-                    durationSeconds: null,
-                    firstEntryAt: '2026-03-10T10:00:00Z',
-                    lastEntryAt: '2026-03-10T10:00:00Z',
-                    bufferedEntryCount: 1,
-                    totalEntryCount: 1,
-                  },
-                  'task-9': {
-                    taskId: 'task-9',
-                    order: 1,
-                    status: 'pending',
-                    startedAt: null,
-                    completedAt: null,
-                    endedAt: null,
-                    durationSeconds: null,
-                    firstEntryAt: null,
-                    lastEntryAt: null,
-                    bufferedEntryCount: 0,
-                    totalEntryCount: 0,
-                  },
-                },
-              }
-            : {
-                taskIds: ['main', 'task-9'],
-                counts: { main: 1, 'task-9': 1 },
-                maxEntriesPerStream: 50,
-                items: [
-                  {
-                    taskId: 'main',
-                    order: 0,
-                    status: 'running',
-                    startedAt: '2026-03-10T10:00:00Z',
-                    completedAt: null,
-                    endedAt: null,
-                    durationSeconds: null,
-                    firstEntryAt: '2026-03-10T10:00:00Z',
-                    lastEntryAt: '2026-03-10T10:00:00Z',
-                    bufferedEntryCount: 1,
-                    totalEntryCount: 1,
-                  },
-                  {
-                    taskId: 'task-9',
-                    order: 1,
-                    status: 'running',
-                    startedAt: '2026-03-10T10:00:01Z',
-                    completedAt: null,
-                    endedAt: null,
-                    durationSeconds: null,
-                    firstEntryAt: '2026-03-10T10:00:01Z',
-                    lastEntryAt: '2026-03-10T10:00:01Z',
-                    bufferedEntryCount: 1,
-                    totalEntryCount: 1,
-                  },
-                ],
-                byTaskId: {
-                  main: {
-                    taskId: 'main',
-                    order: 0,
-                    status: 'running',
-                    startedAt: '2026-03-10T10:00:00Z',
-                    completedAt: null,
-                    endedAt: null,
-                    durationSeconds: null,
-                    firstEntryAt: '2026-03-10T10:00:00Z',
-                    lastEntryAt: '2026-03-10T10:00:00Z',
-                    bufferedEntryCount: 1,
-                    totalEntryCount: 1,
-                  },
-                  'task-9': {
-                    taskId: 'task-9',
-                    order: 1,
-                    status: 'running',
-                    startedAt: '2026-03-10T10:00:01Z',
-                    completedAt: null,
-                    endedAt: null,
-                    durationSeconds: null,
-                    firstEntryAt: '2026-03-10T10:00:01Z',
-                    lastEntryAt: '2026-03-10T10:00:01Z',
-                    bufferedEntryCount: 1,
-                    totalEntryCount: 1,
-                  },
-                },
-              },
-      };
-    });
-    vi.spyOn(api, 'fetchRunLogsForTask').mockImplementation(async (_runId, taskId) => ({
-      runId: 'run-logs-3',
-      taskId,
-      availableTaskIds: taskId === 'main' ? ['main'] : ['main', 'task-9'],
-      maxEntriesPerStream: 50,
-      stream: {
-        taskId,
-        order: taskId === 'main' ? 0 : 1,
-        status: 'running',
-        startedAt: '2026-03-10T10:00:00Z',
-        completedAt: null,
-        endedAt: null,
-        durationSeconds: null,
-        firstEntryAt: '2026-03-10T10:00:00Z',
-        lastEntryAt: '2026-03-10T10:00:00Z',
-        bufferedEntryCount: 1,
-        totalEntryCount: 1,
-      },
-      entries: [
-        {
-          sequence: taskId === 'main' ? 1 : 2,
-          timestamp: '2026-03-10T10:00:00Z',
-          taskId,
-          logger: 'comet.worker',
-          level: 'INFO',
-          message: `${taskId} log line`,
-        },
-      ],
-    }));
-
-    render(<LogViewer runId="run-logs-3" runStatus="running" />);
-
-    expect(await screen.findByRole('button', { name: /main/i })).toBeInTheDocument();
-    expect(screen.queryByText('main log line')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /task-9/i })).not.toBeInTheDocument();
-
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 1100));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /task-9/i })).toBeInTheDocument();
-    });
-  });
-
-  it('normalizes ended failed runs so stale worker streams do not look live', async () => {
+  it('moves pending workers into the finished view once the run is terminal', async () => {
     const user = userEvent.setup();
-
-    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
-      runId: 'run-logs-4',
-      streams: {
-        taskIds: ['task-4'],
-        counts: { 'task-4': 0 },
-        maxEntriesPerStream: 50,
-        items: [
-          {
-            taskId: 'task-4',
-            order: 0,
-            status: 'running',
-            startedAt: '2026-03-10T10:00:01Z',
-            completedAt: null,
-            endedAt: null,
-            durationSeconds: null,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-        ],
-        byTaskId: {
-          'task-4': {
-            taskId: 'task-4',
-            order: 0,
-            status: 'running',
-            startedAt: '2026-03-10T10:00:01Z',
-            completedAt: null,
-            endedAt: null,
-            durationSeconds: null,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-        },
-      },
+    const mainStream = buildStream('main', 'completed', {
+      order: 0,
+      endedAt: '2026-03-10T10:00:05Z',
+      completedAt: '2026-03-10T10:00:05Z',
     });
-    vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue({
-      runId: 'run-logs-4',
-      taskId: 'task-4',
-      availableTaskIds: ['task-4'],
-      maxEntriesPerStream: 50,
-      stream: {
-        taskId: 'task-4',
-        order: 0,
-        status: 'running',
-        startedAt: '2026-03-10T10:00:01Z',
-        completedAt: null,
-        endedAt: null,
-        durationSeconds: null,
-        firstEntryAt: null,
-        lastEntryAt: null,
-        bufferedEntryCount: 0,
-        totalEntryCount: 0,
-      },
-      entries: [],
+    const pendingStream = buildStream('task-pending', 'pending', {
+      order: 1,
+      totalEntryCount: 0,
+      bufferedEntryCount: 0,
+      firstEntryAt: null,
+      lastEntryAt: null,
     });
 
-    render(<LogViewer runId="run-logs-4" runStatus="failed" />);
+    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue(
+      buildSummary('run-logs-test', [mainStream, pendingStream]),
+    );
+    vi.spyOn(api, 'fetchRunLogsForTask').mockImplementation(async (_runId, taskId) => {
+      const stream = taskId === 'main' ? mainStream : pendingStream;
+      return buildStreamResponse(taskId, [], stream, ['main', 'task-pending']);
+    });
 
-    const workerButton = await screen.findByRole('button', { name: /task-4/i });
-    expect(workerButton).toHaveTextContent('失败');
-    expect(workerButton).toHaveTextContent('日志前即失败');
-    expect(workerButton).toHaveTextContent('已结束');
+    render(<LogViewer runId="run-logs-test" runStatus="completed" />);
 
-    await user.click(workerButton);
+    expect(await screen.findByRole('tabpanel')).toHaveAttribute(
+      'aria-labelledby',
+      'run-log-tab-main',
+    );
 
-    expect(await screen.findByText('工作线程在捕获日志前失败。')).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: '运行中' }));
+    expect(screen.getByText('当前没有运行中的工作线程。')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: '已结束 (1)' }));
+    const pendingButton = screen.getByRole('button', { name: /task-pending/i });
+    expect(pendingButton).toHaveTextContent('等待中');
+    expect(pendingButton).toHaveAttribute('aria-expanded', 'false');
+    expect(pendingButton).toHaveAttribute('aria-controls', 'finished-log-panel-task-pending');
   });
 
-  it('keeps active streams ahead of finished streams during live runs', async () => {
-    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
-      runId: 'run-logs-5',
-      streams: {
-        taskIds: ['task-done', 'main', 'task-pending', 'task-failed'],
-        counts: { main: 0, 'task-pending': 0, 'task-done': 0, 'task-failed': 0 },
-        maxEntriesPerStream: 50,
-        items: [
-          {
-            taskId: 'task-done',
-            order: 1,
-            status: 'completed',
-            startedAt: '2026-03-10T10:00:01Z',
-            completedAt: '2026-03-10T10:00:03Z',
-            endedAt: '2026-03-10T10:00:03Z',
-            durationSeconds: 2,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-          {
-            taskId: 'main',
-            order: 0,
-            status: 'running',
-            startedAt: '2026-03-10T10:00:00Z',
-            completedAt: null,
-            endedAt: null,
-            durationSeconds: null,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-          {
-            taskId: 'task-pending',
-            order: 2,
-            status: 'pending',
-            startedAt: null,
-            completedAt: null,
-            endedAt: null,
-            durationSeconds: null,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-          {
-            taskId: 'task-failed',
-            order: 3,
-            status: 'failed',
-            startedAt: '2026-03-10T10:00:04Z',
-            completedAt: null,
-            endedAt: '2026-03-10T10:00:05Z',
-            durationSeconds: 1,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-        ],
-        byTaskId: {
-          'task-done': {
-            taskId: 'task-done',
-            order: 1,
-            status: 'completed',
-            startedAt: '2026-03-10T10:00:01Z',
-            completedAt: '2026-03-10T10:00:03Z',
-            endedAt: '2026-03-10T10:00:03Z',
-            durationSeconds: 2,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-          main: {
-            taskId: 'main',
-            order: 0,
-            status: 'running',
-            startedAt: '2026-03-10T10:00:00Z',
-            completedAt: null,
-            endedAt: null,
-            durationSeconds: null,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-          'task-pending': {
-            taskId: 'task-pending',
-            order: 2,
-            status: 'pending',
-            startedAt: null,
-            completedAt: null,
-            endedAt: null,
-            durationSeconds: null,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-          'task-failed': {
-            taskId: 'task-failed',
-            order: 3,
-            status: 'failed',
-            startedAt: '2026-03-10T10:00:04Z',
-            completedAt: null,
-            endedAt: '2026-03-10T10:00:05Z',
-            durationSeconds: 1,
-            firstEntryAt: null,
-            lastEntryAt: null,
-            bufferedEntryCount: 0,
-            totalEntryCount: 0,
-          },
-        },
-      },
+  it('keeps polling the currently selected detail stream in the active view', async () => {
+    const mainStream = buildStream('main', 'running', {
+      order: 0,
+      totalEntryCount: 1,
+      bufferedEntryCount: 1,
+    });
+    const runningStream = buildStream('task-live', 'running', {
+      order: 1,
+      startedAt: '2026-03-10T10:00:01Z',
+      lastEntryAt: '2026-03-10T10:00:03Z',
+      totalEntryCount: 2,
+      bufferedEntryCount: 2,
     });
 
-    render(<LogViewer runId="run-logs-5" runStatus="running" />);
+    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () =>
+      buildSummary('run-logs-test', [mainStream, runningStream]),
+    );
 
-    const buttons = await screen.findAllByRole('button');
-    expect(buttons[0]).toHaveTextContent('main');
-    expect(buttons[1]).toHaveTextContent('task-pending');
-    expect(buttons[2]).toHaveTextContent('task-done');
-    expect(buttons[3]).toHaveTextContent('task-failed');
-  });
+    let taskLiveCalls = 0;
+    const fetchRunLogsForTaskSpy = vi
+      .spyOn(api, 'fetchRunLogsForTask')
+      .mockImplementation(async (_runId, taskId) => {
+        if (taskId === 'main') {
+          return buildStreamResponse('main', ['main line'], mainStream, ['main', 'task-live']);
+        }
 
-  it.each(['completed', 'failed'] as const)(
-    'keeps pure appearance order after a %s run ends',
-    async (runStatus) => {
-      vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
-        runId: `run-logs-${runStatus}`,
-        streams: {
-          taskIds: ['task-done', 'main', 'task-pending', 'task-failed'],
-          counts: { main: 0, 'task-pending': 0, 'task-done': 0, 'task-failed': 0 },
-          maxEntriesPerStream: 50,
-          items: [
-            {
-              taskId: 'task-done',
-              order: 1,
-              status: 'completed',
-              startedAt: '2026-03-10T10:00:01Z',
-              completedAt: '2026-03-10T10:00:03Z',
-              endedAt: '2026-03-10T10:00:03Z',
-              durationSeconds: 2,
-              firstEntryAt: null,
-              lastEntryAt: null,
-              bufferedEntryCount: 0,
-              totalEntryCount: 0,
-            },
-            {
-              taskId: 'main',
-              order: 0,
-              status: 'running',
-              startedAt: '2026-03-10T10:00:00Z',
-              completedAt: null,
-              endedAt: null,
-              durationSeconds: null,
-              firstEntryAt: null,
-              lastEntryAt: null,
-              bufferedEntryCount: 0,
-              totalEntryCount: 0,
-            },
-            {
-              taskId: 'task-pending',
-              order: 2,
-              status: 'pending',
-              startedAt: null,
-              completedAt: null,
-              endedAt: null,
-              durationSeconds: null,
-              firstEntryAt: null,
-              lastEntryAt: null,
-              bufferedEntryCount: 0,
-              totalEntryCount: 0,
-            },
-            {
-              taskId: 'task-failed',
-              order: 3,
-              status: 'failed',
-              startedAt: '2026-03-10T10:00:04Z',
-              completedAt: null,
-              endedAt: '2026-03-10T10:00:05Z',
-              durationSeconds: 1,
-              firstEntryAt: null,
-              lastEntryAt: null,
-              bufferedEntryCount: 0,
-              totalEntryCount: 0,
-            },
-          ],
-          byTaskId: {
-            'task-done': {
-              taskId: 'task-done',
-              order: 1,
-              status: 'completed',
-              startedAt: '2026-03-10T10:00:01Z',
-              completedAt: '2026-03-10T10:00:03Z',
-              endedAt: '2026-03-10T10:00:03Z',
-              durationSeconds: 2,
-              firstEntryAt: null,
-              lastEntryAt: null,
-              bufferedEntryCount: 0,
-              totalEntryCount: 0,
-            },
-            main: {
-              taskId: 'main',
-              order: 0,
-              status: 'running',
-              startedAt: '2026-03-10T10:00:00Z',
-              completedAt: null,
-              endedAt: null,
-              durationSeconds: null,
-              firstEntryAt: null,
-              lastEntryAt: null,
-              bufferedEntryCount: 0,
-              totalEntryCount: 0,
-            },
-            'task-pending': {
-              taskId: 'task-pending',
-              order: 2,
-              status: 'pending',
-              startedAt: null,
-              completedAt: null,
-              endedAt: null,
-              durationSeconds: null,
-              firstEntryAt: null,
-              lastEntryAt: null,
-              bufferedEntryCount: 0,
-              totalEntryCount: 0,
-            },
-            'task-failed': {
-              taskId: 'task-failed',
-              order: 3,
-              status: 'failed',
-              startedAt: '2026-03-10T10:00:04Z',
-              completedAt: null,
-              endedAt: '2026-03-10T10:00:05Z',
-              durationSeconds: 1,
-              firstEntryAt: null,
-              lastEntryAt: null,
-              bufferedEntryCount: 0,
-              totalEntryCount: 0,
-            },
+        taskLiveCalls += 1;
+
+        return buildStreamResponse(
+          'task-live',
+          taskLiveCalls > 1 ? ['first worker line', 'second worker line'] : ['first worker line'],
+          {
+            ...runningStream,
+            totalEntryCount: taskLiveCalls > 1 ? 3 : 2,
+            bufferedEntryCount: taskLiveCalls > 1 ? 3 : 2,
           },
-        },
+          ['main', 'task-live'],
+        );
       });
 
-      render(<LogViewer runId={`run-logs-${runStatus}`} runStatus={runStatus} />);
-
-      const buttons = await screen.findAllByRole('button');
-      expect(buttons[0]).toHaveTextContent('main');
-      expect(buttons[1]).toHaveTextContent('task-done');
-      expect(buttons[2]).toHaveTextContent('task-pending');
-      expect(buttons[3]).toHaveTextContent('task-failed');
-    },
-  );
-
-  it('keeps expanded logs visible during unchanged summary polling', async () => {
-    vi.useFakeTimers();
-
-    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () => buildSummary('run-logs-live'));
-
-    let resolveDetailPoll: ((value: ReturnType<typeof buildStreamResponse>) => void) | null = null;
-    const fetchRunLogsForTaskSpy = vi
-      .spyOn(api, 'fetchRunLogsForTask')
-      .mockImplementationOnce(async () => buildStreamResponse(['first line']))
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveDetailPoll = resolve;
-          }),
-      );
-
-    render(<LogViewer runId="run-logs-live" runStatus="running" />);
+    render(<LogViewer runId="run-logs-test" runStatus="running" />);
 
     await act(async () => {
       await Promise.resolve();
     });
 
-    const mainButton = screen.getByRole('button', { name: /main/i });
-    fireEvent.click(mainButton);
-
     await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: '运行中 (1)' }));
       await Promise.resolve();
     });
 
-    expect(screen.getByText('first line')).toBeInTheDocument();
-
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-
-    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('first line')).toBeInTheDocument();
-    expect(screen.queryByText('正在加载日志条目...')).not.toBeInTheDocument();
-
-    await act(async () => {
-      resolveDetailPoll?.(buildStreamResponse(['first line', 'second line']));
+      fireEvent.click(screen.getByRole('button', { name: /task-live/i }));
       await Promise.resolve();
     });
 
-    expect(screen.getByText('second line')).toBeInTheDocument();
-  });
-
-  it('preserves manual upward scroll and still tail-follows near the bottom', async () => {
-    vi.useFakeTimers();
-
-    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () => buildSummary('run-logs-live'));
-
-    const fetchRunLogsForTaskSpy = vi
-      .spyOn(api, 'fetchRunLogsForTask')
-      .mockResolvedValueOnce(buildStreamResponse(['first line', 'second line']))
-      .mockResolvedValueOnce(buildStreamResponse(['first line', 'second line', 'third line']))
-      .mockResolvedValueOnce(
-        buildStreamResponse(['first line', 'second line', 'third line', 'fourth line']),
-      );
-
-    render(<LogViewer runId="run-logs-live" runStatus="running" />);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const mainButton = screen.getByRole('button', { name: /main/i });
-    fireEvent.click(mainButton);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const panel = screen.getByRole('log', { name: 'main 的日志条目' });
-    let scrollHeight = 300;
-    Object.defineProperty(panel, 'clientHeight', {
-      configurable: true,
-      get: () => 100,
-    });
-    Object.defineProperty(panel, 'scrollHeight', {
-      configurable: true,
-      get: () => scrollHeight,
-    });
-
-    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
-
-    panel.scrollTop = 40;
-    fireEvent.scroll(panel);
-    scrollHeight = 360;
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText('third line')).toBeInTheDocument();
-    expect(panel.scrollTop).toBe(40);
-
-    panel.scrollTop = 348;
-    fireEvent.scroll(panel);
-    scrollHeight = 420;
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText('fourth line')).toBeInTheDocument();
-    expect(panel.scrollTop).toBe(420);
-  });
-
-  it('keeps rendered logs visible when summary polling fails after initial load', async () => {
-    vi.useFakeTimers();
-
-    const fetchRunLogsSpy = vi
-      .spyOn(api, 'fetchRunLogs')
-      .mockResolvedValueOnce(buildSummary('run-logs-live'))
-      .mockRejectedValueOnce(new Error('summary poll failed'));
-    vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue(buildStreamResponse(['first line']));
-
-    render(<LogViewer runId="run-logs-live" runStatus="running" />);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /main/i }));
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText('first line')).toBeInTheDocument();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-
-    expect(fetchRunLogsSpy).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('first line')).toBeInTheDocument();
-    expect(screen.getByRole('log', { name: 'main 的日志条目' })).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('summary poll failed');
-  });
-
-  it('updates row status from summary polling even after detail data was cached', async () => {
-    vi.useFakeTimers();
-
-    let summaryCalls = 0;
-    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () => {
-      summaryCalls += 1;
-
-      return {
-        runId: 'run-logs-status',
-        streams: {
-          taskIds: ['main'],
-          counts: { main: 1 },
-          maxEntriesPerStream: 50,
-          items: [
-            {
-              taskId: 'main',
-              order: 0,
-              status: summaryCalls === 1 ? 'running' : 'completed',
-              startedAt: '2026-03-10T10:00:00Z',
-              completedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
-              endedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
-              durationSeconds: summaryCalls === 1 ? null : 5,
-              firstEntryAt: '2026-03-10T10:00:00Z',
-              lastEntryAt: '2026-03-10T10:00:05Z',
-              bufferedEntryCount: 1,
-              totalEntryCount: 1,
-            },
-          ],
-          byTaskId: {
-            main: {
-              taskId: 'main',
-              order: 0,
-              status: summaryCalls === 1 ? 'running' : 'completed',
-              startedAt: '2026-03-10T10:00:00Z',
-              completedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
-              endedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
-              durationSeconds: summaryCalls === 1 ? null : 5,
-              firstEntryAt: '2026-03-10T10:00:00Z',
-              lastEntryAt: '2026-03-10T10:00:05Z',
-              bufferedEntryCount: 1,
-              totalEntryCount: 1,
-            },
-          },
-        },
-      };
-    });
-    const fetchRunLogsForTaskSpy = vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue({
-      runId: 'run-logs-status',
-      taskId: 'main',
-      availableTaskIds: ['main'],
-      maxEntriesPerStream: 50,
-      stream: {
-        taskId: 'main',
-        order: 0,
-        status: 'running',
-        startedAt: '2026-03-10T10:00:00Z',
-        completedAt: null,
-        endedAt: null,
-        durationSeconds: null,
-        firstEntryAt: '2026-03-10T10:00:00Z',
-        lastEntryAt: '2026-03-10T10:00:00Z',
-        bufferedEntryCount: 1,
-        totalEntryCount: 1,
+    await waitFor(
+      () => {
+        expect(screen.getByText('first worker line')).toBeInTheDocument();
       },
-      entries: [
-        {
-          sequence: 1,
-          timestamp: '2026-03-10T10:00:00Z',
-          taskId: 'main',
-          logger: 'comet.main',
-          level: 'INFO',
-          message: 'cached line',
-        },
-      ],
-    });
-
-    render(<LogViewer runId="run-logs-status" runStatus="running" />);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(screen.getByRole('button', { name: /main/i })).toHaveTextContent('运行中');
-
-    const mainButton = screen.getByRole('button', { name: /main/i });
-    fireEvent.click(mainButton);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText('cached line')).toBeInTheDocument();
-
-    fireEvent.click(mainButton);
-    expect(mainButton).toHaveAttribute('aria-expanded', 'false');
-    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-      await Promise.resolve();
-    });
-
-    expect(screen.getByRole('button', { name: /main/i })).toHaveTextContent('已完成');
-    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('updates timeline bar width from summary polling even after detail data was cached', async () => {
-    vi.useFakeTimers();
-
-    let summaryCalls = 0;
-    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async () => {
-      summaryCalls += 1;
-
-      return {
-        runId: 'run-logs-timeline',
-        streams: {
-          taskIds: ['main', 'task-2'],
-          counts: { main: 1, 'task-2': 1 },
-          maxEntriesPerStream: 50,
-          items: [
-            {
-              taskId: 'main',
-              order: 0,
-              status: summaryCalls === 1 ? 'running' : 'completed',
-              startedAt: '2026-03-10T10:00:00Z',
-              completedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
-              endedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
-              durationSeconds: summaryCalls === 1 ? null : 5,
-              firstEntryAt: '2026-03-10T10:00:00Z',
-              lastEntryAt: summaryCalls === 1 ? '2026-03-10T10:00:02Z' : '2026-03-10T10:00:05Z',
-              bufferedEntryCount: 1,
-              totalEntryCount: 1,
-            },
-            {
-              taskId: 'task-2',
-              order: 1,
-              status: 'running',
-              startedAt: '2026-03-10T10:00:00Z',
-              completedAt: null,
-              endedAt: null,
-              durationSeconds: null,
-              firstEntryAt: '2026-03-10T10:00:00Z',
-              lastEntryAt: '2026-03-10T10:00:10Z',
-              bufferedEntryCount: 1,
-              totalEntryCount: 1,
-            },
-          ],
-          byTaskId: {
-            main: {
-              taskId: 'main',
-              order: 0,
-              status: summaryCalls === 1 ? 'running' : 'completed',
-              startedAt: '2026-03-10T10:00:00Z',
-              completedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
-              endedAt: summaryCalls === 1 ? null : '2026-03-10T10:00:05Z',
-              durationSeconds: summaryCalls === 1 ? null : 5,
-              firstEntryAt: '2026-03-10T10:00:00Z',
-              lastEntryAt: summaryCalls === 1 ? '2026-03-10T10:00:02Z' : '2026-03-10T10:00:05Z',
-              bufferedEntryCount: 1,
-              totalEntryCount: 1,
-            },
-            'task-2': {
-              taskId: 'task-2',
-              order: 1,
-              status: 'running',
-              startedAt: '2026-03-10T10:00:00Z',
-              completedAt: null,
-              endedAt: null,
-              durationSeconds: null,
-              firstEntryAt: '2026-03-10T10:00:00Z',
-              lastEntryAt: '2026-03-10T10:00:10Z',
-              bufferedEntryCount: 1,
-              totalEntryCount: 1,
-            },
-          },
-        },
-      };
-    });
-
-    const fetchRunLogsForTaskSpy = vi.spyOn(api, 'fetchRunLogsForTask').mockResolvedValue({
-      runId: 'run-logs-timeline',
-      taskId: 'main',
-      availableTaskIds: ['main', 'task-2'],
-      maxEntriesPerStream: 50,
-      stream: {
-        taskId: 'main',
-        order: 0,
-        status: 'running',
-        startedAt: '2026-03-10T10:00:00Z',
-        completedAt: null,
-        endedAt: null,
-        durationSeconds: null,
-        firstEntryAt: '2026-03-10T10:00:00Z',
-        lastEntryAt: '2026-03-10T10:00:02Z',
-        bufferedEntryCount: 1,
-        totalEntryCount: 1,
-      },
-      entries: [
-        {
-          sequence: 1,
-          timestamp: '2026-03-10T10:00:00Z',
-          taskId: 'main',
-          logger: 'comet.main',
-          level: 'INFO',
-          message: 'cached line',
-        },
-      ],
-    });
-
-    render(<LogViewer runId="run-logs-timeline" runStatus="running" />);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const mainButton = screen.getByRole('button', { name: /main/i });
-    const initialBar = mainButton.querySelector('.run-log-row__bar');
-    expect(initialBar).not.toBeNull();
-    expect(initialBar).toHaveAttribute('style', expect.stringContaining('width: 20%'));
-
-    fireEvent.click(mainButton);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText('cached line')).toBeInTheDocument();
-    fireEvent.click(mainButton);
-    expect(mainButton).toHaveAttribute('aria-expanded', 'false');
-    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-      await Promise.resolve();
-    });
-
-    const updatedBar = screen
-      .getByRole('button', { name: /main/i })
-      .querySelector('.run-log-row__bar');
-    expect(updatedBar).not.toBeNull();
-    expect(updatedBar).toHaveAttribute('style', expect.stringContaining('width: 50%'));
-    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('clears expanded log state when the run id changes', async () => {
-    vi.spyOn(api, 'fetchRunLogs').mockImplementation(async (requestedRunId) =>
-      buildSummary(requestedRunId),
+      { timeout: 2000 },
     );
-    vi.spyOn(api, 'fetchRunLogsForTask').mockImplementation(async (_runId, taskId) => ({
-      ...buildStreamResponse(['first line']),
-      taskId,
-    }));
 
-    const view = render(<LogViewer runId="run-logs-live" runStatus="running" />);
+    await waitFor(
+      () => {
+        expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-test', 'task-live');
+        expect(screen.getByText('second worker line')).toBeInTheDocument();
+      },
+      { timeout: 2000 },
+    );
 
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /main/i }));
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText('first line')).toBeInTheDocument();
-
-    view.rerender(<LogViewer runId="run-logs-next" runStatus="running" />);
-
-    await waitFor(() => {
-      expect(screen.queryByText('first line')).not.toBeInTheDocument();
-    });
-    expect(screen.getByRole('button', { name: /main/i })).toHaveAttribute('aria-expanded', 'false');
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-test', 'main');
+    expect(screen.queryByText('main line')).not.toBeInTheDocument();
   });
 });

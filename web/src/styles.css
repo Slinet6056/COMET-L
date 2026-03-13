@@ -528,8 +528,17 @@ code {
   font-weight: 600;
 }
 
+.run-log-viewer__toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
 .run-log-viewer__toolbar {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
 }
 
@@ -537,26 +546,87 @@ code {
   margin: 0;
 }
 
+.run-log-viewer__tab {
+  min-width: 0;
+}
+
+.run-log-viewer__tab--active {
+  border-color: #0b6e4f;
+  background: #effcf6;
+  color: #0b6e4f;
+}
+
+.run-log-viewer__content,
+.run-log-viewer__detail,
+.run-log-viewer__pagination {
+  display: grid;
+}
+
+.run-log-viewer__content,
+.run-log-viewer__detail {
+  gap: 0.75rem;
+}
+
+.run-log-viewer__detail {
+  padding: 0;
+}
+
+.run-log-viewer__pagination {
+  grid-template-columns: auto 1fr auto;
+  justify-content: end;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.run-log-viewer__pagination .muted-copy {
+  text-align: center;
+}
+
+.run-log-viewer__pager-button {
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem;
+  background: #f8fbff;
+  color: #52606d;
+  font: inherit;
+  cursor: pointer;
+}
+
+.run-log-viewer__pager-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .run-log-timeline {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
 
 .run-log-timeline__axis {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-  padding-left: clamp(11rem, 32%, 16rem);
+  grid-template-columns: minmax(14rem, 1.5fr) minmax(9rem, 0.8fr) 4rem;
+  gap: 0.8rem;
   color: #52606d;
   font-size: 0.78rem;
+  align-items: center;
 }
 
-.run-log-timeline__axis span:nth-child(2) {
+.run-log-timeline__axis-labels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.run-log-timeline__axis-labels span:nth-child(2) {
   text-align: center;
 }
 
-.run-log-timeline__axis span:last-child {
+.run-log-timeline__axis-labels span:last-child {
   text-align: right;
+}
+
+.run-log-timeline__axis-spacer:last-child {
+  justify-self: end;
 }
 
 .run-log-timeline__rows {
@@ -574,7 +644,7 @@ code {
 
 .run-log-row {
   display: grid;
-  grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(14rem, 1.5fr) minmax(9rem, 0.8fr) auto;
   gap: 0.8rem;
   width: 100%;
   padding: 0.55rem 0.65rem;
@@ -616,8 +686,9 @@ code {
 }
 
 .run-log-row__stats {
-  grid-template-columns: repeat(3, minmax(0, auto));
-  gap: 0.5rem 0.8rem;
+  grid-template-columns: minmax(0, 8.5rem) 4rem 4.75rem;
+  justify-content: start;
+  gap: 0.3rem 1rem;
   color: #52606d;
   font-size: 0.8rem;
 }
@@ -635,6 +706,7 @@ code {
   font-size: 0.82rem;
   font-weight: 600;
   white-space: nowrap;
+  justify-self: end;
 }
 
 .run-log-row__track {
@@ -667,7 +739,7 @@ code {
 .run-log-terminal {
   display: grid;
   gap: 0.2rem;
-  max-height: 24rem;
+  max-height: 32rem;
   overflow: auto;
   padding: 0.65rem 0.75rem;
   border-radius: 10px;
@@ -817,6 +889,14 @@ code {
 
   .run-log-timeline__axis {
     padding-left: 0;
+  }
+
+  .run-log-viewer__pagination {
+    grid-template-columns: 1fr;
+  }
+
+  .run-log-viewer__toolbar-row {
+    align-items: stretch;
   }
 
   .run-log-row {
