@@ -10,7 +10,7 @@ from ..executor.coverage_parser import CoverageParser
 from ..executor.java_executor import JavaExecutor
 from ..llm.client import LLMClient
 from ..store.database import Database
-from ..utils.log_context import log_context
+from ..utils.log_context import log_context, submit_with_log_context
 from ..utils.sandbox import SandboxManager
 from .state import ParallelAgentState, WorkerResult
 from .target_selector import TargetSelector
@@ -380,13 +380,15 @@ class ParallelPlannerAgent:
             mutant_result = None
 
             with ThreadPoolExecutor(max_workers=2) as gen_executor:
-                test_future = gen_executor.submit(
+                test_future = submit_with_log_context(
+                    gen_executor,
                     self._generate_tests_in_sandbox,
                     sandbox_path,
                     class_name,
                     method_name,
                 )
-                mutant_future = gen_executor.submit(
+                mutant_future = submit_with_log_context(
+                    gen_executor,
                     self._generate_mutants_in_sandbox,
                     sandbox_path,
                     class_name,

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypedDict, cast
 
 from .models import TestCase, TestMethod
-from .utils.log_context import log_context
+from .utils.log_context import log_context, submit_with_log_context
 
 logger = logging.getLogger(__name__)
 
@@ -1084,8 +1084,12 @@ class ParallelPreprocessor:
 
         # 在两个独立沙箱中并行验证
         with ThreadPoolExecutor(max_workers=2) as executor:
-            left_future = executor.submit(self._validate_test_classes_in_sandbox, left_cases)
-            right_future = executor.submit(self._validate_test_classes_in_sandbox, right_cases)
+            left_future = submit_with_log_context(
+                executor, self._validate_test_classes_in_sandbox, left_cases
+            )
+            right_future = submit_with_log_context(
+                executor, self._validate_test_classes_in_sandbox, right_cases
+            )
 
             left_valid = left_future.result()
             right_valid = right_future.result()
@@ -1473,7 +1477,8 @@ class ParallelPreprocessor:
 
         # 在两个独立沙箱中并行验证
         with ThreadPoolExecutor(max_workers=2) as executor:
-            left_future = executor.submit(
+            left_future = submit_with_log_context(
+                executor,
                 self._validate_methods_in_sandbox,
                 left_methods,
                 test_class_name,
@@ -1481,7 +1486,8 @@ class ParallelPreprocessor:
                 package_name,
                 imports,
             )
-            right_future = executor.submit(
+            right_future = submit_with_log_context(
+                executor,
                 self._validate_methods_in_sandbox,
                 right_methods,
                 test_class_name,

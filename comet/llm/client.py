@@ -11,6 +11,8 @@ import httpx
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
 
+from comet.utils.log_context import submit_with_log_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -128,7 +130,7 @@ class LLMClient:
 
                 # 使用 with 语句确保 executor 被正确清理
                 with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_make_request)
+                    future = submit_with_log_context(executor, _make_request)
 
                     try:
                         response: ChatCompletion = future.result(timeout=self.timeout)
