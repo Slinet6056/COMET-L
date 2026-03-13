@@ -508,20 +508,28 @@ class RAGKnowledgeBase(KnowledgeBase):
 
         chunker = MethodAnalysisChunker()
 
+        documents = []
+
         # 分析结果中的每个方法
         methods = analysis_result.get("methods", [])
         for method in methods:
             chunks = chunker.chunk_method_analysis(method, class_name)
 
             for chunk in chunks:
-                doc = Document(
-                    id=f"analysis_{class_name}_{method.get('name', 'unknown')}_{chunk.chunk_index}",
-                    content=chunk.content,
-                    metadata=chunk.metadata,
+                documents.append(
+                    Document(
+                        id=f"analysis_{class_name}_{method.get('name', 'unknown')}_{chunk.chunk_index}",
+                        content=chunk.content,
+                        metadata=chunk.metadata,
+                    )
                 )
-                self.vector_store.add_single(KnowledgeType.SOURCE_ANALYSIS, doc)
 
-        logger.info(f"索引了 {class_name} 的 {len(methods)} 个方法分析结果")
+        if documents:
+            self.vector_store.add(KnowledgeType.SOURCE_ANALYSIS, documents)
+
+        logger.info(
+            f"索引了 {class_name} 的 {len(methods)} 个方法分析结果，共 {len(documents)} 个分析块"
+        )
 
     def index_bug_reports(self, bug_reports_dir: str) -> int:
         """
