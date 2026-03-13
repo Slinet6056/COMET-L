@@ -148,6 +148,24 @@ class JavaExecutor:
             parsed.setdefault("stderr", result.get("stderr", ""))
         return parsed if isinstance(parsed, dict) else None
 
+    def _normalize_maven_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(result)
+
+        if normalized.get("success", False):
+            return normalized
+
+        error_msg = str(normalized.get("error") or "").strip()
+        output = str(normalized.get("output") or "").strip()
+        stderr = str(normalized.get("stderr") or "").strip()
+        stdout = str(normalized.get("stdout") or "").strip()
+
+        detailed_error = error_msg or output or stderr or stdout
+        if detailed_error:
+            normalized["error"] = detailed_error
+            normalized.setdefault("output", detailed_error)
+
+        return normalized
+
     def _kill_process_tree(self, process: subprocess.Popen[str]) -> None:
         """
         杀死进程及其所有子进程
@@ -350,13 +368,13 @@ class JavaExecutor:
 
         parsed = self._try_parse_json_stdout(result)
         if parsed is not None:
-            return parsed
+            return self._normalize_maven_result(parsed)
         if result.get("success"):
             try:
                 return json.loads(result["stdout"])
             except json.JSONDecodeError:
                 return {"success": False, "error": "Failed to parse output"}
-        return result
+        return self._normalize_maven_result(result)
 
     def compile_tests(self, project_path: str) -> Dict[str, Any]:
         """
@@ -375,7 +393,7 @@ class JavaExecutor:
 
         parsed = self._try_parse_json_stdout(result)
         if parsed is not None:
-            return parsed
+            return self._normalize_maven_result(parsed)
 
         if result.get("success"):
             try:
@@ -451,7 +469,7 @@ class JavaExecutor:
 
         parsed = self._try_parse_json_stdout(result)
         if parsed is not None:
-            return parsed
+            return self._normalize_maven_result(parsed)
 
         if result.get("success"):
             try:
@@ -462,7 +480,7 @@ class JavaExecutor:
                     "success": True,
                     "raw_output": result["stdout"],
                 }
-        return result
+        return self._normalize_maven_result(result)
 
     def run_tests_with_coverage(self, project_path: str) -> Dict[str, Any]:
         """
@@ -482,7 +500,7 @@ class JavaExecutor:
 
         parsed = self._try_parse_json_stdout(result)
         if parsed is not None:
-            return parsed
+            return self._normalize_maven_result(parsed)
 
         if result.get("success"):
             try:
@@ -492,7 +510,7 @@ class JavaExecutor:
                     "success": True,
                     "raw_output": result["stdout"],
                 }
-        return result
+        return self._normalize_maven_result(result)
 
     def run_single_test_method(
         self, project_path: str, test_class: str, test_method: str
