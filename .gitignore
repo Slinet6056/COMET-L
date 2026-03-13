@@ -76,8 +76,5 @@ Thumbs.db
 
 TODO.md
 
-# Dolt database files (added by bd init)
-.dolt/
-
 # OMO
 .sisyphus/
