@@ -191,6 +191,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         store: KnowledgeStore,
         config: Optional[KnowledgeConfig] = None,
         llm_api_key: Optional[str] = None,
+        vector_store_directory: Optional[str] = None,
     ):
         """
         初始化 RAG 知识库
@@ -203,6 +204,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         super().__init__(store)
         self.config: KnowledgeConfig | None = config
         self.llm_api_key: str | None = llm_api_key
+        self.vector_store_directory = vector_store_directory
 
         # RAG 组件（延迟初始化）
         self._embedding_service: EmbeddingService | None = None
@@ -256,8 +258,10 @@ class RAGKnowledgeBase(KnowledgeBase):
                 from .retriever import KnowledgeRetriever
                 from .vector_store import VectorStore
 
+                vector_store_directory = self.vector_store_directory or "./state/chromadb"
+
                 # 初始化 Embedding 服务
-                cache_dir = str(Path(config.vector_db.persist_directory) / "embedding_cache")
+                cache_dir = str(Path(vector_store_directory) / "embedding_cache")
                 embedding_service = EmbeddingService.from_config(
                     config.embedding,
                     llm_api_key=self.llm_api_key,
@@ -265,9 +269,9 @@ class RAGKnowledgeBase(KnowledgeBase):
                 )
 
                 # 初始化向量存储
-                vector_store = VectorStore.from_config(
-                    config.vector_db,
+                vector_store = VectorStore(
                     embedding_service,
+                    persist_directory=vector_store_directory,
                 )
 
                 # 初始化检索器
@@ -601,6 +605,7 @@ def create_knowledge_base(
     store: KnowledgeStore,
     config: Optional[KnowledgeConfig] = None,
     llm_api_key: Optional[str] = None,
+    vector_store_directory: Optional[str] = None,
 ) -> KnowledgeBase:
     """
     创建知识库实例
@@ -614,5 +619,5 @@ def create_knowledge_base(
         KnowledgeBase 实例（RAG 或传统模式）
     """
     if config and config.enabled:
-        return RAGKnowledgeBase(store, config, llm_api_key)
+        return RAGKnowledgeBase(store, config, llm_api_key, vector_store_directory)
     return KnowledgeBase(store)

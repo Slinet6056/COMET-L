@@ -147,11 +147,11 @@ class RunLifecycleService:
                 config_path=request.config_path,
                 paths=scoped_paths,
                 path_snapshot={
-                    "cache": config.paths.cache,
+                    "state": config.paths.state,
                     "output": config.paths.output,
                     "sandbox": config.paths.sandbox,
                     "log": config.logging.file,
-                    "database": str(Path(config.paths.cache) / "comet.db"),
+                    "database": str(Path(config.paths.state) / "comet.db"),
                 },
                 config_snapshot=config.to_dict(),
             )
@@ -586,7 +586,7 @@ class RunLifecycleService:
 
     def _build_artifacts(self, session: RunSession) -> dict[str, dict[str, object]]:
         paths = {
-            "cache": session.paths["cache"],
+            "state": session.paths["state"],
             "output": session.paths["output"],
             "sandbox": session.paths["sandbox"],
             "log": session.paths["log"],
@@ -809,18 +809,18 @@ class RunLifecycleService:
         return f"run-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
 
     def _build_scoped_paths(self, run_id: str) -> dict[str, str]:
-        cache_root = self.workspace_root / "cache" / "runs" / run_id
+        state_root = self.workspace_root / "state" / "runs" / run_id
         output_root = self.workspace_root / "output" / "runs" / run_id
         sandbox_root = self.workspace_root / "sandbox" / "runs" / run_id
         log_file = self.workspace_root / "logs" / "runs" / run_id / "run.log"
 
         return {
-            "cache": str(cache_root),
+            "state": str(state_root),
             "output": str(output_root),
             "sandbox": str(sandbox_root),
             "log": str(log_file),
-            "database": str(cache_root / "comet.db"),
-            "knowledge_database": str(cache_root / "knowledge.db"),
+            "database": str(state_root / "comet.db"),
+            "knowledge_database": str(state_root / "knowledge.db"),
             "final_state": str(output_root / "final_state.json"),
             "interrupted_state": str(output_root / "interrupted_state.json"),
             "resolved_config": str(output_root / "resolved_config.json"),
@@ -830,7 +830,7 @@ class RunLifecycleService:
         self, request: RunRequest, scoped_paths: dict[str, str]
     ) -> RunRequest:
         path_overrides = dict(request.path_overrides)
-        path_overrides["cache"] = scoped_paths["cache"]
+        path_overrides["state"] = scoped_paths["state"]
         path_overrides["output"] = scoped_paths["output"]
         path_overrides["sandbox"] = scoped_paths["sandbox"]
 
@@ -851,7 +851,7 @@ class RunLifecycleService:
         )
 
     def _ensure_scoped_directories(self, scoped_paths: dict[str, str]) -> None:
-        for key in ["cache", "output", "sandbox"]:
+        for key in ["state", "output", "sandbox"]:
             Path(scoped_paths[key]).mkdir(parents=True, exist_ok=True)
         Path(scoped_paths["log"]).parent.mkdir(parents=True, exist_ok=True)
 

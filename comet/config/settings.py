@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class LLMConfig(BaseModel):
@@ -152,9 +152,16 @@ class ExecutionConfig(BaseModel):
 class PathsConfig(BaseModel):
     """路径配置"""
 
-    cache: str = Field(default="./cache", description="缓存目录")
+    state: str = Field(default="./state", description="状态目录")
     output: str = Field(default="./output", description="输出目录")
     sandbox: str = Field(default="./sandbox", description="沙箱目录")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_cache_key(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "cache" in data:
+            raise ValueError("`paths.cache` 已移除，请改用 `paths.state`")
+        return data
 
 
 class EvolutionConfig(BaseModel):
@@ -196,13 +203,6 @@ class EmbeddingConfig(BaseModel):
     batch_size: int = Field(default=100, ge=1, description="批量 embedding 的大小")
 
 
-class VectorDBConfig(BaseModel):
-    """向量数据库配置"""
-
-    type: str = Field(default="chromadb", description="向量数据库类型")
-    persist_directory: str = Field(default="./cache/chromadb", description="持久化目录")
-
-
 class RetrievalConfig(BaseModel):
     """检索配置"""
 
@@ -222,7 +222,6 @@ class KnowledgeConfig(BaseModel):
     embedding: EmbeddingConfig = Field(
         default_factory=EmbeddingConfig, description="Embedding 配置"
     )
-    vector_db: VectorDBConfig = Field(default_factory=VectorDBConfig, description="向量数据库配置")
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig, description="检索配置")
 
 
@@ -331,9 +330,24 @@ class Settings(BaseModel):
 
     def ensure_directories(self) -> None:
         """确保所有配置的目录存在"""
-        for path_name in ["cache", "output", "sandbox"]:
+        for path_name in ["state", "output", "sandbox"]:
             path = Path(getattr(self.paths, path_name))
             path.mkdir(parents=True, exist_ok=True)
+
+    def resolve_state_root(self) -> Path:
+        return Path(self.paths.state)
+
+    def resolve_database_path(self) -> Path:
+        return self.resolve_state_root() / "comet.db"
+
+    def resolve_knowledge_database_path(self) -> Path:
+        return self.resolve_state_root() / "knowledge.db"
+
+    def resolve_vector_store_path(self) -> Path:
+        return self.resolve_state_root() / "chromadb"
+
+    def resolve_embedding_cache_path(self) -> Path:
+        return self.resolve_vector_store_path() / "embedding_cache"
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""

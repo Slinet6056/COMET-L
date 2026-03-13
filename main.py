@@ -142,14 +142,15 @@ def initialize_system(
     logger.info(f"LLM 客户端初始化: {config.llm.model} (timeout={config.llm.timeout}s)")
 
     # 初始化存储
-    db = Database(db_path=f"{config.paths.cache}/comet.db")
-    knowledge_store = KnowledgeStore(db_path=f"{config.paths.cache}/knowledge.db")
+    db = Database(db_path=str(config.resolve_database_path()))
+    knowledge_store = KnowledgeStore(db_path=str(config.resolve_knowledge_database_path()))
 
     # 创建知识库（支持 RAG 模式）
     knowledge_base = create_knowledge_base(
         store=knowledge_store,
         config=config.knowledge,
         llm_api_key=config.llm.api_key,
+        vector_store_directory=str(config.resolve_vector_store_path()),
     )
 
     if config.knowledge.enabled:

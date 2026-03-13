@@ -33,7 +33,7 @@ class RunServiceIsolationTests(unittest.TestCase):
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
                 paths=PathsConfig(
-                    cache=str(root / "cache"),
+                    state=str(root / "state"),
                     output=str(root / "output"),
                     sandbox=str(root / "sandbox"),
                 ),
@@ -104,7 +104,7 @@ class RunServiceIsolationTests(unittest.TestCase):
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
                 paths=PathsConfig(
-                    cache=str(root / "cache"),
+                    state=str(root / "state"),
                     output=str(root / "output"),
                     sandbox=str(root / "sandbox"),
                 ),
@@ -181,7 +181,7 @@ class RunLifecycleTests(unittest.TestCase):
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
                 paths=PathsConfig(
-                    cache=str(root / "cache"),
+                    state=str(root / "state"),
                     output=str(root / "output"),
                     sandbox=str(root / "sandbox"),
                 ),
@@ -198,16 +198,16 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(session.status, "created")
             self.assertEqual(service.active_run_id(), run_id)
 
-            self.assertEqual(session.paths["cache"], str(root / "cache" / "runs" / run_id))
+            self.assertEqual(session.paths["state"], str(root / "state" / "runs" / run_id))
             self.assertEqual(session.paths["output"], str(root / "output" / "runs" / run_id))
             self.assertEqual(session.paths["sandbox"], str(root / "sandbox" / "runs" / run_id))
             self.assertEqual(session.paths["log"], str(root / "logs" / "runs" / run_id / "run.log"))
             self.assertEqual(
                 session.paths["database"],
-                str(root / "cache" / "runs" / run_id / "comet.db"),
+                str(root / "state" / "runs" / run_id / "comet.db"),
             )
 
-            self.assertEqual(session.path_snapshot["cache"], session.paths["cache"])
+            self.assertEqual(session.path_snapshot["state"], session.paths["state"])
             self.assertEqual(session.path_snapshot["output"], session.paths["output"])
             self.assertEqual(session.path_snapshot["sandbox"], session.paths["sandbox"])
             self.assertEqual(session.path_snapshot["log"], session.paths["log"])
@@ -215,10 +215,11 @@ class RunLifecycleTests(unittest.TestCase):
             resolved_config_path = Path(session.paths["resolved_config"])
             self.assertTrue(resolved_config_path.exists())
             resolved_snapshot = json.loads(resolved_config_path.read_text(encoding="utf-8"))
-            self.assertEqual(resolved_snapshot["paths"]["cache"], session.paths["cache"])
+            self.assertEqual(resolved_snapshot["paths"]["state"], session.paths["state"])
             self.assertEqual(resolved_snapshot["paths"]["output"], session.paths["output"])
             self.assertEqual(resolved_snapshot["paths"]["sandbox"], session.paths["sandbox"])
             self.assertEqual(resolved_snapshot["logging"]["file"], session.paths["log"])
+            self.assertNotIn("vector_db", resolved_snapshot["knowledge"])
 
     def test_second_active_run_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -231,7 +232,7 @@ class RunLifecycleTests(unittest.TestCase):
                 llm=LLMConfig(api_key="test-key"),
                 logging=LoggingConfig(file=str(root / "default.log")),
                 paths=PathsConfig(
-                    cache=str(root / "cache"),
+                    state=str(root / "state"),
                     output=str(root / "output"),
                     sandbox=str(root / "sandbox"),
                 ),

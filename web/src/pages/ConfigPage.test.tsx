@@ -29,7 +29,7 @@ const defaultConfig = {
     maven_home: null,
   },
   paths: {
-    cache: './cache',
+    state: './state',
     output: './output',
     sandbox: './sandbox',
   },
@@ -53,10 +53,6 @@ const defaultConfig = {
       api_key: null,
       model: 'text-embedding-3-small',
       batch_size: 100,
-    },
-    vector_db: {
-      type: 'chromadb',
-      persist_directory: './cache/chromadb',
     },
     retrieval: {
       top_k: 5,

@@ -49,7 +49,7 @@ class VectorStore:
     def __init__(
         self,
         embedding_service: EmbeddingService,
-        persist_directory: str = "./cache/chromadb",
+        persist_directory: str = "./state/chromadb",
     ):
         """
         初始化向量存储
@@ -404,24 +404,3 @@ class VectorStore:
             except Exception:
                 stats[kt] = 0
         return stats
-
-    @classmethod
-    def from_config(
-        cls,
-        vector_db_config: Any,
-        embedding_service: EmbeddingService,
-    ) -> "VectorStore":
-        """
-        从配置创建 VectorStore
-
-        Args:
-            vector_db_config: VectorDBConfig 对象
-            embedding_service: Embedding 服务
-
-        Returns:
-            VectorStore 实例
-        """
-        return cls(
-            embedding_service=embedding_service,
-            persist_directory=vector_db_config.persist_directory,
-        )

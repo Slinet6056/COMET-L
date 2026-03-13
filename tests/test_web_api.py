@@ -46,7 +46,7 @@ class ConfigApiTests(unittest.TestCase):
         payload = response.json()
         self.assertIn("config", payload)
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4")
-        self.assertEqual(payload["config"]["paths"]["cache"], "./cache")
+        self.assertEqual(payload["config"]["paths"]["state"], "./state")
 
     def test_parse_valid_yaml_returns_normalized_config(self) -> None:
         client = TestClient(create_app(run_service=RunLifecycleService()))

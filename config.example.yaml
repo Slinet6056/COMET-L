@@ -20,7 +20,7 @@ execution:
   maven_home: null # 留空使用系统默认
 
 paths:
-  cache: "./cache"
+  state: "./state"
   output: "./output"
   sandbox: "./sandbox"
 
@@ -46,10 +46,6 @@ knowledge:
     api_key: null # 留空则使用 llm.api_key
     model: "text-embedding-3-small" # Embedding 模型名称
     batch_size: 100 # 批量 embedding 的大小
-  # 向量数据库配置
-  vector_db:
-    type: "chromadb" # 向量数据库类型
-    persist_directory: "./cache/chromadb" # 持久化目录
   # 检索配置
   retrieval:
     top_k: 5 # 每次检索返回的文档数

@@ -140,9 +140,9 @@ export const CONFIG_SECTIONS: ConfigSectionDefinition[] = [
   {
     key: 'paths',
     title: '路径',
-    description: '缓存、输出和沙箱目录。',
+    description: '状态、输出和沙箱目录。',
     fields: [
-      { path: ['paths', 'cache'], label: '缓存目录', description: '缓存输出目录。', kind: 'text' },
+      { path: ['paths', 'state'], label: '状态目录', description: '运行状态目录。', kind: 'text' },
       { path: ['paths', 'output'], label: '输出目录', description: '运行输出目录。', kind: 'text' },
       {
         path: ['paths', 'sandbox'],
@@ -218,7 +218,7 @@ export const CONFIG_SECTIONS: ConfigSectionDefinition[] = [
   {
     key: 'knowledge',
     title: '知识库',
-    description: 'RAG、嵌入、向量库和检索行为。',
+    description: 'RAG、嵌入和检索行为。',
     fields: [
       {
         path: ['knowledge', 'enabled'],
@@ -269,18 +269,6 @@ export const CONFIG_SECTIONS: ConfigSectionDefinition[] = [
         description: '嵌入请求的批大小。',
         kind: 'number',
         step: '1',
-      },
-      {
-        path: ['knowledge', 'vector_db', 'type'],
-        label: '向量库类型',
-        description: '向量数据库驱动。',
-        kind: 'text',
-      },
-      {
-        path: ['knowledge', 'vector_db', 'persist_directory'],
-        label: '向量库目录',
-        description: '持久化向量数据库路径。',
-        kind: 'text',
       },
       {
         path: ['knowledge', 'retrieval', 'top_k'],

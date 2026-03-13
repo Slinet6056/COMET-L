@@ -45,6 +45,7 @@ target/
 # COMET-L specific
 workspace/
 cache/
+state/
 output/
 sandbox/
 examples/*/src/test/

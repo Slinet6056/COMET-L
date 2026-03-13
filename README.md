@@ -245,7 +245,7 @@ COMET-L/
 │   └── store/         # 数据存储
 ├── java-runtime/      # Java 执行模块
 ├── examples/          # 示例项目
-├── cache/             # 缓存目录（数据库、向量库）
+├── state/             # 状态目录（数据库、向量库）
 └── sandbox/           # 沙箱工作目录
 ```
 

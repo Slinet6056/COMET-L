@@ -1,7 +1,8 @@
 from typing import Any, cast
 from unittest import TestCase
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from comet.config.settings import EmbeddingConfig, KnowledgeConfig, RetrievalConfig
 from comet.knowledge.knowledge_base import RAGKnowledgeBase
 from comet.knowledge.vector_store import KnowledgeType
 
@@ -85,3 +86,49 @@ class RAGKnowledgeBaseIndexSourceAnalysisTests(TestCase):
         knowledge_base.index_source_analysis("Calculator", {"methods": []})
 
         knowledge_base.vector_store_mock.add.assert_not_called()
+
+
+class RAGKnowledgeBaseInitializationTests(TestCase):
+    def test_initialize_uses_run_scoped_vector_store_directory(self) -> None:
+        store = Mock()
+        config = KnowledgeConfig(
+            enabled=True,
+            embedding=EmbeddingConfig(api_key="embedding-key"),
+            retrieval=RetrievalConfig(top_k=3, score_threshold=0.2),
+        )
+        knowledge_base = RAGKnowledgeBase(
+            store=store,
+            config=config,
+            llm_api_key="llm-key",
+            vector_store_directory="/tmp/state/runs/run-001/chromadb",
+        )
+
+        embedding_service = Mock()
+        vector_store = Mock()
+        retriever = Mock()
+
+        with (
+            patch(
+                "comet.knowledge.embedding.EmbeddingService.from_config",
+                return_value=embedding_service,
+            ) as embedding_factory,
+            patch(
+                "comet.knowledge.vector_store.VectorStore", return_value=vector_store
+            ) as vector_cls,
+            patch(
+                "comet.knowledge.retriever.KnowledgeRetriever.from_config",
+                return_value=retriever,
+            ) as retriever_factory,
+        ):
+            self.assertTrue(knowledge_base.initialize())
+
+        embedding_factory.assert_called_once_with(
+            config.embedding,
+            llm_api_key="llm-key",
+            cache_dir="/tmp/state/runs/run-001/chromadb/embedding_cache",
+        )
+        vector_cls.assert_called_once_with(
+            embedding_service,
+            persist_directory="/tmp/state/runs/run-001/chromadb",
+        )
+        retriever_factory.assert_called_once_with(config.retrieval, vector_store)
