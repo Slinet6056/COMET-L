@@ -250,6 +250,167 @@ class RunLifecycleTests(unittest.TestCase):
                     settings_loader=lambda _: settings,
                 )
 
+    def test_persisted_sessions_are_restored_after_service_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+                paths=PathsConfig(
+                    state=str(root / "state"),
+                    output=str(root / "output"),
+                    sandbox=str(root / "sandbox"),
+                ),
+            )
+
+            service = RunLifecycleService(workspace_root=root)
+            session = service.create_run(
+                RunRequest(project_path=str(project_path), config_path="config.yaml"),
+                settings_loader=lambda _: settings,
+            )
+            run_id = session.run_id
+
+            state_payload = {
+                "iteration": 3,
+                "llm_calls": 7,
+                "budget": 21,
+                "total_tests": 5,
+                "total_mutants": 8,
+                "killed_mutants": 6,
+                "survived_mutants": 2,
+                "mutation_score": 0.75,
+                "line_coverage": 0.8,
+                "branch_coverage": 0.6,
+            }
+            final_state_path = Path(session.paths["final_state"])
+            final_state_path.parent.mkdir(parents=True, exist_ok=True)
+            final_state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+            service.mark_completed(run_id)
+
+            restored_service = RunLifecycleService(workspace_root=root)
+
+            restored_session = restored_service.get_session(run_id)
+            restored_snapshot = restored_service.build_snapshot(run_id)
+            self.assertEqual(restored_session.status, "completed")
+            self.assertEqual(restored_service.active_run_id(), None)
+            self.assertEqual(restored_snapshot["status"], "completed")
+            self.assertEqual(restored_snapshot["iteration"], 3)
+            self.assertEqual(restored_snapshot["metrics"]["totalTests"], 5)
+            self.assertEqual(restored_service.list_runs()[0]["runId"], run_id)
+
+    def test_restored_non_terminal_run_is_marked_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+                paths=PathsConfig(
+                    state=str(root / "state"),
+                    output=str(root / "output"),
+                    sandbox=str(root / "sandbox"),
+                ),
+            )
+
+            service = RunLifecycleService(workspace_root=root)
+            session = service.create_run(
+                RunRequest(project_path=str(project_path), config_path="config.yaml"),
+                settings_loader=lambda _: settings,
+            )
+
+            restored_service = RunLifecycleService(workspace_root=root)
+
+            restored_session = restored_service.get_session(session.run_id)
+            self.assertEqual(restored_session.status, "failed")
+            self.assertEqual(
+                restored_session.error,
+                "运行在 Web 服务重启后无法恢复，已标记为失败。",
+            )
+
+    def test_corrupted_state_file_does_not_break_restored_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+                paths=PathsConfig(
+                    state=str(root / "state"),
+                    output=str(root / "output"),
+                    sandbox=str(root / "sandbox"),
+                ),
+            )
+
+            service = RunLifecycleService(workspace_root=root)
+            session = service.create_run(
+                RunRequest(project_path=str(project_path), config_path="config.yaml"),
+                settings_loader=lambda _: settings,
+            )
+            Path(session.paths["final_state"]).parent.mkdir(parents=True, exist_ok=True)
+            Path(session.paths["final_state"]).write_text("{broken json", encoding="utf-8")
+            service.mark_completed(session.run_id)
+
+            restored_service = RunLifecycleService(workspace_root=root)
+
+            restored_snapshot = restored_service.build_snapshot(session.run_id)
+            self.assertEqual(restored_snapshot["status"], "completed")
+            self.assertEqual(restored_snapshot["iteration"], 0)
+            self.assertTrue(restored_snapshot["isHistorical"])
+
+    def test_invalid_manifest_paths_are_ignored_during_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            run_dir = root / "state" / "runs" / "run-bad"
+            run_dir.mkdir(parents=True)
+            (run_dir / "session.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "run-bad",
+                        "status": "completed",
+                        "created_at": "2026-03-13T00:00:00+00:00",
+                        "project_path": str(root / "project"),
+                        "config_path": "config.yaml",
+                        "paths": {
+                            "state": str(run_dir),
+                            "output": "/tmp/outside-output",
+                            "sandbox": str(root / "sandbox" / "runs" / "run-bad"),
+                            "log": str(root / "logs" / "runs" / "run-bad" / "run.log"),
+                            "database": str(root / "state" / "runs" / "run-bad" / "comet.db"),
+                            "resolved_config": str(run_dir / "resolved_config.json"),
+                            "final_state": str(
+                                root / "output" / "runs" / "run-bad" / "final_state.json"
+                            ),
+                            "interrupted_state": str(
+                                root / "output" / "runs" / "run-bad" / "interrupted_state.json"
+                            ),
+                        },
+                        "path_snapshot": {
+                            "state": str(run_dir),
+                            "output": str(root / "output" / "runs" / "run-bad"),
+                            "sandbox": str(root / "sandbox" / "runs" / "run-bad"),
+                            "log": str(root / "logs" / "runs" / "run-bad" / "run.log"),
+                            "database": str(root / "state" / "runs" / "run-bad" / "comet.db"),
+                        },
+                        "config_snapshot": {"agent": {"parallel": {"enabled": False}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            restored_service = RunLifecycleService(workspace_root=root)
+
+            self.assertEqual(restored_service.list_runs(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

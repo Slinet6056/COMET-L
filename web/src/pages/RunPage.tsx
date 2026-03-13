@@ -379,6 +379,25 @@ function buildActiveTargetSummary(
   });
 }
 
+function HistoricalLogNotice(props: { runId: string }) {
+  const { runId } = props;
+
+  return (
+    <section className="run-card" aria-labelledby="run-history-log-panel">
+      <p className="eyebrow">日志</p>
+      <h3 id="run-history-log-panel">历史日志</h3>
+      <p className="muted-copy">
+        这次运行是从已落盘记录中恢复出来的，实时日志缓冲区不会再重建。你仍然可以直接下载本次运行的
+        <code> run.log </code>
+        查看完整日志。
+      </p>
+      <Link to={`/api/runs/${runId}/artifacts/run-log`} className="artifact-link">
+        下载 run.log
+      </Link>
+    </section>
+  );
+}
+
 function StandardRunView(props: {
   runId: string;
   snapshot: RunSnapshot;
@@ -396,7 +415,9 @@ function StandardRunView(props: {
           <h2>运行状态</h2>
           <p className="run-page__lead">
             <code>{snapshot.runId}</code> 的标准模式快照，页面会先根据最新后端状态重建，
-            然后再恢复实时更新。
+            {snapshot.isHistorical
+              ? '当前展示的是历史快照，不会再恢复实时更新。'
+              : '然后再恢复实时更新。'}
           </p>
         </div>
 
@@ -501,6 +522,8 @@ function StandardRunView(props: {
         )}
       </section>
 
+      {snapshot.isHistorical ? <HistoricalLogNotice runId={runId} /> : null}
+
       <Link to={`/runs/${runId}/results`}>前往结果页</Link>
     </>
   );
@@ -526,7 +549,9 @@ function ParallelRunView(props: {
           <h2>并行运行状态</h2>
           <p className="run-page__lead">
             <code>{snapshot.runId}</code> 的并行模式快照，页面会先根据最新的批次感知后端状态恢复，
-            然后再继续实时更新。
+            {snapshot.isHistorical
+              ? '当前展示的是历史快照，不会再继续实时更新。'
+              : '然后再继续实时更新。'}
           </p>
         </div>
 
@@ -689,7 +714,11 @@ function ParallelRunView(props: {
         </section>
       )}
 
-      <LogViewer runId={runId} runStatus={snapshot.status} />
+      {snapshot.isHistorical ? (
+        <HistoricalLogNotice runId={runId} />
+      ) : (
+        <LogViewer runId={runId} runStatus={snapshot.status} />
+      )}
 
       <Link to={`/runs/${runId}/results`}>前往结果页</Link>
     </>

@@ -885,6 +885,103 @@ class ResultsApiTests(unittest.TestCase):
         self.assertEqual(payload["artifacts"]["finalState"]["exists"], False)
 
 
+class RunHistoryApiTests(unittest.TestCase):
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    root: Path | None = None
+    project_path: Path | None = None
+    run_service: RunLifecycleService | None = None
+    client: TestClient | None = None
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.project_path = self.root / "project"
+        self.project_path.mkdir()
+        (self.project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+        self.run_service = RunLifecycleService(workspace_root=self.root)
+        self.client = TestClient(create_app(run_service=self.run_service))
+
+    def tearDown(self) -> None:
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
+
+    def _create_run(self) -> str:
+        assert self.run_service is not None
+        assert self.project_path is not None
+        session = self.run_service.create_run(
+            RunRequest(project_path=str(self.project_path)),
+            settings_loader=lambda _config_path: Settings.model_validate(
+                {"llm": {"api_key": "default-key", "model": "gpt-4"}}
+            ),
+        )
+        return session.run_id
+
+    def test_history_endpoint_lists_runs_newest_first(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        first_run_id = self._create_run()
+        self.run_service.mark_failed(first_run_id, "boom")
+
+        second_run_id = self._create_run()
+        second_session = self.run_service.get_session(second_run_id)
+        Path(second_session.paths["final_state"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(second_session.paths["final_state"]).write_text(
+            json.dumps({"iteration": 2, "total_tests": 3, "mutation_score": 0.5}),
+            encoding="utf-8",
+        )
+        self.run_service.mark_completed(second_run_id)
+
+        response = self.client.get("/api/runs/history")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [item["runId"] for item in payload["items"]], [second_run_id, first_run_id]
+        )
+        self.assertEqual(payload["items"][0]["status"], "completed")
+        self.assertEqual(payload["items"][0]["iteration"], 2)
+        self.assertEqual(payload["items"][0]["metrics"]["totalTests"], 3)
+        self.assertEqual(payload["items"][1]["status"], "failed")
+        self.assertEqual(payload["items"][1]["error"], "boom")
+
+    def test_history_endpoint_ignores_runs_with_corrupted_manifest_or_state(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        valid_run_id = self._create_run()
+        valid_session = self.run_service.get_session(valid_run_id)
+        Path(valid_session.paths["final_state"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(valid_session.paths["final_state"]).write_text(
+            json.dumps({"iteration": 1, "total_tests": 2}),
+            encoding="utf-8",
+        )
+        self.run_service.mark_completed(valid_run_id)
+
+        broken_manifest_dir = self.root / "state" / "runs" / "run-broken"
+        broken_manifest_dir.mkdir(parents=True, exist_ok=True)
+        (broken_manifest_dir / "session.json").write_text("{broken", encoding="utf-8")
+
+        broken_state_run_id = self._create_run()
+        broken_state_session = self.run_service.get_session(broken_state_run_id)
+        Path(broken_state_session.paths["final_state"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(broken_state_session.paths["final_state"]).write_text("{broken", encoding="utf-8")
+        self.run_service.mark_completed(broken_state_run_id)
+
+        restored_service = RunLifecycleService(workspace_root=self.root)
+        restored_client = TestClient(create_app(run_service=restored_service))
+
+        response = restored_client.get("/api/runs/history")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [item["runId"] for item in payload["items"]],
+            [broken_state_run_id, valid_run_id],
+        )
+        self.assertEqual(payload["items"][0]["iteration"], 0)
+        self.assertTrue(payload["items"][0]["isHistorical"])
+
+
 class StaticFrontendMountTests(unittest.TestCase):
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
     root: Path | None = None

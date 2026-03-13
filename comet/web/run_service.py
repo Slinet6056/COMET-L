@@ -4,7 +4,7 @@ import logging
 import sqlite3
 import sys
 import threading
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -18,6 +18,7 @@ from comet.web.runtime_protocol import RuntimeEventBus, build_run_snapshot
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 LOG_DATE_FORMAT = "%H:%M:%S"
+logger = logging.getLogger(__name__)
 
 
 SystemInitializer = Callable[..., dict[str, Any]]
@@ -96,6 +97,7 @@ class RunSession:
     completed_at: Optional[str] = None
     failed_at: Optional[str] = None
     error: Optional[str] = None
+    is_historical: bool = False
 
 
 class ActiveRunConflictError(RuntimeError):
@@ -113,6 +115,7 @@ class RunLifecycleService:
         self._runtime_snapshots: dict[str, dict[str, Any]] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._active_run_id: Optional[str] = None
+        self._load_persisted_sessions()
 
     def create_run(
         self,
@@ -165,6 +168,7 @@ class RunLifecycleService:
             )
             self._runtime_snapshots[run_id] = self._build_runtime_snapshot(run_id)
             self._active_run_id = run_id
+            self._persist_session_manifest(session)
             return session
 
     def get_run_request(self, run_id: str) -> RunRequest:
@@ -225,7 +229,43 @@ class RunLifecycleService:
         snapshot["status"] = session.status
         snapshot["artifacts"] = self._build_artifacts(session)
         snapshot["logStreams"] = self.get_log_streams_snapshot(run_id)
+        snapshot["isHistorical"] = session.is_historical
         return snapshot
+
+    def list_runs(self) -> list[dict[str, Any]]:
+        with self._lock:
+            run_ids = sorted(
+                self._sessions,
+                key=lambda current_run_id: self._sessions[current_run_id].created_at,
+                reverse=True,
+            )
+
+        summaries: list[dict[str, Any]] = []
+        for run_id in run_ids:
+            session = self._sessions[run_id]
+            snapshot = self.build_snapshot(run_id)
+            summaries.append(
+                {
+                    "runId": run_id,
+                    "status": session.status,
+                    "mode": snapshot["mode"],
+                    "projectPath": session.project_path,
+                    "configPath": session.config_path,
+                    "createdAt": session.created_at,
+                    "startedAt": session.started_at,
+                    "completedAt": session.completed_at,
+                    "failedAt": session.failed_at,
+                    "error": session.error,
+                    "iteration": snapshot["iteration"],
+                    "llmCalls": snapshot["llmCalls"],
+                    "budget": snapshot["budget"],
+                    "phase": snapshot["phase"],
+                    "metrics": snapshot["metrics"],
+                    "artifacts": snapshot["artifacts"],
+                    "isHistorical": session.is_historical,
+                }
+            )
+        return summaries
 
     def get_log_streams_snapshot(self, run_id: str) -> dict[str, Any]:
         session = self._sessions[run_id]
@@ -436,6 +476,7 @@ class RunLifecycleService:
             self._log_routers[run_id].ensure_stream(
                 "main", status="running", started_at=session.started_at
             )
+            self._persist_session_manifest(session)
         self.publish_runtime_snapshot(run_id)
 
     def mark_completed(self, run_id: str) -> None:
@@ -462,6 +503,7 @@ class RunLifecycleService:
             )
             if self._active_run_id == run_id:
                 self._active_run_id = None
+            self._persist_session_manifest(session)
         self.publish_runtime_snapshot(run_id, state=self._load_state_snapshot(run_id))
 
     def mark_failed(self, run_id: str, error: str) -> None:
@@ -488,6 +530,7 @@ class RunLifecycleService:
             session.error = error
             if self._active_run_id == run_id:
                 self._active_run_id = None
+            self._persist_session_manifest(session)
         self.publish_runtime_snapshot(run_id, state=self._load_state_snapshot(run_id), error=error)
 
     def _run_in_background(
@@ -533,10 +576,16 @@ class RunLifecycleService:
             if not artifact_path.exists():
                 continue
 
-            data = json.loads(artifact_path.read_text(encoding="utf-8"))
-            if self.run_mode(run_id) == "parallel" or self._looks_parallel(data):
-                return ParallelAgentState.from_dict(data)
-            return AgentState.from_dict(data)
+            try:
+                data = json.loads(artifact_path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("state snapshot must be an object")
+                if self.run_mode(run_id) == "parallel" or self._looks_parallel(data):
+                    return ParallelAgentState.from_dict(data)
+                return AgentState.from_dict(data)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                logger.warning("加载运行状态文件失败 %s: %s", artifact_path, exc)
+                continue
 
         return None
 
@@ -807,6 +856,123 @@ class RunLifecycleService:
 
     def _new_run_id(self) -> str:
         return f"run-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
+
+    def _session_manifest_path(self, run_id: str) -> Path:
+        return self.workspace_root / "state" / "runs" / run_id / "session.json"
+
+    def _persist_session_manifest(self, session: RunSession) -> None:
+        manifest_path = self._session_manifest_path(session.run_id)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(asdict(session), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _load_persisted_sessions(self) -> None:
+        manifests_root = self.workspace_root / "state" / "runs"
+        if not manifests_root.is_dir():
+            return
+
+        for manifest_path in sorted(manifests_root.glob("*/session.json")):
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                session = self._deserialize_session(payload, manifest_path)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                logger.warning("跳过损坏的运行记录清单 %s: %s", manifest_path, exc)
+                continue
+
+            session = self._normalize_restored_session(session)
+            session.is_historical = True
+            run_id = session.run_id
+            self._sessions[run_id] = session
+            self._requests[run_id] = self._build_restored_request(session)
+            self._event_buses[run_id] = RuntimeEventBus()
+            self._log_routers[run_id] = RunLogRouter()
+            self._log_routers[run_id].ensure_stream(
+                "main",
+                status=self._session_to_stream_status(session.status),
+                started_at=session.started_at or session.created_at,
+                ended_at=session.completed_at or session.failed_at,
+                completed_at=session.completed_at,
+            )
+
+            try:
+                self._runtime_snapshots[run_id] = self._build_runtime_snapshot(run_id)
+            except Exception as exc:
+                logger.warning("恢复运行 %s 的快照失败: %s", run_id, exc)
+                session.status = "failed"
+                session.failed_at = session.failed_at or _utc_now_iso()
+                session.error = session.error or "历史运行恢复失败，请检查状态文件是否损坏。"
+                self._runtime_snapshots[run_id] = self._build_runtime_snapshot(run_id)
+
+            self._persist_session_manifest(session)
+
+    def _deserialize_session(self, payload: object, manifest_path: Path) -> RunSession:
+        if not isinstance(payload, dict):
+            raise ValueError("session manifest must be an object")
+
+        session = RunSession(**payload)
+        self._validate_restored_session_paths(session, manifest_path)
+        return session
+
+    def _validate_restored_session_paths(self, session: RunSession, manifest_path: Path) -> None:
+        required_paths = {
+            "state",
+            "output",
+            "sandbox",
+            "log",
+            "database",
+            "resolved_config",
+            "final_state",
+            "interrupted_state",
+        }
+        missing_paths = required_paths - set(session.paths)
+        if missing_paths:
+            raise ValueError(f"missing paths: {sorted(missing_paths)}")
+
+        expected_run_dir = manifest_path.parent.resolve()
+        if expected_run_dir.name != session.run_id:
+            raise ValueError("run id does not match manifest directory")
+
+        allowed_roots = (
+            self.workspace_root / "state",
+            self.workspace_root / "output",
+            self.workspace_root / "sandbox",
+            self.workspace_root / "logs",
+        )
+        for path_value in session.paths.values():
+            path = Path(path_value).expanduser().resolve()
+            if not any(path.is_relative_to(root.resolve()) for root in allowed_roots):
+                raise ValueError(f"path escapes workspace roots: {path}")
+
+    def _normalize_restored_session(self, session: RunSession) -> RunSession:
+        if session.status not in {"created", "running"}:
+            return session
+
+        session.status = "failed"
+        session.failed_at = session.failed_at or _utc_now_iso()
+        session.error = session.error or "运行在 Web 服务重启后无法恢复，已标记为失败。"
+        return session
+
+    def _build_restored_request(self, session: RunSession) -> RunRequest:
+        parallel_config = session.config_snapshot.get("agent", {}).get("parallel", {})
+        parallel_enabled = bool(parallel_config.get("enabled", False))
+        parallel_targets = parallel_config.get("max_parallel_targets")
+        return RunRequest(
+            project_path=session.project_path,
+            config_path=session.config_path,
+            parallel=parallel_enabled,
+            parallel_targets=parallel_targets if isinstance(parallel_targets, int) else None,
+            log_file=session.paths.get("log"),
+            path_overrides=dict(session.path_snapshot),
+        )
+
+    def _session_to_stream_status(self, status: str) -> str:
+        if status == "created":
+            return "pending"
+        if status in {"completed", "failed", "running"}:
+            return status
+        return "pending"
 
     def _build_scoped_paths(self, run_id: str) -> dict[str, str]:
         state_root = self.workspace_root / "state" / "runs" / run_id

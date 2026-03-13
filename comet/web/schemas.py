@@ -43,6 +43,10 @@ class ArtifactSummary(BaseModel):
     downloadUrl: str | None = None
 
 
+class RunHistoryArtifactSummary(ArtifactSummary):
+    pass
+
+
 class RunPhase(BaseModel):
     key: str
     label: str
@@ -84,6 +88,31 @@ class RunSnapshotResponse(BaseModel):
     metrics: RunMetrics
     phase: RunPhase
     artifacts: dict[str, ArtifactSummary]
+    isHistorical: bool = False
+
+
+class RunHistoryEntry(BaseModel):
+    runId: str
+    status: str
+    mode: str
+    projectPath: str
+    configPath: str
+    createdAt: str
+    startedAt: str | None = None
+    completedAt: str | None = None
+    failedAt: str | None = None
+    error: str | None = None
+    iteration: int
+    llmCalls: int
+    budget: int
+    phase: RunPhase
+    metrics: RunMetrics
+    artifacts: dict[str, RunHistoryArtifactSummary]
+    isHistorical: bool = False
+
+
+class RunHistoryResponse(BaseModel):
+    items: list[RunHistoryEntry] = Field(default_factory=list)
 
 
 class RunResultsArtifact(BaseModel):

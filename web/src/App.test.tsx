@@ -136,6 +136,94 @@ describe('App routing scaffold', () => {
             artifacts: {},
           });
         }
+        if (url === '/api/runs/run-historical') {
+          return jsonResponse({
+            runId: 'run-historical',
+            status: 'completed',
+            mode: 'parallel',
+            iteration: 1,
+            llmCalls: 2,
+            budget: 10,
+            decisionReasoning: null,
+            currentTarget: null,
+            previousTarget: null,
+            recentImprovements: [],
+            improvementSummary: { count: 0, latest: null },
+            metrics: {
+              mutationScore: 0.4,
+              globalMutationScore: 0.6,
+              lineCoverage: 0.7,
+              branchCoverage: 0.5,
+              totalTests: 3,
+              totalMutants: 5,
+              globalTotalMutants: 5,
+              killedMutants: 2,
+              globalKilledMutants: 3,
+              survivedMutants: 3,
+              globalSurvivedMutants: 2,
+              currentMethodCoverage: null,
+            },
+            phase: { key: 'completed', label: 'Completed' },
+            artifacts: {
+              log: {
+                exists: true,
+                downloadUrl: '/api/runs/run-historical/artifacts/run-log',
+              },
+            },
+            isHistorical: true,
+            currentBatch: 0,
+            parallelStats: {},
+            activeTargets: [],
+            workerCards: [],
+            batchResults: [],
+          });
+        }
+        if (url === '/api/runs/history') {
+          return jsonResponse({
+            items: [
+              {
+                runId: 'run-42',
+                status: 'completed',
+                mode: 'standard',
+                projectPath: 'examples/calculator-demo',
+                configPath: 'config.yaml',
+                createdAt: '2026-03-10T10:00:00Z',
+                startedAt: '2026-03-10T10:01:00Z',
+                completedAt: '2026-03-10T10:05:00Z',
+                failedAt: null,
+                error: null,
+                iteration: 2,
+                llmCalls: 4,
+                budget: 10,
+                phase: { key: 'completed', label: 'Completed' },
+                metrics: {
+                  mutationScore: 0.5,
+                  globalMutationScore: 0.5,
+                  lineCoverage: 0.8,
+                  branchCoverage: 0.6,
+                  totalTests: 4,
+                  totalMutants: 6,
+                  globalTotalMutants: 6,
+                  killedMutants: 3,
+                  globalKilledMutants: 3,
+                  survivedMutants: 3,
+                  globalSurvivedMutants: 3,
+                  currentMethodCoverage: 0.7,
+                },
+                artifacts: {
+                  finalState: {
+                    exists: true,
+                    downloadUrl: '/api/runs/run-42/artifacts/final-state',
+                  },
+                  log: {
+                    exists: true,
+                    downloadUrl: '/api/runs/run-42/artifacts/run-log',
+                  },
+                },
+              },
+            ],
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse({
             runId: 'run-42',
@@ -226,6 +314,7 @@ describe('App routing scaffold', () => {
     );
 
     expect(await screen.findByLabelText('项目路径')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '运行记录' })).toHaveAttribute('href', '/runs/history');
   });
 
   it('renders the run route', async () => {
@@ -237,6 +326,20 @@ describe('App routing scaffold', () => {
 
     expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
     expect(screen.getByText('run-42')).toBeInTheDocument();
+  });
+
+  it('degrades historical run logs to artifact download', async () => {
+    render(
+      <MemoryRouter initialEntries={['/runs/run-historical']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '历史日志' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '下载 run.log' })).toHaveAttribute(
+      'href',
+      '/api/runs/run-historical/artifacts/run-log',
+    );
   });
 
   it('renders the results route', async () => {

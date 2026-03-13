@@ -22,6 +22,30 @@ export type RunCreateResponse = {
   mode: string;
 };
 
+export type RunHistoryEntry = {
+  runId: string;
+  status: string;
+  mode: string;
+  projectPath: string;
+  configPath: string;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  failedAt?: string | null;
+  error?: string | null;
+  iteration: number;
+  llmCalls: number;
+  budget: number;
+  phase: RunPhase;
+  metrics: RunMetrics;
+  artifacts: Record<string, RunArtifact>;
+  isHistorical?: boolean;
+};
+
+export type RunHistoryResponse = {
+  items: RunHistoryEntry[];
+};
+
 export type RunPhase = {
   key: string;
   label: string;
@@ -197,6 +221,7 @@ export type RunSnapshot = {
   metrics: RunMetrics;
   phase: RunPhase;
   artifacts: Record<string, RunArtifact>;
+  isHistorical?: boolean;
   parallel?: {
     currentBatch: number;
     parallelStats: Record<string, unknown>;
@@ -307,6 +332,11 @@ export async function createRun(options: {
 export async function fetchRunSnapshot(runId: string): Promise<RunSnapshot> {
   const response = await fetch(`/api/runs/${runId}`);
   return parseJsonResponse<RunSnapshot>(response);
+}
+
+export async function fetchRunHistory(): Promise<RunHistoryResponse> {
+  const response = await fetch('/api/runs/history');
+  return parseJsonResponse<RunHistoryResponse>(response);
 }
 
 export async function fetchRunResults(runId: string): Promise<RunResultsResponse> {

@@ -711,6 +711,69 @@ code {
   word-break: break-word;
 }
 
+.run-history-page,
+.history-card-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.run-history-page__hero {
+  align-items: start;
+}
+
+.run-history-page__summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.history-card {
+  gap: 1rem;
+}
+
+.history-card__header,
+.history-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.history-card__badges {
+  justify-content: flex-end;
+}
+
+.history-card__path {
+  margin: 0.35rem 0 0;
+  color: #52606d;
+  word-break: break-word;
+}
+
+.history-card__metrics {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.history-card__details {
+  margin: 0;
+}
+
+.history-card__error {
+  margin: 0;
+  padding: 0.8rem 0.9rem;
+  border-radius: 10px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+}
+
+.history-card__link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.history-empty-state {
+  justify-items: start;
+}
+
 @media (max-width: 640px) {
   .app-header {
     flex-direction: column;
@@ -762,6 +825,15 @@ code {
 
   .run-log-row__toggle {
     justify-self: start;
+  }
+
+  .history-card__header,
+  .history-card__actions {
+    flex-direction: column;
+  }
+
+  .history-card__badges {
+    justify-content: flex-start;
   }
 
   .run-log-row__stats,

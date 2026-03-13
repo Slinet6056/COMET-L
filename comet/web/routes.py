@@ -22,6 +22,8 @@ from .schemas import (
     FieldError,
     HealthResponse,
     RunCreateResponse,
+    RunHistoryEntry,
+    RunHistoryResponse,
     RunResultsResponse,
     RunSnapshotResponse,
 )
@@ -397,6 +399,18 @@ async def create_run(
         evolution_runner=evolution_runner,
     )
     return created_response
+
+
+@router.get(
+    "/runs/history",
+    response_model=RunHistoryResponse,
+)
+def get_run_history(
+    run_service: RunLifecycleService = Depends(get_run_service),
+) -> RunHistoryResponse:
+    return RunHistoryResponse(
+        items=[RunHistoryEntry.model_validate(item) for item in run_service.list_runs()]
+    )
 
 
 @router.get(
