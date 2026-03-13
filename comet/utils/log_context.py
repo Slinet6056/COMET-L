@@ -7,11 +7,15 @@
 
 import contextvars
 import logging
+from collections.abc import Callable, Generator
+from concurrent.futures import Executor, Future
 from contextlib import contextmanager
-from typing import Generator
+from typing import ParamSpec, TypeVar
 
 # 任务上下文变量，存储当前任务的标识信息
 task_context: contextvars.ContextVar[str] = contextvars.ContextVar("task_context", default="")
+_T = TypeVar("_T")
+_P = ParamSpec("_P")
 
 
 class ContextFilter(logging.Filter):
@@ -66,6 +70,30 @@ def get_task_context() -> str:
         当前上下文字符串，如果未设置则返回空字符串
     """
     return task_context.get()
+
+
+def bind_current_log_context(
+    func: Callable[_P, _T],
+    /,
+    *args: _P.args,
+    **kwargs: _P.kwargs,
+) -> Callable[[], _T]:
+    ctx = contextvars.copy_context()
+
+    def runner() -> _T:
+        return ctx.run(func, *args, **kwargs)
+
+    return runner
+
+
+def submit_with_log_context(
+    executor: Executor,
+    func: Callable[_P, _T],
+    /,
+    *args: _P.args,
+    **kwargs: _P.kwargs,
+) -> Future[_T]:
+    return executor.submit(bind_current_log_context(func, *args, **kwargs))
 
 
 @contextmanager

@@ -2,10 +2,11 @@ import io
 import logging
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
-from comet.utils.log_context import log_context
+from comet.utils.log_context import log_context, submit_with_log_context
 from comet.web.log_router import RunLogRouter
 from comet.web.run_service import configure_logging, reset_managed_logging
 
@@ -100,6 +101,30 @@ class LogRouterTests(unittest.TestCase):
             stream["lastEntryAt"],
             router.get_logs("Worker:Calculator.add")[-1]["timestamp"],
         )
+
+    def test_submit_with_log_context_preserves_worker_stream_in_new_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            router = RunLogRouter(max_entries_per_stream=10)
+            configure_logging(
+                str(Path(tmp_dir) / "run.log"),
+                console_stream=io.StringIO(),
+                log_router=router,
+            )
+
+            logger = logging.getLogger("test.web.log_router.threadpool")
+
+            with log_context("Worker:Calculator.add"):
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = submit_with_log_context(executor, logger.info, "nested worker")
+                    future.result()
+
+            worker_messages = [
+                entry["message"] for entry in router.get_logs("Worker:Calculator.add")
+            ]
+            main_messages = [entry["message"] for entry in router.get_logs("main")]
+
+            self.assertEqual(worker_messages, ["nested worker"])
+            self.assertNotIn("nested worker", main_messages)
 
     def test_snapshot_uses_stream_order_instead_of_alphabetical_task_ids(self) -> None:
         router = RunLogRouter(max_entries_per_stream=5)
