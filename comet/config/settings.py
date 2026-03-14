@@ -235,8 +235,8 @@ class AgentParallelConfig(BaseModel):
     """Agent 并行配置"""
 
     enabled: bool = Field(default=False, description="是否启用并行 Agent 模式")
-    max_parallel_targets: int = Field(default=4, ge=1, le=16, description="最大并行目标数")
-    max_eval_workers: int = Field(default=4, ge=1, le=16, description="变异体评估并行度")
+    max_parallel_targets: int = Field(default=4, ge=1, description="最大并行目标数")
+    max_eval_workers: int = Field(default=4, ge=1, description="变异体评估并行度")
     timeout_per_target: int = Field(default=300, ge=1, description="单个目标的超时时间（秒）")
 
 

@@ -81,6 +81,57 @@ class ConfigApiTests(unittest.TestCase):
         self.assertTrue(payload["config"]["agent"]["parallel"]["enabled"])
         self.assertNotIn("paths", payload["config"])
 
+    def test_parse_valid_yaml_accepts_large_parallel_values(self) -> None:
+        client = TestClient(create_app(run_service=RunLifecycleService()))
+
+        response = client.post(
+            "/api/config/parse",
+            files={
+                "file": (
+                    "config.yaml",
+                    BytesIO(
+                        (
+                            "llm:\n"
+                            "  api_key: test-key\n"
+                            "preprocessing:\n"
+                            "  max_workers: 64\n"
+                            "agent:\n"
+                            "  parallel:\n"
+                            "    max_parallel_targets: 64\n"
+                        ).encode("utf-8")
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["config"]["preprocessing"]["max_workers"], 64)
+        self.assertEqual(payload["config"]["agent"]["parallel"]["max_parallel_targets"], 64)
+
+    def test_parse_valid_yaml_preserves_nullable_preprocessing_max_workers(self) -> None:
+        client = TestClient(create_app(run_service=RunLifecycleService()))
+
+        response = client.post(
+            "/api/config/parse",
+            files={
+                "file": (
+                    "config.yaml",
+                    BytesIO(
+                        ("llm:\n  api_key: test-key\npreprocessing:\n  max_workers: null\n").encode(
+                            "utf-8"
+                        )
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload["config"]["preprocessing"]["max_workers"])
+
     def test_parse_invalid_yaml_returns_field_errors(self) -> None:
         client = TestClient(create_app(run_service=RunLifecycleService()))
 
@@ -105,6 +156,38 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(error_map[("llm", "api_key")], "missing")
         self.assertEqual(error_map[("llm", "temperature")], "less_than_equal")
         self.assertEqual(error_map[("execution", "timeout")], "greater_than_equal")
+
+    def test_parse_large_parallel_targets_preserves_lower_bound_validation(self) -> None:
+        client = TestClient(create_app(run_service=RunLifecycleService()))
+
+        response = client.post(
+            "/api/config/parse",
+            files={
+                "file": (
+                    "config.yaml",
+                    BytesIO(
+                        (
+                            "llm:\n"
+                            "  api_key: test-key\n"
+                            "agent:\n"
+                            "  parallel:\n"
+                            "    max_parallel_targets: 0\n"
+                        ).encode("utf-8")
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "invalid_config")
+        field_errors = payload["error"]["fieldErrors"]
+        error_map = {tuple(item["path"]): item["code"] for item in field_errors}
+        self.assertEqual(
+            error_map[("agent", "parallel", "max_parallel_targets")],
+            "greater_than_equal",
+        )
 
     def test_parse_yaml_rejects_removed_paths_field(self) -> None:
         client = TestClient(create_app(run_service=RunLifecycleService()))
