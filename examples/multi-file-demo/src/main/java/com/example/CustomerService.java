@@ -12,6 +12,11 @@ public class CustomerService {
   }
 
   /** 注册客户（仅校验非空） */
+  public void registerCustomer(String customerId, String name) {
+    registerCustomer(customerId, name, "unknown@example.com");
+  }
+
+  /** 注册客户（仅校验非空） */
   public void registerCustomer(String customerId, String name, String email) {
     if (isBlank(name)) {
       throw new IllegalArgumentException("Name cannot be empty");

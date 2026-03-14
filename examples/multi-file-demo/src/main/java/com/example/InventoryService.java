@@ -12,6 +12,11 @@ public class InventoryService {
   }
 
   /** 添加库存 */
+  public void addStock(String productId) {
+    addStock(productId, 1);
+  }
+
+  /** 添加库存 */
   public void addStock(String productId, int quantity) {
     if (quantity < 0) {
       throw new IllegalArgumentException("Quantity cannot be negative");

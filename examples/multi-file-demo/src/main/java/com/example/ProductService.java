@@ -12,6 +12,11 @@ public class ProductService {
   }
 
   /** 添加产品 */
+  public void addProduct(String productId) {
+    addProduct(productId, 0.0);
+  }
+
+  /** 添加产品 */
   public void addProduct(String productId, double price) {
     if (price < 0) {
       throw new IllegalArgumentException("Price cannot be negative");

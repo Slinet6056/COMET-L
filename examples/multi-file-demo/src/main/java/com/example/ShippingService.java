@@ -12,6 +12,11 @@ public class ShippingService {
   }
 
   /** 创建配送信息（仅校验非空） */
+  public void createShipping(String orderId, String address) {
+    createShipping(orderId, address, "STANDARD");
+  }
+
+  /** 创建配送信息（仅校验非空） */
   public void createShipping(String orderId, String address, String shippingMethod) {
     if (isBlank(address)) {
       throw new IllegalArgumentException("Address cannot be empty");

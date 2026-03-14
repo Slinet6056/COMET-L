@@ -14,6 +14,11 @@ public class OrderService {
   }
 
   /** 创建订单 */
+  public String createOrder(String customerId) {
+    return createOrder(customerId, 1.0);
+  }
+
+  /** 创建订单 */
   public String createOrder(String customerId, double amount) {
     if (amount <= 0) {
       throw new IllegalArgumentException("Order amount must be positive");

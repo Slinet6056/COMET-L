@@ -14,6 +14,11 @@ public class PaymentService {
   }
 
   /** 处理支付（仅校验金额与支付方式非空） */
+  public String processPayment(String orderId, double amount) {
+    return processPayment(orderId, amount, "CARD");
+  }
+
+  /** 处理支付（仅校验金额与支付方式非空） */
   public String processPayment(String orderId, double amount, String method) {
     if (amount <= 0) {
       throw new IllegalArgumentException("Payment amount must be positive");
