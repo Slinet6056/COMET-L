@@ -38,8 +38,8 @@ web-build:
 web-dev:
     pnpm --dir web dev
 
-web-serve:
-    uv run uvicorn comet.web.app:app --reload
+web-serve port="8000":
+    uv run uvicorn comet.web.app:app --reload --port {{port}}
 
 test-web page="ResultsPage.test.tsx":
     pnpm --dir web test -- --run {{page}}
