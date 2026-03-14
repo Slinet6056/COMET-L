@@ -21,8 +21,16 @@ function buildSnapshot(overrides: Record<string, unknown> = {}) {
     llmCalls: 12,
     budget: 100,
     decisionReasoning: 'Prioritize Calculator.add because recent mutants survived.',
-    currentTarget: { class_name: 'Calculator', method_name: 'add' },
-    previousTarget: { class_name: 'Calculator', method_name: 'subtract' },
+    currentTarget: {
+      class_name: 'Calculator',
+      method_name: 'add',
+      method_signature: 'int add(int a, int b)',
+    },
+    previousTarget: {
+      class_name: 'Calculator',
+      method_name: 'subtract',
+      method_signature: 'int subtract(int a, int b)',
+    },
     recentImprovements: [{ iteration: 2, mutation_score_delta: 0.1 }],
     improvementSummary: {
       count: 1,
@@ -116,7 +124,7 @@ describe('Run page standard mode', () => {
     expect(
       screen.getByText('Prioritize Calculator.add because recent mutants survived.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('Calculator.add')).toBeInTheDocument();
+    expect(screen.getByText('Calculator.add [int add(int a, int b)]')).toBeInTheDocument();
     expect(screen.getByText('阶段：运行中')).toBeInTheDocument();
     expect(screen.getByText('45.0%')).toBeInTheDocument();
     expect(screen.getByText('记录的改进')).toBeInTheDocument();
@@ -148,7 +156,11 @@ describe('Run page standard mode', () => {
         phase: { key: 'running', label: 'Running' },
         iteration: 4,
         decisionReasoning: 'Switch to Calculator.divide after coverage plateaued.',
-        currentTarget: { class_name: 'Calculator', method_name: 'divide' },
+        currentTarget: {
+          class_name: 'Calculator',
+          method_name: 'divide',
+          method_signature: 'int divide(int a, int b)',
+        },
         recentImprovements: [{ iteration: 4, mutation_score_delta: 0.2 }],
         improvementSummary: {
           count: 2,
@@ -172,7 +184,7 @@ describe('Run page standard mode', () => {
     expect(
       await screen.findByText('Switch to Calculator.divide after coverage plateaued.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('Calculator.divide')).toBeInTheDocument();
+    expect(screen.getByText('Calculator.divide [int divide(int a, int b)]')).toBeInTheDocument();
     expect(screen.getByText('60.0%')).toBeInTheDocument();
     expect(screen.getByText('阶段已更新')).toBeInTheDocument();
   });

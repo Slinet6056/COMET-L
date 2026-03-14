@@ -353,7 +353,7 @@ export async function fetchRunLogsForTask(
   runId: string,
   taskId: string,
 ): Promise<RunLogsStreamResponse> {
-  const response = await fetch(`/api/runs/${runId}/logs/${taskId}`);
+  const response = await fetch(`/api/runs/${runId}/logs/${encodeURIComponent(taskId)}`);
   return parseJsonResponse<RunLogsStreamResponse>(response);
 }
 

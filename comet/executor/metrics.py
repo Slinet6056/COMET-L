@@ -148,6 +148,7 @@ class MetricsCollector:
         class_name: str,
         method_name: str,
         all_mutants: Optional[List[Mutant]] = None,
+        method_signature: Optional[str] = None,
     ) -> List[Mutant]:
         """
         获取特定方法的幸存变异体（排除 outdated 状态）
@@ -169,6 +170,7 @@ class MetricsCollector:
             if m.survived
             and m.class_name == class_name
             and (m.method_name == method_name or method_name is None)
+            and (method_signature is None or m.method_signature == method_signature)
             and m.status != "outdated"  # 排除 outdated 状态的变异体
         ]
 

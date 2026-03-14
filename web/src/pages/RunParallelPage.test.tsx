@@ -46,7 +46,7 @@ function buildParallelSnapshot(overrides: Record<string, unknown> = {}) {
     },
     activeTargets: [
       {
-        targetId: 'Calculator.divide',
+        targetId: 'Calculator.divide#sig-bbb222',
         className: 'Calculator',
         methodName: 'divide',
         method_coverage: 0.42,
@@ -54,7 +54,7 @@ function buildParallelSnapshot(overrides: Record<string, unknown> = {}) {
     ],
     workerCards: [
       {
-        targetId: 'Calculator.add',
+        targetId: 'Calculator.add#sig-aaa111',
         className: 'Calculator',
         methodName: 'add',
         success: true,
@@ -71,7 +71,7 @@ function buildParallelSnapshot(overrides: Record<string, unknown> = {}) {
     batchResults: [
       [
         {
-          targetId: 'Calculator.add',
+          targetId: 'Calculator.add#sig-aaa111',
           success: true,
         },
       ],
@@ -202,15 +202,15 @@ describe('Run page parallel mode', () => {
     expect(await screen.findByRole('heading', { name: '并行运行状态' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '核心指标' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '工作线程输出' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '日志时间线' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '日志查看器' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '批次摘要' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '覆盖率' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Runtime' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Parallel Stats' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Active Targets' })).not.toBeInTheDocument();
     expect(screen.getByText('当前批次：2')).toBeInTheDocument();
-    expect(screen.getByTitle('Calculator.add')).toBeInTheDocument();
-    expect(screen.getByText('Calculator.divide')).toBeInTheDocument();
+    expect(screen.getByTitle('Calculator.add#sig-aaa111')).toBeInTheDocument();
+    expect(screen.getByTitle('Calculator.divide#sig-bbb222')).toBeInTheDocument();
     expect(screen.getByText('累计工作线程数')).toBeInTheDocument();
     expect(screen.getByText('覆盖率 42.0%')).toBeInTheDocument();
 
@@ -239,7 +239,7 @@ describe('Run page parallel mode', () => {
           currentBatch: 3,
           workerCards: [
             {
-              targetId: 'Calculator.multiply',
+              targetId: 'Calculator.multiply#sig-ccc333',
               className: 'Calculator',
               methodName: 'multiply',
               success: false,
@@ -255,7 +255,7 @@ describe('Run page parallel mode', () => {
           ],
           activeTargets: [
             {
-              targetId: 'Calculator.multiply',
+              targetId: 'Calculator.multiply#sig-ccc333',
               className: 'Calculator',
               methodName: 'multiply',
               method_coverage: 0.5,
@@ -266,7 +266,7 @@ describe('Run page parallel mode', () => {
     });
 
     expect(await screen.findByText('当前批次：3')).toBeInTheDocument();
-    expect(screen.getAllByTitle('Calculator.multiply')).toHaveLength(2);
+    expect(screen.getAllByTitle('Calculator.multiply#sig-ccc333')).toHaveLength(2);
     expect(screen.getByText('覆盖率 50.0%')).toBeInTheDocument();
     expect(screen.getByText('Timed out while evaluating mutants.')).toBeInTheDocument();
   });
@@ -322,6 +322,6 @@ describe('Run page parallel mode', () => {
     expect(await screen.findByRole('heading', { name: '并行预处理' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '批次摘要' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '工作线程输出' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '日志时间线' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '日志查看器' })).toBeInTheDocument();
   });
 });

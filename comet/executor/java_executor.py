@@ -290,7 +290,11 @@ class JavaExecutor:
         return None
 
     def analyze_method_deep(
-        self, file_path: str, class_name: str, method_name: str
+        self,
+        file_path: str,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         深度分析特定方法
@@ -305,7 +309,13 @@ class JavaExecutor:
         """
         result = self._run_java_command(
             "com.comet.analyzer.DeepAnalyzer",
-            ["analyzeMethod", file_path, class_name, method_name],
+            [
+                "analyzeMethod",
+                file_path,
+                class_name,
+                method_name,
+                *([method_signature] if method_signature else []),
+            ],
         )
 
         if result.get("success"):

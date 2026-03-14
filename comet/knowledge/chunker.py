@@ -307,6 +307,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
         """
         chunks = []
         method_name = analysis.get("name", "unknown")
+        method_signature = analysis.get("signature")
 
         # 基本信息块
         basic_info = self._format_basic_info(analysis, class_name)
@@ -317,6 +318,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
                     "type": "method_basic_info",
                     "class_name": class_name,
                     "method_name": method_name,
+                    "method_signature": method_signature,
                 },
             )
         )
@@ -332,6 +334,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
                         "type": "null_check_patterns",
                         "class_name": class_name,
                         "method_name": method_name,
+                        "method_signature": method_signature,
                     },
                 )
             )
@@ -347,6 +350,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
                         "type": "boundary_check_patterns",
                         "class_name": class_name,
                         "method_name": method_name,
+                        "method_signature": method_signature,
                     },
                 )
             )
@@ -364,6 +368,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
                         "type": "exception_handling",
                         "class_name": class_name,
                         "method_name": method_name,
+                        "method_signature": method_signature,
                     },
                 )
             )
@@ -379,6 +384,7 @@ class MethodAnalysisChunker(ChunkingStrategy):
                         "type": "method_dependencies",
                         "class_name": class_name,
                         "method_name": method_name,
+                        "method_signature": method_signature,
                     },
                 )
             )

@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from comet.utils.log_context import log_context, submit_with_log_context
+from comet.utils.method_keys import build_method_key
 from comet.web.log_router import RunLogRouter
 from comet.web.run_service import configure_logging, reset_managed_logging
 
@@ -14,6 +15,9 @@ from comet.web.run_service import configure_logging, reset_managed_logging
 class LogRouterTests(unittest.TestCase):
     def tearDown(self) -> None:
         reset_managed_logging()
+
+    def _worker_task_id(self) -> str:
+        return f"Worker:{build_method_key('Calculator', 'add', 'int add(int a, int b)')}"
 
     def test_worker_task_logs_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -25,14 +29,13 @@ class LogRouterTests(unittest.TestCase):
             )
 
             logger = logging.getLogger("test.web.log_router")
-            with log_context("Worker:Calculator.add"):
+            worker_task_id = self._worker_task_id()
+            with log_context(worker_task_id):
                 logger.info("worker only")
             with log_context("Worker:Order.submit"):
                 logger.info("other worker")
 
-            worker_messages = [
-                entry["message"] for entry in router.get_logs("Worker:Calculator.add")
-            ]
+            worker_messages = [entry["message"] for entry in router.get_logs(worker_task_id)]
             other_messages = [entry["message"] for entry in router.get_logs("Worker:Order.submit")]
 
             self.assertEqual(worker_messages, ["worker only"])
@@ -49,13 +52,12 @@ class LogRouterTests(unittest.TestCase):
 
             logger = logging.getLogger("test.web.log_router")
             logger.info("main only")
-            with log_context("Worker:Calculator.add"):
+            worker_task_id = self._worker_task_id()
+            with log_context(worker_task_id):
                 logger.info("worker only")
 
             main_messages = [entry["message"] for entry in router.get_logs("main")]
-            worker_messages = [
-                entry["message"] for entry in router.get_logs("Worker:Calculator.add")
-            ]
+            worker_messages = [entry["message"] for entry in router.get_logs(worker_task_id)]
 
             self.assertEqual(main_messages, ["main only"])
             self.assertEqual(worker_messages, ["worker only"])
@@ -67,14 +69,15 @@ class LogRouterTests(unittest.TestCase):
             configure_logging(str(log_path), console_stream=io.StringIO())
 
             logger = logging.getLogger("comet.agent.parallel_planner")
-            with log_context("Worker:Calculator.add"):
+            worker_task_id = self._worker_task_id()
+            with log_context(worker_task_id):
                 logger.info("trimmed prefix")
 
             log_line = log_path.read_text(encoding="utf-8").strip()
 
             self.assertRegex(log_line, r"^\d{2}:\d{2}:\d{2} INFO trimmed prefix$")
             self.assertNotIn("comet.agent.parallel_planner", log_line)
-            self.assertNotIn("Worker:Calculator.add", log_line)
+            self.assertNotIn(worker_task_id, log_line)
 
     def test_per_task_buffers_are_bounded(self) -> None:
         router = RunLogRouter(max_entries_per_stream=2)
@@ -84,22 +87,23 @@ class LogRouterTests(unittest.TestCase):
         logger.addHandler(router)
         self.addCleanup(logger.removeHandler, router)
 
-        with log_context("Worker:Calculator.add"):
+        worker_task_id = self._worker_task_id()
+        with log_context(worker_task_id):
             logger.info("first")
             logger.info("second")
             logger.info("third")
 
-        messages = [entry["message"] for entry in router.get_logs("Worker:Calculator.add")]
+        messages = [entry["message"] for entry in router.get_logs(worker_task_id)]
         self.assertEqual(messages, ["second", "third"])
 
         snapshot = router.snapshot()
-        stream = snapshot["byTaskId"]["Worker:Calculator.add"]
+        stream = snapshot["byTaskId"][worker_task_id]
         self.assertEqual(stream["bufferedEntryCount"], 2)
         self.assertEqual(stream["totalEntryCount"], 3)
         self.assertIsNotNone(stream["firstEntryAt"])
         self.assertEqual(
             stream["lastEntryAt"],
-            router.get_logs("Worker:Calculator.add")[-1]["timestamp"],
+            router.get_logs(worker_task_id)[-1]["timestamp"],
         )
 
     def test_submit_with_log_context_preserves_worker_stream_in_new_thread(self) -> None:
@@ -113,14 +117,13 @@ class LogRouterTests(unittest.TestCase):
 
             logger = logging.getLogger("test.web.log_router.threadpool")
 
-            with log_context("Worker:Calculator.add"):
+            worker_task_id = self._worker_task_id()
+            with log_context(worker_task_id):
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     future = submit_with_log_context(executor, logger.info, "nested worker")
                     future.result()
 
-            worker_messages = [
-                entry["message"] for entry in router.get_logs("Worker:Calculator.add")
-            ]
+            worker_messages = [entry["message"] for entry in router.get_logs(worker_task_id)]
             main_messages = [entry["message"] for entry in router.get_logs("main")]
 
             self.assertEqual(worker_messages, ["nested worker"])

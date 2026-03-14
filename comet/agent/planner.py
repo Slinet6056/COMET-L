@@ -357,11 +357,13 @@ class PlannerAgent:
                 and current_target.get("class_name")
                 and current_target.get("method_name")
             ):
+                method_signature = current_target.get("method_signature")
                 # 获取当前目标方法的 valid 变异体
                 current_mutants = self.tools.db.get_mutants_by_method(
                     class_name=current_target["class_name"],
                     method_name=current_target["method_name"],
                     status="valid",
+                    method_signature=method_signature,
                 )
                 self.state.total_mutants = len(current_mutants)
                 self.state.survived_mutants = len([m for m in current_mutants if m.survived])
@@ -449,6 +451,7 @@ class PlannerAgent:
                         current_coverage = self.tools.db.get_method_coverage(
                             self.state.current_target["class_name"],
                             self.state.current_target["method_name"],
+                            self.state.current_target.get("method_signature"),
                         )
                         if current_coverage:
                             self.state.current_method_coverage = current_coverage.line_coverage_rate
@@ -662,6 +665,7 @@ class PlannerAgent:
 
         class_name = target_result.get("class_name")
         method_name = target_result.get("method_name")
+        method_signature = target_result.get("method_signature")
 
         if not class_name or not method_name:
             logger.debug("目标信息不完整，跳过自动化流程")
@@ -676,7 +680,7 @@ class PlannerAgent:
 
         # 检查是否需要生成测试（检查目标方法是否有测试，而不是整个类）
         existing_tests = (
-            self.tools.db.get_tests_by_target_method(class_name, method_name)
+            self.tools.db.get_tests_by_target_method(class_name, method_name, method_signature)
             if self.tools.db
             else []
         )
@@ -684,7 +688,10 @@ class PlannerAgent:
             logger.info("→ 自动执行: generate_tests（目标方法没有测试）")
             try:
                 test_result = self.tools.call(
-                    "generate_tests", class_name=class_name, method_name=method_name
+                    "generate_tests",
+                    class_name=class_name,
+                    method_name=method_name,
+                    method_signature=method_signature,
                 )
                 if test_result and test_result.get("generated", 0) > 0:
                     logger.info(f"  ✓ 成功生成 {test_result.get('generated')} 个测试")
@@ -692,7 +699,11 @@ class PlannerAgent:
                     # 记录自动执行的操作
                     self.state.add_action(
                         action="generate_tests",
-                        params={"class_name": class_name, "method_name": method_name},
+                        params={
+                            "class_name": class_name,
+                            "method_name": method_name,
+                            "method_signature": method_signature,
+                        },
                         success=True,
                         result=self._simplify_result(test_result),
                     )
@@ -707,7 +718,12 @@ class PlannerAgent:
 
         # 检查是否需要生成变异体
         existing_mutants = (
-            self.tools.db.get_mutants_by_method(class_name, method_name, status="valid")
+            self.tools.db.get_mutants_by_method(
+                class_name,
+                method_name,
+                status="valid",
+                method_signature=method_signature,
+            )
             if self.tools.db
             else []
         )
@@ -715,7 +731,10 @@ class PlannerAgent:
             logger.info("→ 自动执行: generate_mutants（目标没有变异体）")
             try:
                 mutant_result = self.tools.call(
-                    "generate_mutants", class_name=class_name, method_name=method_name
+                    "generate_mutants",
+                    class_name=class_name,
+                    method_name=method_name,
+                    method_signature=method_signature,
                 )
                 if mutant_result and mutant_result.get("generated", 0) > 0:
                     logger.info(f"  ✓ 成功生成 {mutant_result.get('generated')} 个变异体")
@@ -723,7 +742,11 @@ class PlannerAgent:
                     # 记录自动执行的操作
                     self.state.add_action(
                         action="generate_mutants",
-                        params={"class_name": class_name, "method_name": method_name},
+                        params={
+                            "class_name": class_name,
+                            "method_name": method_name,
+                            "method_signature": method_signature,
+                        },
                         success=True,
                         result=self._simplify_result(mutant_result),
                     )

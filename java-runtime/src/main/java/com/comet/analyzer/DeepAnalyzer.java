@@ -512,8 +512,8 @@ public class DeepAnalyzer {
     return complexity;
   }
 
-  /** Analyze a specific method by name. */
-  public String analyzeMethod(String filePath, String className, String methodName)
+  public String analyzeMethod(
+      String filePath, String className, String methodName, String methodSignature)
       throws Exception {
     File file = new File(filePath);
     ParseResult<CompilationUnit> parseResult = javaParser.parse(file);
@@ -529,6 +529,10 @@ public class DeepAnalyzer {
       if (cls.getNameAsString().equals(className)) {
         for (MethodDeclaration method : cls.getMethods()) {
           if (method.getNameAsString().equals(methodName)) {
+            String signature = method.getDeclarationAsString(false, false, false);
+            if (methodSignature != null && !methodSignature.equals(signature)) {
+              continue;
+            }
             JsonObject result = analyzeMethod(method, cls);
             result.addProperty("className", className);
             return gson.toJson(result);
@@ -543,10 +547,12 @@ public class DeepAnalyzer {
   /** Command line interface */
   public static void main(String[] args) {
     if (args.length < 2) {
-      System.err.println("Usage: DeepAnalyzer <command> <file_path> [class_name] [method_name]");
+      System.err.println(
+          "Usage: DeepAnalyzer <command> <file_path> [class_name] [method_name] [method_signature]");
       System.err.println("Commands:");
       System.err.println("  analyzeDeep <file_path>           - Deep analysis of entire file");
-      System.err.println("  analyzeMethod <file_path> <class> <method> - Analyze specific method");
+      System.err.println(
+          "  analyzeMethod <file_path> <class> <method> [signature] - Analyze specific method");
       System.exit(1);
     }
 
@@ -567,7 +573,8 @@ public class DeepAnalyzer {
             System.exit(1);
             return;
           }
-          result = analyzer.analyzeMethod(filePath, args[2], args[3]);
+          result =
+              analyzer.analyzeMethod(filePath, args[2], args[3], args.length >= 5 ? args[4] : null);
           break;
         default:
           System.err.println("Unknown command: " + command);

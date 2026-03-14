@@ -17,6 +17,7 @@ from comet.executor.coverage_parser import MethodCoverage
 from comet.models import Mutant, MutationPatch, TestCase, TestMethod
 from comet.store.database import Database
 from comet.utils.log_context import log_context
+from comet.utils.method_keys import build_method_key
 from comet.web.app import app, create_app
 from comet.web.log_router import RunLogRouter
 from comet.web.run_service import RunLifecycleService, RunRequest
@@ -243,15 +244,17 @@ class SnapshotTests(unittest.TestCase):
         acquired = state.acquire_target(
             "Calculator",
             "add",
+            method_signature="int add(int a, int b)",
             metadata={"method_coverage": 0.4, "source": "coverage"},
         )
         self.assertTrue(acquired)
         state.add_batch_result(
             [
                 WorkerResult(
-                    target_id="Calculator.add",
+                    target_id=build_method_key("Calculator", "add", "int add(int a, int b)"),
                     class_name="Calculator",
                     method_name="add",
+                    method_signature="int add(int a, int b)",
                     success=True,
                     tests_generated=2,
                     mutants_generated=3,
@@ -270,50 +273,83 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["currentBatch"], 1)
         self.assertEqual(snapshot["parallelStats"]["total_batches"], 1)
         self.assertEqual(len(snapshot["workerCards"]), 1)
-        self.assertEqual(snapshot["workerCards"][0]["targetId"], "Calculator.add")
+        self.assertEqual(
+            snapshot["workerCards"][0]["targetId"],
+            build_method_key("Calculator", "add", "int add(int a, int b)"),
+        )
         self.assertEqual(snapshot["workerCards"][0]["methodCoverage"], 0.4)
         self.assertEqual(len(snapshot["activeTargets"]), 1)
-        self.assertEqual(snapshot["activeTargets"][0]["targetId"], "Calculator.add")
+        self.assertEqual(
+            snapshot["activeTargets"][0]["targetId"],
+            build_method_key("Calculator", "add", "int add(int a, int b)"),
+        )
         self.assertEqual(snapshot["activeTargets"][0]["method_coverage"], 0.4)
         self.assertEqual(len(snapshot["batchResults"]), 1)
-        self.assertEqual(snapshot["batchResults"][0][0]["targetId"], "Calculator.add")
+        self.assertEqual(
+            snapshot["batchResults"][0][0]["targetId"],
+            build_method_key("Calculator", "add", "int add(int a, int b)"),
+        )
         self.assertEqual(len(snapshot["targetLifecycle"]), 1)
         self.assertEqual(snapshot["targetLifecycle"][0]["status"], "running")
-        self.assertEqual(snapshot["logStreams"]["taskIds"], ["main", "Calculator.add"])
         self.assertEqual(
-            snapshot["logStreams"]["byTaskId"]["Calculator.add"]["bufferedEntryCount"],
+            snapshot["logStreams"]["taskIds"],
+            ["main", build_method_key("Calculator", "add", "int add(int a, int b)")],
+        )
+        self.assertEqual(
+            snapshot["logStreams"]["byTaskId"][
+                build_method_key("Calculator", "add", "int add(int a, int b)")
+            ]["bufferedEntryCount"],
             0,
         )
         self.assertEqual(
-            snapshot["logStreams"]["byTaskId"]["Calculator.add"]["status"],
+            snapshot["logStreams"]["byTaskId"][
+                build_method_key("Calculator", "add", "int add(int a, int b)")
+            ]["status"],
             "running",
         )
 
     def test_parallel_snapshot_merges_worker_logs_into_target_stream(self) -> None:
         state = ParallelAgentState()
         log_router = RunLogRouter()
-        self.assertTrue(state.acquire_target("Calculator", "add"))
+        task_id = build_method_key("Calculator", "add", "int add(int a, int b)")
+        self.assertTrue(state.acquire_target("Calculator", "add", "int add(int a, int b)"))
 
         logger = logging.getLogger("test.web.api.parallel_logs")
         logger.setLevel(logging.INFO)
         logger.addHandler(log_router)
         self.addCleanup(logger.removeHandler, log_router)
 
-        with log_context("Calculator.add"):
+        with log_context(task_id):
             logger.info("worker log line")
 
         snapshot = build_run_snapshot("run-logs-merge", "running", state, log_router=log_router)
 
-        self.assertEqual(snapshot["logStreams"]["taskIds"], ["main", "Calculator.add"])
+        self.assertEqual(snapshot["logStreams"]["taskIds"], ["main", task_id])
         self.assertEqual(
-            snapshot["logStreams"]["byTaskId"]["Calculator.add"]["bufferedEntryCount"],
+            snapshot["logStreams"]["byTaskId"][task_id]["bufferedEntryCount"],
             1,
         )
         self.assertEqual(
-            snapshot["logStreams"]["byTaskId"]["Calculator.add"]["totalEntryCount"],
+            snapshot["logStreams"]["byTaskId"][task_id]["totalEntryCount"],
             1,
         )
-        self.assertNotIn("Worker:Calculator.add", snapshot["logStreams"]["byTaskId"])
+        self.assertNotIn(f"Worker:{task_id}", snapshot["logStreams"]["byTaskId"])
+
+    def test_parallel_state_distinguishes_overloaded_target_ids(self) -> None:
+        state = ParallelAgentState()
+
+        self.assertTrue(state.acquire_target("Calculator", "add", "int add(int a, int b)"))
+        self.assertTrue(state.acquire_target("Calculator", "add", "double add(double a, double b)"))
+
+        active_targets = state.get_active_target_details()
+        self.assertEqual(len(active_targets), 2)
+        self.assertEqual(
+            {target["targetId"] for target in active_targets},
+            {
+                build_method_key("Calculator", "add", "int add(int a, int b)"),
+                build_method_key("Calculator", "add", "double add(double a, double b)"),
+            },
+        )
 
 
 class EventBusTests(unittest.TestCase):

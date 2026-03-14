@@ -57,6 +57,7 @@ class Mutant(BaseModel):
     id: str = Field(description="变异体 ID")
     class_name: str = Field(description="类名")
     method_name: Optional[str] = Field(default=None, description="方法名")
+    method_signature: Optional[str] = Field(default=None, description="方法签名")
     patch: MutationPatch = Field(description="变异补丁")
     status: str = Field(
         default="pending",
@@ -77,6 +78,7 @@ class TestMethod(BaseModel):
     method_name: str = Field(description="测试方法名")
     code: str = Field(description="测试方法代码")
     target_method: str = Field(description="目标被测方法")
+    target_method_signature: Optional[str] = Field(default=None, description="目标方法签名")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 

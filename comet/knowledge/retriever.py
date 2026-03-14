@@ -63,7 +63,18 @@ class KnowledgeRetriever:
             query,
             top_k=self.top_k,
             score_threshold=self.score_threshold,
-            filter_metadata={"class_name": class_name} if class_name else None,
+            filter_metadata=(
+                {
+                    "class_name": class_name,
+                    **(
+                        {"method_signature": method_signature}
+                        if method_signature
+                        else {"method_name": method_name}
+                    ),
+                }
+                if class_name
+                else None
+            ),
         )
         results["contracts"] = contracts
 
@@ -91,6 +102,7 @@ class KnowledgeRetriever:
         self,
         class_name: str,
         method_name: str,
+        method_signature: Optional[str] = None,
         source_code: Optional[str] = None,
     ) -> str:
         """
@@ -122,7 +134,18 @@ class KnowledgeRetriever:
             query,
             top_k=self.top_k,
             score_threshold=self.score_threshold,
-            filter_metadata={"class_name": class_name} if class_name else None,
+            filter_metadata=(
+                {
+                    "class_name": class_name,
+                    **(
+                        {"method_signature": method_signature}
+                        if method_signature
+                        else {"method_name": method_name}
+                    ),
+                }
+                if class_name
+                else None
+            ),
         )
         results["source_analysis"] = source_analysis
 

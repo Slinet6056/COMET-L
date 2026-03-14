@@ -60,7 +60,12 @@ class KnowledgeBase:
             self._contracts_cache[class_name] = self.store.get_contracts_by_class(class_name)
         return self._contracts_cache[class_name]
 
-    def get_contracts_for_method(self, class_name: str, method_name: str) -> List[Contract]:
+    def get_contracts_for_method(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ) -> List[Contract]:
         """
         获取方法的契约
 
@@ -71,7 +76,7 @@ class KnowledgeBase:
         Returns:
             契约列表
         """
-        return self.store.get_contracts_by_method(class_name, method_name)
+        return self.store.get_contracts_by_method(class_name, method_name, method_signature)
 
     def add_pattern(self, pattern: Pattern) -> None:
         """
@@ -474,6 +479,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         self,
         class_name: str,
         method_name: str,
+        method_signature: Optional[str] = None,
         source_code: Optional[str] = None,
     ) -> str:
         """
@@ -490,7 +496,12 @@ class RAGKnowledgeBase(KnowledgeBase):
         if not self._ensure_initialized():
             return ""
 
-        return self.retriever.retrieve_for_mutation_generation(class_name, method_name, source_code)
+        return self.retriever.retrieve_for_mutation_generation(
+            class_name,
+            method_name,
+            method_signature,
+            source_code,
+        )
 
     def index_source_analysis(
         self,
@@ -522,7 +533,12 @@ class RAGKnowledgeBase(KnowledgeBase):
             for chunk in chunks:
                 documents.append(
                     Document(
-                        id=f"analysis_{class_name}_{method.get('name', 'unknown')}_{chunk.chunk_index}",
+                        id=(
+                            "analysis_"
+                            f"{class_name}_{method.get('name', 'unknown')}_"
+                            f"{chunk.metadata.get('method_signature', 'unknown')}_"
+                            f"{chunk.chunk_index}"
+                        ),
                         content=chunk.content,
                         metadata=chunk.metadata,
                     )

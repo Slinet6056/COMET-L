@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from ..executor.coverage_parser import MethodCoverage
 from ..models import EvaluationResult, Mutant, TestCase, TestMethod
+from ..utils.method_keys import build_method_key
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class Database:
                 id TEXT PRIMARY KEY,
                 class_name TEXT NOT NULL,
                 method_name TEXT,
+                method_signature TEXT,
                 patch TEXT NOT NULL,
                 status TEXT DEFAULT 'pending',
                 killed_by TEXT,
@@ -65,6 +67,7 @@ class Database:
                 method_name TEXT NOT NULL,
                 code TEXT NOT NULL,
                 target_method TEXT NOT NULL,
+                target_method_signature TEXT,
                 created_at TEXT,
                 updated_at TEXT,
                 PRIMARY KEY (test_case_id, method_name)
@@ -119,6 +122,7 @@ class Database:
                 iteration INTEGER NOT NULL,
                 class_name TEXT NOT NULL,
                 method_name TEXT NOT NULL,
+                method_signature TEXT,
                 covered_lines TEXT NOT NULL,
                 missed_lines TEXT NOT NULL,
                 total_lines INTEGER,
@@ -180,6 +184,11 @@ class Database:
         )
         cursor.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_coverage_class_signature ON method_coverage(class_name, method_signature)
+        """
+        )
+        cursor.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_coverage_iteration ON method_coverage(iteration)
         """
         )
@@ -194,7 +203,19 @@ class Database:
         """
         )
 
+        self._ensure_column_exists("mutants", "method_signature", "TEXT")
+        self._ensure_column_exists("test_methods", "target_method_signature", "TEXT")
+        self._ensure_column_exists("method_coverage", "method_signature", "TEXT")
+
         self.conn.commit()
+
+    def _ensure_column_exists(self, table_name: str, column_name: str, column_type: str) -> None:
+        cursor = self.conn.cursor()
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        existing_columns = {str(row[1]) for row in cursor.fetchall()}
+        if column_name in existing_columns:
+            return
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
     def save_mutant(self, mutant: Mutant) -> None:
         """保存变异体（线程安全）"""
@@ -202,12 +223,26 @@ class Database:
             cursor = self.conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO mutants VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO mutants (
+                    id,
+                    class_name,
+                    method_name,
+                    method_signature,
+                    patch,
+                    status,
+                    killed_by,
+                    survived,
+                    compile_error,
+                    code_hash,
+                    created_at,
+                    evaluated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     mutant.id,
                     mutant.class_name,
                     mutant.method_name,
+                    mutant.method_signature,
                     mutant.patch.model_dump_json(),
                     mutant.status,
                     json.dumps(mutant.killed_by),
@@ -275,7 +310,11 @@ class Database:
             return [self._row_to_mutant(row) for row in rows]
 
     def get_mutants_by_method(
-        self, class_name: str, method_name: str, status: Optional[str] = "valid"
+        self,
+        class_name: str,
+        method_name: str,
+        status: Optional[str] = "valid",
+        method_signature: Optional[str] = None,
     ) -> List[Mutant]:
         """
         获取指定方法的变异体
@@ -290,20 +329,24 @@ class Database:
         """
         with self._lock:
             cursor = self.conn.cursor()
+            query = "SELECT * FROM mutants WHERE class_name = ? AND method_name = ?"
+            params: list[Any] = [class_name, method_name]
+            if method_signature is not None:
+                query += " AND method_signature = ?"
+                params.append(method_signature)
             if status:
-                cursor.execute(
-                    "SELECT * FROM mutants WHERE class_name = ? AND method_name = ? AND status = ?",
-                    (class_name, method_name, status),
-                )
-            else:
-                cursor.execute(
-                    "SELECT * FROM mutants WHERE class_name = ? AND method_name = ?",
-                    (class_name, method_name),
-                )
+                query += " AND status = ?"
+                params.append(status)
+            cursor.execute(query, tuple(params))
             rows = cursor.fetchall()
             return [self._row_to_mutant(row) for row in rows]
 
-    def mark_mutants_outdated(self, class_name: str, method_name: str) -> int:
+    def mark_mutants_outdated(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ) -> int:
         """
         将指定方法的有效变异体标记为 outdated
 
@@ -316,14 +359,15 @@ class Database:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute(
-                """
-                UPDATE mutants
-                SET status = 'outdated'
-                WHERE class_name = ? AND method_name = ? AND status = 'valid'
-            """,
-                (class_name, method_name),
+            query = (
+                "UPDATE mutants SET status = 'outdated' "
+                "WHERE class_name = ? AND method_name = ? AND status = 'valid'"
             )
+            params: list[Any] = [class_name, method_name]
+            if method_signature is not None:
+                query += " AND method_signature = ?"
+                params.append(method_signature)
+            cursor.execute(query, tuple(params))
             self.conn.commit()
             updated_count = cursor.rowcount
             logger.info(
@@ -354,12 +398,13 @@ class Database:
                 SELECT
                     class_name,
                     method_name,
+                    method_signature,
                     COUNT(*) as total,
                     SUM(CASE WHEN status = 'killed' THEN 1 ELSE 0 END) as killed,
                     SUM(CASE WHEN survived = 1 THEN 1 ELSE 0 END) as survived
                 FROM mutants
                 WHERE status IN ('valid', 'killed') AND method_name IS NOT NULL
-                GROUP BY class_name, method_name
+                GROUP BY class_name, method_name, method_signature
             """
             )
 
@@ -369,6 +414,7 @@ class Database:
             for row in rows:
                 class_name = row["class_name"]
                 method_name = row["method_name"]
+                method_signature = row["method_signature"]
                 total = row["total"]
                 killed = row["killed"]
                 survived = row["survived"]
@@ -376,10 +422,11 @@ class Database:
                 # 计算杀死率
                 killrate = killed / total if total > 0 else 0.0
 
-                key = f"{class_name}.{method_name}"
+                key = build_method_key(class_name, method_name, method_signature)
                 stats[key] = {
                     "class_name": class_name,
                     "method_name": method_name,
+                    "method_signature": method_signature,
                     "total": total,
                     "killed": killed,
                     "survived": survived,
@@ -437,8 +484,8 @@ class Database:
             cursor.execute(
                 """
                 INSERT OR REPLACE INTO test_methods
-                (test_case_id, method_name, code, target_method, created_at, updated_at)
-                VALUES (?, ?, ?, ?,
+                (test_case_id, method_name, code, target_method, target_method_signature, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?,
                         COALESCE((SELECT created_at FROM test_methods WHERE test_case_id = ? AND method_name = ?), ?),
                         ?)
             """,
@@ -447,6 +494,7 @@ class Database:
                     method.method_name,
                     method.code,
                     method.target_method,
+                    method.target_method_signature,
                     test_case.id,
                     method.method_name,
                     method.created_at.isoformat() if method.created_at else None,
@@ -522,7 +570,12 @@ class Database:
                 logger.debug(f"查询到 {len(results)} 个测试用例: {results[0].id}")
             return results
 
-    def get_tests_by_target_method(self, class_name: str, method_name: str) -> List[TestCase]:
+    def get_tests_by_target_method(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ) -> List[TestCase]:
         """
         获取针对指定方法的测试用例
 
@@ -551,8 +604,11 @@ class Database:
             results = []
             for row in rows:
                 test_case = self._row_to_test_case(row)
-                # 检查这个测试用例是否包含针对指定方法的测试方法
-                has_target_method = any(tm.target_method == method_name for tm in test_case.methods)
+                has_target_method = any(
+                    tm.target_method == method_name
+                    and (method_signature is None or tm.target_method_signature == method_signature)
+                    for tm in test_case.methods
+                )
                 if has_target_method:
                     results.append(test_case)
 
@@ -805,6 +861,7 @@ class Database:
             id=row["id"],
             class_name=row["class_name"],
             method_name=row["method_name"],
+            method_signature=row["method_signature"],
             patch=MutationPatch.model_validate_json(row["patch"]),
             status=row["status"],
             killed_by=json.loads(row["killed_by"]) if row["killed_by"] else [],
@@ -844,6 +901,7 @@ class Database:
                 method_name=method_row["method_name"],
                 code=method_row["code"],
                 target_method=method_row["target_method"],
+                target_method_signature=method_row["target_method_signature"],
                 created_at=(
                     datetime.fromisoformat(method_row["created_at"])
                     if method_row["created_at"]
@@ -902,14 +960,15 @@ class Database:
             cursor.execute(
                 """
                 INSERT INTO method_coverage
-                (iteration, class_name, method_name, covered_lines, missed_lines,
+                (iteration, class_name, method_name, method_signature, covered_lines, missed_lines,
                  total_lines, covered_branches, total_branches, line_coverage, branch_coverage, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     iteration,
                     simple_class_name,  # 使用简单类名
                     coverage.method_name,
+                    getattr(coverage, "method_signature", None),
                     json.dumps(coverage.covered_lines),
                     json.dumps(coverage.missed_lines),
                     coverage.total_lines,
@@ -922,7 +981,12 @@ class Database:
             )
             self.conn.commit()
 
-    def get_method_coverage(self, class_name: str, method_name: str):
+    def get_method_coverage(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ):
         """
         获取方法的最新覆盖率
 
@@ -935,15 +999,13 @@ class Database:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute(
-                """
-                SELECT * FROM method_coverage
-                WHERE class_name = ? AND method_name = ?
-                ORDER BY iteration DESC, id DESC
-                LIMIT 1
-            """,
-                (class_name, method_name),
-            )
+            query = "SELECT * FROM method_coverage WHERE class_name = ? AND method_name = ?"
+            params: list[Any] = [class_name, method_name]
+            if method_signature is not None:
+                query += " AND method_signature = ?"
+                params.append(method_signature)
+            query += " ORDER BY iteration DESC, id DESC LIMIT 1"
+            cursor.execute(query, tuple(params))
             row = cursor.fetchone()
             if not row:
                 return None
@@ -1047,6 +1109,7 @@ class Database:
         return MethodCoverage(
             class_name=row["class_name"],
             method_name=row["method_name"],
+            method_signature=row["method_signature"],
             covered_lines=(json.loads(row["covered_lines"]) if row["covered_lines"] else []),
             missed_lines=json.loads(row["missed_lines"]) if row["missed_lines"] else [],
             total_lines=row["total_lines"],

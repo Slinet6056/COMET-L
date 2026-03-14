@@ -10,6 +10,7 @@ from ..llm.prompts import PromptManager
 from ..models import Mutant, MutationPatch, TestCase
 from ..utils.code_utils import add_line_numbers
 from ..utils.hash_utils import generate_id
+from ..utils.method_keys import normalize_method_signature
 from ..utils.parsers import parse_mutation_response
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class MutantGenerator:
         self,
         class_name: str,
         method_name: Optional[str] = None,
+        method_signature: Optional[str] = None,
         source_code: Optional[str] = None,
     ) -> str:
         """
@@ -58,7 +60,10 @@ class MutantGenerator:
         try:
             rag_kb = cast(RAGKnowledgeBase, self.kb)
             context = rag_kb.retrieve_for_mutation_generation(
-                class_name, method_name or "", source_code
+                class_name,
+                method_name or "",
+                method_signature,
+                source_code,
             )
             if context:
                 logger.debug(f"获取到变异生成 RAG 上下文: {len(context)} 字符")
@@ -73,6 +78,7 @@ class MutantGenerator:
         class_code: str,
         max_retries: int = 3,
         target_method: Optional[str] = None,
+        target_method_signature: Optional[str] = None,
     ) -> List[Mutant]:
         """
         为类生成变异体（带重试机制）
@@ -89,7 +95,12 @@ class MutantGenerator:
         for attempt in range(max_retries):
             try:
                 logger.info(f"生成变异体 (尝试 {attempt + 1}/{max_retries})...")
-                mutants = self._generate_mutants_once(class_name, class_code, target_method)
+                mutants = self._generate_mutants_once(
+                    class_name,
+                    class_code,
+                    target_method,
+                    target_method_signature,
+                )
 
                 if mutants:
                     logger.info(f"成功生成 {len(mutants)} 个变异体")
@@ -109,6 +120,7 @@ class MutantGenerator:
         class_name: str,
         class_code: str,
         target_method: Optional[str] = None,
+        target_method_signature: Optional[str] = None,
     ) -> List[Mutant]:
         """
         单次生成变异体（内部方法，支持 RAG 增强）
@@ -127,7 +139,12 @@ class MutantGenerator:
             patterns = self.kb.get_relevant_patterns(class_code, max_patterns=10)
 
             # 获取 RAG 上下文（如果启用）
-            rag_context = self._get_rag_context(class_name, target_method, class_code)
+            rag_context = self._get_rag_context(
+                class_name,
+                target_method,
+                target_method_signature,
+                class_code,
+            )
 
             # 为代码添加行号
             code_with_lines = add_line_numbers(class_code)
@@ -176,9 +193,13 @@ class MutantGenerator:
                     )
 
                     mutant = Mutant(
-                        id=generate_id("mutant", f"{class_name}_{idx}"),
+                        id=generate_id(
+                            "mutant",
+                            f"{class_name}_{target_method or ''}_{normalize_method_signature(target_method_signature) or ''}_{idx}",
+                        ),
                         class_name=class_name,
                         method_name=target_method,
+                        method_signature=normalize_method_signature(target_method_signature),
                         patch=patch,
                         status="pending",
                         created_at=datetime.now(),
@@ -204,6 +225,7 @@ class MutantGenerator:
         test_cases: List[TestCase],
         kill_rate: float,
         target_method: Optional[str] = None,
+        target_method_signature: Optional[str] = None,
         max_retries: int = 3,
     ) -> List[Mutant]:
         """
@@ -234,6 +256,7 @@ class MutantGenerator:
                     test_cases=test_cases,
                     kill_rate=kill_rate,
                     target_method=target_method,
+                    target_method_signature=target_method_signature,
                 )
 
                 if mutants:
@@ -257,6 +280,7 @@ class MutantGenerator:
         test_cases: List[TestCase],
         kill_rate: float,
         target_method: Optional[str] = None,
+        target_method_signature: Optional[str] = None,
     ) -> List[Mutant]:
         """
         单次完善变异体（内部方法，支持 RAG 增强）
@@ -278,7 +302,12 @@ class MutantGenerator:
             patterns = self.kb.get_relevant_patterns(class_code, max_patterns=10)
 
             # 获取 RAG 上下文（如果启用）
-            rag_context = self._get_rag_context(class_name, target_method, class_code)
+            rag_context = self._get_rag_context(
+                class_name,
+                target_method,
+                target_method_signature,
+                class_code,
+            )
 
             # 为代码添加行号
             code_with_lines = add_line_numbers(class_code)
@@ -330,9 +359,13 @@ class MutantGenerator:
                     )
 
                     mutant = Mutant(
-                        id=generate_id("mutant", f"{class_name}_refined_{idx}"),
+                        id=generate_id(
+                            "mutant",
+                            f"{class_name}_refined_{target_method or ''}_{normalize_method_signature(target_method_signature) or ''}_{idx}",
+                        ),
                         class_name=class_name,
                         method_name=target_method,
+                        method_signature=normalize_method_signature(target_method_signature),
                         patch=patch,
                         status="pending",
                         created_at=datetime.now(),

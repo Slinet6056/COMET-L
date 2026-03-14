@@ -22,6 +22,7 @@ class FakeCoverageParser(CoverageParser):
             MethodCoverage(
                 class_name="org.example.Example",
                 method_name="doWork",
+                method_signature="void doWork()",
                 covered_lines=[10, 11],
                 missed_lines=[12],
                 total_lines=3,
@@ -86,6 +87,15 @@ class ParallelPlannerCoverageSyncTest(unittest.TestCase):
 
             self.assertFalse(synced)
             self.assertEqual(fake_db.saved, [])
+
+
+class CoverageParserSignatureTests(unittest.TestCase):
+    def test_build_method_signature_from_jacoco_descriptor(self):
+        parser = CoverageParser()
+
+        signature = parser._build_method_signature("add", "(II)I")
+
+        self.assertEqual(signature, "int add(int, int)")
 
 
 class FakeLLMCounter:

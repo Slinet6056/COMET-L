@@ -10,6 +10,7 @@ from ..llm.prompts import PromptManager
 from ..models import Mutant, TestCase, TestMethod
 from ..utils.code_utils import build_test_class, extract_imports, parse_java_class
 from ..utils.hash_utils import generate_id
+from ..utils.method_keys import build_test_class_name, normalize_method_signature
 from ..utils.parsers import (
     extract_test_method_name,
     parse_test_class_response,
@@ -104,7 +105,7 @@ class TestGenerator:
             method_name = method_signature.split("(")[0].strip().split()[-1]
 
             # 获取契约
-            contracts = self.kb.get_contracts_for_method(class_name, method_name)
+            contracts = self.kb.get_contracts_for_method(class_name, method_name, method_signature)
             contract = contracts[0] if contracts else None
 
             # 获取 RAG 上下文（如果启用）
@@ -157,6 +158,7 @@ class TestGenerator:
                     method_name=test_method_name,
                     code=test_code,
                     target_method=method_name,
+                    target_method_signature=normalize_method_signature(method_signature),
                     created_at=datetime.now(),
                     updated_at=datetime.now(),
                 )
@@ -174,8 +176,8 @@ class TestGenerator:
             # 处理内部类：将 $ 替换为下划线，使测试类名合法
             # 命名规则：{class}_{method}Test
             # 例如：Calculator.add -> Calculator_addTest
-            clean_class_name = class_name.replace("$", "_")
-            test_class_name = f"{clean_class_name}_{method_name}Test"
+            normalized_signature = normalize_method_signature(method_signature)
+            test_class_name = build_test_class_name(class_name, method_name, normalized_signature)
             method_codes = [m.code for m in test_methods]
 
             full_code = build_test_class(
@@ -188,7 +190,10 @@ class TestGenerator:
 
             # 创建 TestCase 对象
             test_case = TestCase(
-                id=generate_id("test", f"{class_name}_{method_name}"),
+                id=generate_id(
+                    "test",
+                    f"{class_name}_{method_name}_{normalized_signature or ''}",
+                ),
                 class_name=test_class_name,
                 target_class=class_name,
                 package_name=package_name,
@@ -282,6 +287,9 @@ class TestGenerator:
                     code=refined_code,
                     target_method=target_method
                     or (test_case.methods[0].target_method if test_case.methods else ""),
+                    target_method_signature=(
+                        test_case.methods[0].target_method_signature if test_case.methods else None
+                    ),
                     created_at=datetime.now(),
                     updated_at=datetime.now(),
                 )

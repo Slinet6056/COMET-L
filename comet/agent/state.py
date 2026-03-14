@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..utils.method_keys import build_method_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -161,7 +163,11 @@ class AgentState:
             method_name: 方法名
             reason: 失败原因
         """
-        target_key = f"{class_name}.{method_name}" if method_name else class_name
+        method_signature = None
+        if self.current_target and self.current_target.get("class_name") == class_name:
+            if self.current_target.get("method_name") == method_name:
+                method_signature = self.current_target.get("method_signature")
+        target_key = build_method_key(class_name, method_name, method_signature)
 
         # 检查是否已经在黑名单中
         if any(ft.get("target") == target_key for ft in self.failed_targets):
@@ -185,9 +191,13 @@ class AgentState:
             current_class = self.current_target.get("class_name")
             current_method = self.current_target.get("method_name", "")
             current_target_key = (
-                f"{current_class}.{current_method}"
-                if current_method and current_class
-                else (current_class if current_class else None)
+                build_method_key(
+                    current_class,
+                    current_method,
+                    self.current_target.get("method_signature"),
+                )
+                if current_class
+                else None
             )
             if current_target_key == target_key:
                 logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
@@ -303,6 +313,7 @@ class WorkerResult:
     target_id: str  # 目标标识: "{class_name}.{method_name}"
     class_name: str
     method_name: str
+    method_signature: Optional[str] = None
     success: bool = False
     error: Optional[str] = None
 
@@ -328,6 +339,7 @@ class WorkerResult:
             "target_id": self.target_id,
             "class_name": self.class_name,
             "method_name": self.method_name,
+            "method_signature": self.method_signature,
             "success": self.success,
             "error": self.error,
             "tests_generated": self.tests_generated,
@@ -341,6 +353,7 @@ class WorkerResult:
             "targetId": self.target_id,
             "className": self.class_name,
             "methodName": self.method_name,
+            "methodSignature": self.method_signature,
             "testsGenerated": self.tests_generated,
             "mutantsGenerated": self.mutants_generated,
             "mutantsEvaluated": self.mutants_evaluated,
@@ -355,6 +368,7 @@ class WorkerResult:
             "targetId": self.target_id,
             "className": self.class_name,
             "methodName": self.method_name,
+            "methodSignature": self.method_signature,
             "success": self.success,
             "error": self.error,
             "testsGenerated": self.tests_generated,
@@ -372,6 +386,7 @@ class WorkerResult:
             target_id=data.get("target_id", data.get("targetId", "")),
             class_name=data.get("class_name", data.get("className", "")),
             method_name=data.get("method_name", data.get("methodName", "")),
+            method_signature=data.get("method_signature", data.get("methodSignature")),
             success=data.get("success", False),
             error=data.get("error"),
             tests_generated=data.get("tests_generated", data.get("testsGenerated", 0)),
@@ -420,6 +435,7 @@ class ParallelAgentState(AgentState):
         self,
         class_name: str,
         method_name: str,
+        method_signature: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
@@ -432,7 +448,7 @@ class ParallelAgentState(AgentState):
         Returns:
             是否成功获取（False 表示目标已被其他 Worker 占用）
         """
-        target_id = f"{class_name}.{method_name}"
+        target_id = build_method_key(class_name, method_name, method_signature)
         with self._active_targets_lock:
             if target_id in self._active_targets:
                 return False
@@ -450,6 +466,7 @@ class ParallelAgentState(AgentState):
                     "target_id": target_id,
                     "class_name": class_name,
                     "method_name": method_name,
+                    "method_signature": method_signature,
                     "started_at": datetime.now(),
                     "order": order,
                     "status": "running",
@@ -463,6 +480,7 @@ class ParallelAgentState(AgentState):
         self,
         class_name: str,
         method_name: str,
+        method_signature: Optional[str],
         success: bool,
         result: Optional[WorkerResult] = None,
     ) -> None:
@@ -474,7 +492,7 @@ class ParallelAgentState(AgentState):
             method_name: 方法名
             success: 是否处理成功
         """
-        target_id = f"{class_name}.{method_name}"
+        target_id = build_method_key(class_name, method_name, method_signature)
         with self._active_targets_lock:
             ended_at = datetime.now()
             lifecycle: Dict[str, Any] | None = self._target_lifecycle.get(target_id)
@@ -483,6 +501,7 @@ class ParallelAgentState(AgentState):
                     "target_id": target_id,
                     "class_name": class_name,
                     "method_name": method_name,
+                    "method_signature": method_signature,
                     "order": self._target_order_counter,
                     "started_at": ended_at,
                 }

@@ -9,6 +9,19 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+_JVM_PRIMITIVE_TYPES = {
+    "B": "byte",
+    "C": "char",
+    "D": "double",
+    "F": "float",
+    "I": "int",
+    "J": "long",
+    "S": "short",
+    "Z": "boolean",
+    "V": "void",
+}
+
+
 @dataclass
 class MethodCoverage:
     """方法级覆盖率数据"""
@@ -24,6 +37,7 @@ class MethodCoverage:
     line_coverage_rate: float
     branch_coverage_rate: float
     source_filename: Optional[str] = None  # 源文件名，用于聚合
+    method_signature: Optional[str] = None
 
 
 @dataclass
@@ -110,6 +124,10 @@ class CoverageParser:
                             {
                                 "element": method,
                                 "name": method_name,
+                                "signature": self._build_method_signature(
+                                    method_name,
+                                    method.get("desc"),
+                                ),
                                 "start_line": start_line,
                             }
                         )
@@ -196,6 +214,7 @@ class CoverageParser:
                         method_coverage = MethodCoverage(
                             class_name=class_name,
                             method_name=method_name,
+                            method_signature=method_info["signature"],
                             covered_lines=covered_lines,
                             missed_lines=missed_lines,
                             total_lines=total_lines,
@@ -218,6 +237,63 @@ class CoverageParser:
         except Exception as e:
             logger.warning(f"解析覆盖率报告时出错: {e}")
             return []
+
+    def _build_method_signature(self, method_name: str, descriptor: Optional[str]) -> Optional[str]:
+        if not descriptor:
+            return None
+
+        parameter_types, return_type = self._parse_method_descriptor(descriptor)
+        if return_type is None:
+            return None
+        return f"{return_type} {method_name}({', '.join(parameter_types)})"
+
+    def _parse_method_descriptor(self, descriptor: str) -> tuple[List[str], Optional[str]]:
+        if not descriptor.startswith("("):
+            return [], None
+
+        index = 1
+        parameter_types: List[str] = []
+        while index < len(descriptor) and descriptor[index] != ")":
+            parameter_type, index = self._parse_descriptor_type(descriptor, index)
+            if parameter_type is None:
+                return [], None
+            parameter_types.append(parameter_type)
+
+        if index >= len(descriptor) or descriptor[index] != ")":
+            return [], None
+
+        return_type, index = self._parse_descriptor_type(descriptor, index + 1)
+        if return_type is None or index != len(descriptor):
+            return [], None
+
+        return parameter_types, return_type
+
+    def _parse_descriptor_type(self, descriptor: str, index: int) -> tuple[Optional[str], int]:
+        if index >= len(descriptor):
+            return None, index
+
+        array_depth = 0
+        while index < len(descriptor) and descriptor[index] == "[":
+            array_depth += 1
+            index += 1
+
+        if index >= len(descriptor):
+            return None, index
+
+        descriptor_type = descriptor[index]
+        if descriptor_type == "L":
+            end_index = descriptor.find(";", index)
+            if end_index == -1:
+                return None, len(descriptor)
+            base_type = descriptor[index + 1 : end_index].split("/")[-1].replace("$", ".")
+            next_index = end_index + 1
+        else:
+            base_type = _JVM_PRIMITIVE_TYPES.get(descriptor_type)
+            if base_type is None:
+                return None, index + 1
+            next_index = index + 1
+
+        return f"{base_type}{'[]' * array_depth}", next_index
 
     def aggregate_coverage_by_sourcefile(
         self, method_coverages: List[MethodCoverage]

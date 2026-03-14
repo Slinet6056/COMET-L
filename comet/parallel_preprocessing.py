@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict, cast
 
 from .models import TestCase, TestMethod
 from .utils.log_context import log_context, submit_with_log_context
+from .utils.method_keys import build_preprocess_task_id
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +107,13 @@ class ParallelPreprocessor:
 
         logger.info(f"并行预处理器初始化完成，最大并发数: {self.max_workers}")
 
-    def _task_id(self, class_name: str, method_name: str) -> str:
-        return f"Pre:{class_name}.{method_name}"
+    def _task_id(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ) -> str:
+        return build_preprocess_task_id(class_name, method_name, method_signature)
 
     def _publish_runtime_snapshot(self) -> None:
         if callable(self.runtime_snapshot_publisher):
@@ -458,7 +464,7 @@ class ParallelPreprocessor:
             处理结果
         """
         # 设置日志上下文，便于在多线程日志中区分不同任务
-        task_id = self._task_id(class_name, method_name)
+        task_id = self._task_id(class_name, method_name, method_info.get("signature"))
         with log_context(task_id):
             # 记录开始时间，用于后续清理
             start_time = datetime.now()
@@ -497,7 +503,11 @@ class ParallelPreprocessor:
                 return {"success": False, "error": str(e)}
 
     def _cleanup_timeout_data(
-        self, class_name: str, method_name: str, start_time: datetime
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str],
+        start_time: datetime,
     ) -> None:
         """
         清理超时任务产生的数据库数据
@@ -514,7 +524,11 @@ class ParallelPreprocessor:
             time_threshold = start_time - timedelta(seconds=10)
 
             # 清理在本次处理期间创建的、针对该方法的测试用例
-            test_cases = self.db.get_tests_by_target_method(class_name, method_name)
+            test_cases = self.db.get_tests_by_target_method(
+                class_name,
+                method_name,
+                method_signature,
+            )
             for tc in test_cases:
                 # 检查是否是在本次处理期间创建的
                 if tc.created_at and tc.created_at >= time_threshold:
@@ -524,7 +538,12 @@ class ParallelPreprocessor:
                         self.db.delete_test_case(tc.id)
 
             # 清理在本次处理期间创建的、针对该方法的变异体
-            mutants = self.db.get_mutants_by_method(class_name, method_name, status=None)
+            mutants = self.db.get_mutants_by_method(
+                class_name,
+                method_name,
+                status=None,
+                method_signature=method_signature,
+            )
             for mutant in mutants:
                 # 检查是否是在本次处理期间创建的
                 if mutant.created_at and mutant.created_at >= time_threshold:
@@ -628,7 +647,12 @@ class ParallelPreprocessor:
                 logger.warning(
                     f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试生成后"
                 )
-                self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                self._cleanup_timeout_data(
+                    class_name,
+                    method_name,
+                    method_signature,
+                    task_start_time,
+                )
                 with self._stats_lock:
                     self._stats["failed"] += 1
                 return {
@@ -658,7 +682,12 @@ class ParallelPreprocessor:
                 logger.warning(
                     f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在写入测试文件后"
                 )
-                self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                self._cleanup_timeout_data(
+                    class_name,
+                    method_name,
+                    method_signature,
+                    task_start_time,
+                )
                 with self._stats_lock:
                     self._stats["failed"] += 1
                 return {
@@ -691,7 +720,12 @@ class ParallelPreprocessor:
                 logger.warning(
                     f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在测试验证后"
                 )
-                self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                self._cleanup_timeout_data(
+                    class_name,
+                    method_name,
+                    method_signature,
+                    task_start_time,
+                )
                 with self._stats_lock:
                     self._stats["failed"] += 1
                 return {
@@ -733,6 +767,7 @@ class ParallelPreprocessor:
                 class_name=class_name,
                 class_code=class_code,
                 target_method=method_name,
+                target_method_signature=method_signature,
             )
 
             valid_mutants = []
@@ -744,7 +779,12 @@ class ParallelPreprocessor:
                     logger.warning(
                         f"方法 {class_name}.{method_name} 处理超时 ({self.timeout_per_method}s) - 在生成变异体后"
                     )
-                    self._cleanup_timeout_data(class_name, method_name, task_start_time)
+                    self._cleanup_timeout_data(
+                        class_name,
+                        method_name,
+                        method_signature,
+                        task_start_time,
+                    )
                     with self._stats_lock:
                         self._stats["failed"] += 1
                     return {

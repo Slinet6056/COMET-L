@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from ..utils.method_keys import build_method_key, normalize_method_signature
+
 logger = logging.getLogger(__name__)
 
 
@@ -299,7 +301,12 @@ class AgentTools:
         else:
             logger.debug(f"测试文件不存在，无需删除: {test_file_path}")
 
-    def _generate_and_verify_in_sandbox(self, class_name: str, method_name: str) -> Dict[str, Any]:
+    def _generate_and_verify_in_sandbox(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         在独立沙箱中生成并验证测试（阶段1：验证阶段）
 
@@ -350,10 +357,10 @@ class AgentTools:
             class_code = extract_class_from_file(str(file_path))
 
             # 3. 获取方法签名
-            method_sig = None
+            method_sig = method_signature
             if method_name:
                 methods = self.java_executor.get_public_methods(str(file_path))
-                if methods:
+                if methods and method_sig is None:
                     for m in methods:
                         if m.get("name") == method_name:
                             method_sig = m.get("signature")
@@ -461,7 +468,12 @@ class AgentTools:
             logger.warning(f"在沙箱中生成测试失败: {e}", exc_info=True)
             return {"success": False, "error": str(e), "sandbox_id": sandbox_id}
 
-    def _refine_and_verify_in_sandbox(self, class_name: str, method_name: str) -> Dict[str, Any]:
+    def _refine_and_verify_in_sandbox(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         在独立沙箱中完善并验证测试（阶段1：验证阶段）
 
@@ -496,7 +508,11 @@ class AgentTools:
 
         try:
             # 1. 获取现有测试
-            existing_tests = self.db.get_tests_by_target_method(class_name, method_name)
+            existing_tests = self.db.get_tests_by_target_method(
+                class_name,
+                method_name,
+                method_signature,
+            )
             if not existing_tests:
                 return {
                     "success": False,
@@ -544,14 +560,17 @@ class AgentTools:
             all_mutants = self.db.get_all_mutants()
             survived = (
                 self.metrics_collector.get_survived_mutants_for_method(
-                    class_name, method_name, all_mutants
+                    class_name,
+                    method_name,
+                    all_mutants,
+                    method_signature=method_signature,
                 )
                 if self.metrics_collector
                 else []
             )
 
             # 获取覆盖率信息
-            coverage = self.db.get_method_coverage(class_name, method_name)
+            coverage = self.db.get_method_coverage(class_name, method_name, method_signature)
             if coverage:
                 gaps = {
                     "coverage_rate": coverage.line_coverage_rate,
@@ -1189,7 +1208,11 @@ class AgentTools:
 
         # 获取目标方法的覆盖率
         if target.get("class_name") and target.get("method_name"):
-            coverage = self.db.get_method_coverage(target["class_name"], target["method_name"])
+            coverage = self.db.get_method_coverage(
+                target["class_name"],
+                target["method_name"],
+                target.get("method_signature"),
+            )
             if coverage:
                 target["method_coverage"] = coverage.line_coverage_rate
                 logger.info(f"目标方法覆盖率: {coverage.line_coverage_rate:.1%}")
@@ -1207,11 +1230,19 @@ class AgentTools:
                 old_method = previous["method_name"]
 
                 # 将旧目标标记为已处理
-                old_target_key = f"{old_class}.{old_method}" if old_method else old_class
+                old_target_key = build_method_key(
+                    old_class,
+                    old_method,
+                    previous.get("method_signature"),
+                )
                 self.state.mark_target_processed(old_target_key)
                 logger.info(f"将旧目标 {old_target_key} 标记为已处理")
 
-                outdated_count = self.db.mark_mutants_outdated(old_class, old_method)
+                outdated_count = self.db.mark_mutants_outdated(
+                    old_class,
+                    old_method,
+                    previous.get("method_signature"),
+                )
                 logger.info(
                     f"目标已切换，将 {old_class}.{old_method} 的 "
                     f"{outdated_count} 个变异体标记为 outdated"
@@ -1225,7 +1256,10 @@ class AgentTools:
         return target
 
     def generate_mutants(
-        self, class_name: str, method_name: Optional[str] = None
+        self,
+        class_name: str,
+        method_name: Optional[str] = None,
+        method_signature: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         生成变异体（数量由 LLM 自主决定）
@@ -1253,7 +1287,11 @@ class AgentTools:
 
         # 如果指定了目标方法，将该方法的旧变异体标记为 outdated
         if method_name:
-            outdated_count = self.db.mark_mutants_outdated(class_name, method_name)
+            outdated_count = self.db.mark_mutants_outdated(
+                class_name,
+                method_name,
+                normalize_method_signature(method_signature),
+            )
             if outdated_count > 0:
                 logger.info(f"已将 {outdated_count} 个旧变异体标记为 outdated")
 
@@ -1262,6 +1300,7 @@ class AgentTools:
             class_name=class_name,
             class_code=class_code,
             target_method=method_name,
+            target_method_signature=normalize_method_signature(method_signature),
         )
 
         if not mutants:
@@ -1286,6 +1325,7 @@ class AgentTools:
         self,
         class_name: str,
         method_name: str,
+        method_signature: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         生成测试（数量由LLM自主决定）
@@ -1312,7 +1352,12 @@ class AgentTools:
         logger.info(f"开始生成测试: {class_name}.{method_name}")
 
         # ===== 阶段1：在验证沙箱中生成并验证测试 =====
-        result = self._generate_and_verify_in_sandbox(class_name, method_name)
+        normalized_signature = normalize_method_signature(method_signature)
+        result = self._generate_and_verify_in_sandbox(
+            class_name,
+            method_name,
+            normalized_signature,
+        )
 
         if not result["success"]:
             # 验证失败，主空间完全不受影响
@@ -1327,13 +1372,14 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = f"{class_name}.{method_name}" if method_name else class_name
+                target_key = build_method_key(class_name, method_name, normalized_signature)
                 if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
                     self.state.failed_targets.append(
                         {
                             "target": target_key,
                             "class_name": class_name,
                             "method_name": method_name,
+                            "method_signature": normalized_signature,
                             "reason": "测试生成/验证失败（已在沙箱中重试）",
                             "error": result.get("error", "Unknown")[:500],
                             "timestamp": datetime.now().isoformat(),
@@ -1346,9 +1392,13 @@ class AgentTools:
                         current_class = self.state.current_target.get("class_name")
                         current_method = self.state.current_target.get("method_name", "")
                         current_target_key = (
-                            f"{current_class}.{current_method}"
-                            if current_method and current_class
-                            else (current_class if current_class else None)
+                            build_method_key(
+                                current_class,
+                                current_method,
+                                self.state.current_target.get("method_signature"),
+                            )
+                            if current_class
+                            else None
                         )
                         if current_target_key == target_key:
                             logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
@@ -1418,6 +1468,7 @@ class AgentTools:
         self,
         class_name: str,
         method_name: str,
+        method_signature: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         完善现有测试（改进或补充）
@@ -1444,7 +1495,12 @@ class AgentTools:
         logger.info(f"开始完善测试: {class_name}.{method_name}")
 
         # ===== 阶段1：在验证沙箱中完善并验证测试 =====
-        result = self._refine_and_verify_in_sandbox(class_name, method_name)
+        normalized_signature = normalize_method_signature(method_signature)
+        result = self._refine_and_verify_in_sandbox(
+            class_name,
+            method_name,
+            normalized_signature,
+        )
 
         if not result["success"]:
             # 验证失败，主空间完全不受影响
@@ -1459,13 +1515,14 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = f"{class_name}.{method_name}" if method_name else class_name
+                target_key = build_method_key(class_name, method_name, normalized_signature)
                 if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
                     self.state.failed_targets.append(
                         {
                             "target": target_key,
                             "class_name": class_name,
                             "method_name": method_name,
+                            "method_signature": normalized_signature,
                             "reason": "测试完善/验证失败（已在沙箱中重试）",
                             "error": result.get("error", "Unknown")[:500],
                             "timestamp": datetime.now().isoformat(),
@@ -1478,9 +1535,13 @@ class AgentTools:
                         current_class = self.state.current_target.get("class_name")
                         current_method = self.state.current_target.get("method_name", "")
                         current_target_key = (
-                            f"{current_class}.{current_method}"
-                            if current_method and current_class
-                            else (current_class if current_class else None)
+                            build_method_key(
+                                current_class,
+                                current_method,
+                                self.state.current_target.get("method_signature"),
+                            )
+                            if current_class
+                            else None
                         )
                         if current_target_key == target_key:
                             logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
@@ -1501,7 +1562,7 @@ class AgentTools:
 
         # 获取覆盖率信息（用于返回结果）
         current_method_coverage = None
-        coverage = self.db.get_method_coverage(class_name, method_name)
+        coverage = self.db.get_method_coverage(class_name, method_name, method_signature)
         if coverage:
             current_method_coverage = coverage.line_coverage_rate
 
@@ -1584,8 +1645,12 @@ class AgentTools:
         ):
             class_name = current_target["class_name"]
             method_name = current_target["method_name"]
+            method_signature = current_target.get("method_signature")
             mutants = self.db.get_mutants_by_method(
-                class_name=class_name, method_name=method_name, status="valid"
+                class_name=class_name,
+                method_name=method_name,
+                status="valid",
+                method_signature=method_signature,
             )
             logger.info(f"评估目标方法 {class_name}.{method_name} 的变异体")
         else:
@@ -1894,11 +1959,13 @@ class AgentTools:
             if current_target and current_target.get("class_name"):
                 class_name = current_target["class_name"]
                 method_name = current_target.get("method_name")
+                method_signature = current_target.get("method_signature")
 
                 mutants = self.db.get_mutants_by_method(
                     class_name=class_name,
                     method_name=method_name,
                     status="valid",
+                    method_signature=method_signature,
                 )
             else:
                 mutants = self.db.get_valid_mutants()
@@ -2004,6 +2071,7 @@ class AgentTools:
         self,
         class_name: str,
         method_name: str,
+        method_signature: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         基于现有测试生成更具针对性的变异体（数量由 LLM 自主决定）
@@ -2037,6 +2105,7 @@ class AgentTools:
             class_name=class_name,
             method_name=method_name,
             status=None,  # 获取所有状态的变异体
+            method_signature=method_signature,
         )
 
         # 获取测试用例
@@ -2067,6 +2136,7 @@ class AgentTools:
             test_cases=test_cases,
             kill_rate=kill_rate,
             target_method=method_name,
+            target_method_signature=method_signature,
         )
 
         if not mutants:

@@ -128,13 +128,24 @@ class KnowledgeStore:
         cursor.execute("SELECT * FROM contracts WHERE class_name = ?", (class_name,))
         return [self._row_to_contract(row) for row in cursor.fetchall()]
 
-    def get_contracts_by_method(self, class_name: str, method_name: str) -> List[Contract]:
+    def get_contracts_by_method(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ) -> List[Contract]:
         """获取方法的契约"""
         cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT * FROM contracts WHERE class_name = ? AND method_name = ?",
-            (class_name, method_name),
-        )
+        if method_signature is None:
+            cursor.execute(
+                "SELECT * FROM contracts WHERE class_name = ? AND method_name = ?",
+                (class_name, method_name),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM contracts WHERE class_name = ? AND method_name = ? AND method_signature = ?",
+                (class_name, method_name, method_signature),
+            )
         return [self._row_to_contract(row) for row in cursor.fetchall()]
 
     def get_all_contracts(self) -> List[Contract]:

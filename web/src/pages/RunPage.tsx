@@ -87,8 +87,18 @@ function formatTarget(target: Record<string, unknown> | null | undefined): strin
     return '当前没有活动目标';
   }
 
+  const targetId = target.target_id ?? target.targetId;
+  if (typeof targetId === 'string' && targetId.length > 0) {
+    return targetId;
+  }
+
   const className = String(target.class_name ?? target.className ?? 'UnknownClass');
   const methodName = String(target.method_name ?? target.methodName ?? 'unknownMethod');
+  const methodSignature = target.method_signature ?? target.methodSignature;
+  if (typeof methodSignature === 'string' && methodSignature.length > 0) {
+    return `${className}.${methodName} [${methodSignature}]`;
+  }
+
   return `${className}.${methodName}`;
 }
 

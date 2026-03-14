@@ -11,6 +11,7 @@ from ..executor.java_executor import JavaExecutor
 from ..llm.client import LLMClient
 from ..store.database import Database
 from ..utils.log_context import log_context, submit_with_log_context
+from ..utils.method_keys import build_method_key
 from ..utils.sandbox import SandboxManager
 from .state import ParallelAgentState, WorkerResult
 from .target_selector import TargetSelector
@@ -265,10 +266,16 @@ class ParallelPlannerAgent:
 
             class_name = target["class_name"]
             method_name = target.get("method_name", "")
-            target_id = f"{class_name}.{method_name}"
+            method_signature = target.get("method_signature")
+            target_id = build_method_key(class_name, method_name, method_signature)
 
             # 尝试获取目标（原子操作）
-            if self.state.acquire_target(class_name, method_name, metadata=target):
+            if self.state.acquire_target(
+                class_name,
+                method_name,
+                method_signature=method_signature,
+                metadata=target,
+            ):
                 targets.append(target)
                 active_targets.add(target_id)
             else:
@@ -305,16 +312,25 @@ class ParallelPlannerAgent:
                     )
                     results.append(
                         WorkerResult(
-                            target_id=f"{target.get('class_name')}.{target.get('method_name')}",
+                            target_id=build_method_key(
+                                target.get("class_name", ""),
+                                target.get("method_name", ""),
+                                target.get("method_signature"),
+                            ),
                             class_name=target.get("class_name", ""),
                             method_name=target.get("method_name", ""),
+                            method_signature=target.get("method_signature"),
                             success=False,
                             error=str(e),
                             method_coverage=target.get("method_coverage"),
                         )
                     )
                 finally:
-                    target_id = f"{target.get('class_name')}.{target.get('method_name')}"
+                    target_id = build_method_key(
+                        target.get("class_name", ""),
+                        target.get("method_name", ""),
+                        target.get("method_signature"),
+                    )
                     matched_result = next(
                         (r for r in results if r.target_id == target_id),
                         None,
@@ -323,6 +339,7 @@ class ParallelPlannerAgent:
                     self.state.release_target(
                         target.get("class_name", ""),
                         target.get("method_name", ""),
+                        target.get("method_signature"),
                         success=bool(matched_result and matched_result.success),
                         result=matched_result,
                     )
@@ -343,7 +360,8 @@ class ParallelPlannerAgent:
         """
         class_name = target.get("class_name", "")
         method_name = target.get("method_name", "")
-        target_id = f"{class_name}.{method_name}"
+        method_signature = target.get("method_signature")
+        target_id = build_method_key(class_name, method_name, method_signature)
 
         with log_context(target_id):
             return self._process_single_target_impl(target, class_name, method_name, target_id)
@@ -360,6 +378,7 @@ class ParallelPlannerAgent:
             target_id=target_id,
             class_name=class_name,
             method_name=method_name,
+            method_signature=target.get("method_signature"),
             method_coverage=target.get("method_coverage"),
         )
 
@@ -386,6 +405,7 @@ class ParallelPlannerAgent:
                     sandbox_path,
                     class_name,
                     method_name,
+                    target.get("method_signature"),
                 )
                 mutant_future = submit_with_log_context(
                     gen_executor,
@@ -393,6 +413,7 @@ class ParallelPlannerAgent:
                     sandbox_path,
                     class_name,
                     method_name,
+                    target.get("method_signature"),
                 )
 
                 # 获取结果
@@ -412,7 +433,11 @@ class ParallelPlannerAgent:
                 result.test_files = test_result.get("test_files", {})
 
             if result.tests_generated == 0:
-                coverage = self.db.get_method_coverage(class_name, method_name)
+                coverage = self.db.get_method_coverage(
+                    class_name,
+                    method_name,
+                    target.get("method_signature"),
+                )
                 if coverage is not None:
                     result.method_coverage = coverage.line_coverage_rate
                 result.error = "测试生成失败"
@@ -424,7 +449,11 @@ class ParallelPlannerAgent:
                 result.mutants_generated = mutant_result.get("generated", 0)
 
             if result.mutants_generated == 0:
-                coverage = self.db.get_method_coverage(class_name, method_name)
+                coverage = self.db.get_method_coverage(
+                    class_name,
+                    method_name,
+                    target.get("method_signature"),
+                )
                 if coverage is not None:
                     result.method_coverage = coverage.line_coverage_rate
                 # 没有变异体也算成功（可能方法太简单）
@@ -433,13 +462,22 @@ class ParallelPlannerAgent:
                 return result
 
             # 2. 评估变异体（在独立沙箱中）
-            eval_result = self._evaluate_in_sandbox(sandbox_path, class_name, method_name)
+            eval_result = self._evaluate_in_sandbox(
+                sandbox_path,
+                class_name,
+                method_name,
+                target.get("method_signature"),
+            )
             if eval_result:
                 result.mutants_evaluated = eval_result.get("evaluated", 0)
                 result.mutants_killed = eval_result.get("killed", 0)
                 result.local_mutation_score = eval_result.get("mutation_score", 0.0)
 
-            coverage = self.db.get_method_coverage(class_name, method_name)
+            coverage = self.db.get_method_coverage(
+                class_name,
+                method_name,
+                target.get("method_signature"),
+            )
             if coverage is not None:
                 result.method_coverage = coverage.line_coverage_rate
 
@@ -470,12 +508,20 @@ class ParallelPlannerAgent:
         return result
 
     def _generate_tests_in_sandbox(
-        self, sandbox_path: str, class_name: str, method_name: str
+        self,
+        sandbox_path: str,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """在沙箱中生成测试"""
         try:
             # 检查是否已有测试
-            existing_tests = self.db.get_tests_by_target_method(class_name, method_name)
+            existing_tests = self.db.get_tests_by_target_method(
+                class_name,
+                method_name,
+                method_signature,
+            )
             if existing_tests:
                 # 已有测试，读取测试文件内容
                 test_files = {}
@@ -494,7 +540,10 @@ class ParallelPlannerAgent:
 
             # 调用工具生成测试
             result = self.tools.call(
-                "generate_tests", class_name=class_name, method_name=method_name
+                "generate_tests",
+                class_name=class_name,
+                method_name=method_name,
+                method_signature=method_signature,
             )
 
             if result and result.get("generated", 0) > 0:
@@ -509,20 +558,30 @@ class ParallelPlannerAgent:
             return None
 
     def _generate_mutants_in_sandbox(
-        self, sandbox_path: str, class_name: str, method_name: str
+        self,
+        sandbox_path: str,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """在沙箱中生成变异体"""
         try:
             # 检查是否已有变异体
             existing_mutants = self.db.get_mutants_by_method(
-                class_name, method_name, status="valid"
+                class_name,
+                method_name,
+                status="valid",
+                method_signature=method_signature,
             )
             if existing_mutants:
                 return {"generated": len(existing_mutants)}
 
             # 调用工具生成变异体
             result = self.tools.call(
-                "generate_mutants", class_name=class_name, method_name=method_name
+                "generate_mutants",
+                class_name=class_name,
+                method_name=method_name,
+                method_signature=method_signature,
             )
             return result
 
@@ -531,15 +590,28 @@ class ParallelPlannerAgent:
             return None
 
     def _evaluate_in_sandbox(
-        self, sandbox_path: str, class_name: str, method_name: str
+        self,
+        sandbox_path: str,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """在沙箱中评估变异体"""
         try:
             from ..utils.project_utils import write_test_file
 
             # 获取变异体和测试用例
-            mutants = self.db.get_mutants_by_method(class_name, method_name, status="valid")
-            test_cases = self.db.get_tests_by_target_method(class_name, method_name)
+            mutants = self.db.get_mutants_by_method(
+                class_name,
+                method_name,
+                status="valid",
+                method_signature=method_signature,
+            )
+            test_cases = self.db.get_tests_by_target_method(
+                class_name,
+                method_name,
+                method_signature,
+            )
 
             if not mutants or not test_cases:
                 return {"evaluated": 0, "killed": 0, "mutation_score": 0.0}

@@ -11,6 +11,7 @@ from ..llm.prompts import PromptManager
 from ..models import Contract
 from ..utils.hash_utils import generate_id
 from ..utils.json_utils import extract_json_from_response
+from ..utils.method_keys import normalize_method_signature
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ class SpecExtractor:
 
             # 提取方法名
             method_name = method_signature.split("(")[0].strip().split()[-1]
+            normalized_signature = normalize_method_signature(method_signature) or method_signature
 
             # 规范化列表字段（LLM 可能返回字典或字符串）
             def normalize_list(items: list[Any]) -> List[str]:
@@ -91,10 +93,10 @@ class SpecExtractor:
 
             # 创建 Contract 对象
             contract = Contract(
-                id=generate_id("contract", f"{class_name}.{method_name}"),
+                id=generate_id("contract", f"{class_name}.{normalized_signature}"),
                 class_name=class_name,
                 method_name=method_name,
-                method_signature=method_signature,
+                method_signature=normalized_signature,
                 preconditions=normalize_list(data.get("preconditions", [])),
                 postconditions=normalize_list(data.get("postconditions", [])),
                 exceptions=normalize_list(data.get("exceptions", [])),

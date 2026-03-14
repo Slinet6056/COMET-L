@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..executor.java_executor import JavaExecutor
 from ..store.database import Database
+from ..utils.method_keys import build_method_key
 from ..utils.project_utils import get_all_java_classes
 
 logger = logging.getLogger(__name__)
@@ -103,10 +104,10 @@ class TargetSelector:
             processed_selected = None
 
             for selected in low_cov_methods:
-                target_key = (
-                    f"{selected.class_name}.{selected.method_name}"
-                    if selected.method_name
-                    else selected.class_name
+                target_key = build_method_key(
+                    selected.class_name,
+                    selected.method_name,
+                    getattr(selected, "method_signature", None),
                 )
                 if target_key in blacklist:
                     continue
@@ -123,10 +124,10 @@ class TargetSelector:
             selected = unprocessed_selected or processed_selected
 
             if selected:
-                target_key = (
-                    f"{selected.class_name}.{selected.method_name}"
-                    if selected.method_name
-                    else selected.class_name
+                target_key = build_method_key(
+                    selected.class_name,
+                    selected.method_name,
+                    getattr(selected, "method_signature", None),
                 )
                 is_processed = target_key in processed_targets
 
@@ -149,10 +150,16 @@ class TargetSelector:
 
                 if methods:
                     for method in methods:
-                        if isinstance(method, dict) and method.get("name") == selected.method_name:
-                            selected_method_info = method
-                            method_signature = method.get("signature")
-                            break
+                        if not isinstance(method, dict):
+                            continue
+                        if method.get("name") != selected.method_name:
+                            continue
+                        selected_signature = getattr(selected, "method_signature", None)
+                        if selected_signature and method.get("signature") != selected_signature:
+                            continue
+                        selected_method_info = method
+                        method_signature = method.get("signature")
+                        break
 
                 return {
                     "class_name": selected.class_name,
@@ -172,7 +179,10 @@ class TargetSelector:
         if all_coverage:
             # 过滤黑名单
             filtered = [
-                c for c in all_coverage if f"{c.class_name}.{c.method_name}" not in blacklist
+                c
+                for c in all_coverage
+                if build_method_key(c.class_name, c.method_name, c.method_signature)
+                not in blacklist
             ]
             if not filtered:
                 logger.warning("所有方法都在黑名单中，无法选择目标")
@@ -180,7 +190,10 @@ class TargetSelector:
 
             # 优先选择未处理的目标
             unprocessed = [
-                c for c in filtered if f"{c.class_name}.{c.method_name}" not in processed_targets
+                c
+                for c in filtered
+                if build_method_key(c.class_name, c.method_name, c.method_signature)
+                not in processed_targets
             ]
 
             if unprocessed:
@@ -204,10 +217,16 @@ class TargetSelector:
 
             if methods:
                 for method in methods:
-                    if isinstance(method, dict) and method.get("name") == selected.method_name:
-                        selected_method_info = method
-                        method_signature = method.get("signature")
-                        break
+                    if not isinstance(method, dict):
+                        continue
+                    if method.get("name") != selected.method_name:
+                        continue
+                    selected_signature = getattr(selected, "method_signature", None)
+                    if selected_signature and method.get("signature") != selected_signature:
+                        continue
+                    selected_method_info = method
+                    method_signature = method.get("signature")
+                    break
 
             return {
                 "class_name": selected.class_name,
@@ -236,7 +255,8 @@ class TargetSelector:
 
             for method in methods:
                 method_name = method.get("name") if isinstance(method, dict) else method
-                target_key = f"{selected_class}.{method_name}"
+                method_signature = method.get("signature") if isinstance(method, dict) else None
+                target_key = build_method_key(selected_class, method_name, method_signature)
 
                 # 检查黑名单
                 if target_key in blacklist:
@@ -245,8 +265,6 @@ class TargetSelector:
                 # 优先选择未处理的目标
                 if target_key in processed_targets:
                     continue
-
-                method_signature = method.get("signature") if isinstance(method, dict) else None
 
                 logger.info(f"选择目标（默认）: {selected_class}.{method_name}")
                 return {
@@ -265,13 +283,12 @@ class TargetSelector:
 
             for method in methods:
                 method_name = method.get("name") if isinstance(method, dict) else method
-                target_key = f"{selected_class}.{method_name}"
+                method_signature = method.get("signature") if isinstance(method, dict) else None
+                target_key = build_method_key(selected_class, method_name, method_signature)
 
                 # 只检查黑名单，允许已处理的目标
                 if target_key in blacklist:
                     continue
-
-                method_signature = method.get("signature") if isinstance(method, dict) else None
 
                 logger.info(f"选择目标（默认，已处理）: {selected_class}.{method_name}")
                 return {
@@ -328,7 +345,7 @@ class TargetSelector:
                 prefer_unprocessed=True,
             )
             if method_name is not None:
-                target_key = f"{candidate_class}.{method_name}"
+                target_key = build_method_key(candidate_class, method_name, method_signature)
                 is_processed = target_key in processed_targets
 
                 if is_processed:
@@ -397,7 +414,7 @@ class TargetSelector:
                 prefer_unprocessed=True,
             )
             if method_name is not None:
-                target_key = f"{candidate_class}.{method_name}"
+                target_key = build_method_key(candidate_class, method_name, method_signature)
                 is_processed = target_key in processed_targets
 
                 if is_processed:
@@ -455,7 +472,7 @@ class TargetSelector:
                 allow_first_only=False,
             )
             if method_name is not None:
-                target_key = f"{class_name}.{method_name}"
+                target_key = build_method_key(class_name, method_name, method_signature)
                 target_tuple = (class_name, method_info, method_name, method_signature)
 
                 if target_key in processed_targets:
@@ -543,6 +560,7 @@ class TargetSelector:
             is_processed = True
         class_name = selected_stat["class_name"]
         method_name = selected_stat["method_name"]
+        selected_signature = selected_stat.get("method_signature")
 
         if is_processed:
             logger.warning(
@@ -566,10 +584,15 @@ class TargetSelector:
 
         if methods:
             for method in methods:
-                if isinstance(method, dict) and method.get("name") == method_name:
-                    selected_method_info = method
-                    method_signature = method.get("signature")
-                    break
+                if not isinstance(method, dict):
+                    continue
+                if method.get("name") != method_name:
+                    continue
+                if selected_signature and method.get("signature") != selected_signature:
+                    continue
+                selected_method_info = method
+                method_signature = method.get("signature")
+                break
 
         return {
             "class_name": class_name,
@@ -709,11 +732,11 @@ class TargetSelector:
 
         for method in methods:
             method_name = method.get("name") if isinstance(method, dict) else method
-            target_key = f"{class_name}.{method_name}" if method_name else class_name
+            method_signature = method.get("signature") if isinstance(method, dict) else None
+            target_key = build_method_key(class_name, method_name, method_signature)
             if target_key in blacklist:
                 continue
 
-            method_signature = method.get("signature") if isinstance(method, dict) else None
             method_info = method if isinstance(method, dict) else None
             candidate = (method_info, method_name, method_signature)
 

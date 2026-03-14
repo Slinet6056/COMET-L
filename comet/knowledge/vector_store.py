@@ -98,6 +98,21 @@ class VectorStore:
     ) -> ChromaMetadata:
         return dict(metadata) if metadata is not None else {}
 
+    @staticmethod
+    def _normalize_filter_metadata(
+        filter_metadata: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if not filter_metadata:
+            return None
+
+        if any(key.startswith("$") for key in filter_metadata):
+            return filter_metadata
+
+        if len(filter_metadata) == 1:
+            return filter_metadata
+
+        return {"$and": [{key: value} for key, value in filter_metadata.items()]}
+
     def add(
         self,
         knowledge_type: str,
@@ -226,12 +241,13 @@ class VectorStore:
 
         # 获取查询 embedding
         query_embedding = self.embedding_service.embed(query)
+        normalized_filter = self._normalize_filter_metadata(filter_metadata)
 
         # 执行搜索
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=min(top_k, collection.count()),
-            where=filter_metadata,
+            where=normalized_filter,
             include=["documents", "metadatas", "distances"],
         )
 
