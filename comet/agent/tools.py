@@ -1088,11 +1088,32 @@ class AgentTools:
                 test_case.compile_success = True
                 test_case.compile_error = None
             else:
-                logger.warning("最终测试运行失败（但这不应该发生）")
+                final_test_error = (
+                    final_test.get("error")
+                    or final_test.get("raw_output")
+                    or final_test.get("output")
+                    or final_test.get("stderr")
+                    or final_test.get("stdout")
+                    or "Unknown error"
+                )
+                logger.warning(
+                    f"最终测试运行失败（但这不应该发生）: class={test_case.class_name}, "
+                    f"methods={len(final_methods)}, error={final_test_error}"
+                )
                 test_case.compile_success = False
                 test_case.compile_error = "Final test run failed"
         else:
-            logger.warning("最终编译失败（但这不应该发生）")
+            final_compile_error = (
+                final_compile.get("error")
+                or final_compile.get("output")
+                or final_compile.get("stderr")
+                or final_compile.get("stdout")
+                or "Unknown error"
+            )
+            logger.warning(
+                f"最终编译失败（但这不应该发生）: class={test_case.class_name}, "
+                f"methods={len(final_methods)}, error={final_compile_error}"
+            )
             test_case.compile_success = False
             test_case.compile_error = "Final compilation failed"
 
