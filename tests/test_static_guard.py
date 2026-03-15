@@ -14,6 +14,9 @@ class RecordingStaticGuard(StaticGuard):
     _maven_result: bool
     classpath_resolve_calls: int
     maven_compile_calls: int
+    observed_original_during_maven: str | None
+    original_source_file: Path | None
+    last_maven_project_root: Path | None
 
     def __init__(
         self,
@@ -25,6 +28,9 @@ class RecordingStaticGuard(StaticGuard):
         self._maven_result = maven_result
         self.classpath_resolve_calls = 0
         self.maven_compile_calls = 0
+        self.observed_original_during_maven = None
+        self.original_source_file = None
+        self.last_maven_project_root = None
 
     @override
     def _resolve_maven_classpath(self, project_root: Path) -> str | None:
@@ -41,13 +47,17 @@ class RecordingStaticGuard(StaticGuard):
 
     @override
     def _compile_project(self, project_root: Path) -> bool:
-        _ = project_root
+        self.last_maven_project_root = project_root
         self.maven_compile_calls += 1
+        if self.original_source_file is not None:
+            self.observed_original_during_maven = self.original_source_file.read_text(
+                encoding="utf-8"
+            )
         return self._maven_result
 
 
 class StaticGuardHybridValidationTests(unittest.TestCase):
-    def _create_project(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
+    def _create_project(self) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
         temp_dir = tempfile.TemporaryDirectory()
         project_root = Path(temp_dir.name)
         (project_root / "src" / "main" / "java" / "com" / "example").mkdir(parents=True)
@@ -65,7 +75,7 @@ class StaticGuardHybridValidationTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        return temp_dir, source_file
+        return temp_dir, project_root, source_file
 
     def _make_mutant(self, mutated_code: str) -> Mutant:
         return Mutant(
@@ -82,7 +92,7 @@ class StaticGuardHybridValidationTests(unittest.TestCase):
         )
 
     def test_retryable_javac_failure_uses_maven_fallback(self) -> None:
-        temp_dir, source_file = self._create_project()
+        temp_dir, project_root, source_file = self._create_project()
         self.addCleanup(temp_dir.cleanup)
         original_content = source_file.read_text(encoding="utf-8")
         guard = RecordingStaticGuard(
@@ -94,6 +104,7 @@ class StaticGuardHybridValidationTests(unittest.TestCase):
             ),
             maven_result=True,
         )
+        guard.original_source_file = source_file
 
         mutant = self._make_mutant("        return 2;")
 
@@ -103,10 +114,13 @@ class StaticGuardHybridValidationTests(unittest.TestCase):
         self.assertEqual(mutant.status, "valid")
         self.assertIsNone(mutant.compile_error)
         self.assertEqual(guard.maven_compile_calls, 1)
+        self.assertIsNotNone(guard.last_maven_project_root)
+        self.assertNotEqual(guard.last_maven_project_root, project_root)
+        self.assertEqual(guard.observed_original_during_maven, original_content)
         self.assertEqual(source_file.read_text(encoding="utf-8"), original_content)
 
     def test_syntax_error_does_not_use_maven_fallback(self) -> None:
-        temp_dir, source_file = self._create_project()
+        temp_dir, _, source_file = self._create_project()
         self.addCleanup(temp_dir.cleanup)
         guard = RecordingStaticGuard(
             javac_result=subprocess.CompletedProcess(
@@ -128,7 +142,7 @@ class StaticGuardHybridValidationTests(unittest.TestCase):
         self.assertEqual(guard.maven_compile_calls, 0)
 
     def test_maven_classpath_is_cached_per_project_root(self) -> None:
-        temp_dir, source_file = self._create_project()
+        temp_dir, _, source_file = self._create_project()
         self.addCleanup(temp_dir.cleanup)
         guard = RecordingStaticGuard(
             javac_result=subprocess.CompletedProcess(

@@ -349,11 +349,23 @@ class StaticGuard:
         if mutated_content is None:
             return False
 
+        isolated_root = Path(tempfile.mkdtemp(prefix="comet-mutant-maven-"))
         try:
-            _ = original_path.write_text(mutated_content, encoding="utf-8")
-            return self._compile_project(project_root)
+            self._copy_project_for_maven_validation(project_root, isolated_root)
+            isolated_file = isolated_root / original_path.relative_to(project_root)
+            isolated_file.parent.mkdir(parents=True, exist_ok=True)
+            _ = isolated_file.write_text(mutated_content, encoding="utf-8")
+            return self._compile_project(isolated_root)
         finally:
-            _ = original_path.write_text(original_content, encoding="utf-8")
+            shutil.rmtree(isolated_root, ignore_errors=True)
+
+    def _copy_project_for_maven_validation(self, project_root: Path, isolated_root: Path) -> None:
+        shutil.copytree(
+            project_root,
+            isolated_root,
+            ignore=shutil.ignore_patterns("target", ".git", ".idea", ".gradle"),
+            dirs_exist_ok=True,
+        )
 
     def _build_mutated_source(self, mutant: Mutant, original_content: str) -> Optional[str]:
         lines = original_content.splitlines(keepends=True)
