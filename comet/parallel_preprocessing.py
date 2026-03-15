@@ -1382,22 +1382,38 @@ class ParallelPreprocessor:
                     if failed_methods:
                         logger.info(f"二分查找识别到 {len(failed_methods)} 个失败方法")
                         for method_name in failed_methods:
+                            failed_entries = [
+                                m for m in valid_methods if m.method_name == method_name
+                            ]
                             valid_methods = [
                                 m for m in valid_methods if m.method_name != method_name
                             ]
-                            self._delete_test_method_from_db(target_class, method_name)
+                            for failed_method in failed_entries:
+                                self._delete_test_method_from_db(
+                                    target_class,
+                                    method_name,
+                                    failed_method.target_method_signature,
+                                )
                     else:
                         # 二分查找也没找到，这不应该发生
                         logger.warning("二分查找未能识别失败方法，删除所有方法")
                         for m in valid_methods:
-                            self._delete_test_method_from_db(target_class, m.method_name)
+                            self._delete_test_method_from_db(
+                                target_class,
+                                m.method_name,
+                                m.target_method_signature,
+                            )
                         valid_methods = []
                         break
                 elif valid_methods:
                     # 只剩一个方法，删除它
                     removed = valid_methods.pop()
                     logger.warning(f"只剩一个方法且编译失败，删除: {removed.method_name}")
-                    self._delete_test_method_from_db(target_class, removed.method_name)
+                    self._delete_test_method_from_db(
+                        target_class,
+                        removed.method_name,
+                        removed.target_method_signature,
+                    )
                 else:
                     # 没有方法了，退出
                     logger.warning("所有方法都编译失败")
@@ -1436,15 +1452,27 @@ class ParallelPreprocessor:
                     if failed_methods_from_binary:
                         logger.info(f"二分查找识别到 {len(failed_methods_from_binary)} 个失败方法")
                         for method_name in failed_methods_from_binary:
+                            failed_entries = [
+                                m for m in valid_methods if m.method_name == method_name
+                            ]
                             valid_methods = [
                                 m for m in valid_methods if m.method_name != method_name
                             ]
-                            self._delete_test_method_from_db(target_class, method_name)
+                            for failed_method in failed_entries:
+                                self._delete_test_method_from_db(
+                                    target_class,
+                                    method_name,
+                                    failed_method.target_method_signature,
+                                )
                     else:
                         # 二分查找也没找到，这不应该发生
                         logger.warning("二分查找未能识别失败方法，删除所有方法")
                         for m in valid_methods:
-                            self._delete_test_method_from_db(target_class, m.method_name)
+                            self._delete_test_method_from_db(
+                                target_class,
+                                m.method_name,
+                                m.target_method_signature,
+                            )
                         valid_methods = []
                         break
                     continue
@@ -1452,7 +1480,11 @@ class ParallelPreprocessor:
                     # 只剩一个方法，删除它
                     removed = valid_methods.pop()
                     logger.warning(f"只剩一个方法且测试失败，删除: {removed.method_name}")
-                    self._delete_test_method_from_db(target_class, removed.method_name)
+                    self._delete_test_method_from_db(
+                        target_class,
+                        removed.method_name,
+                        removed.target_method_signature,
+                    )
                     continue
                 else:
                     # 没有方法了
@@ -1462,9 +1494,15 @@ class ParallelPreprocessor:
             # 从文件和数据库中删除失败的测试方法
             logger.warning(f"识别到 {len(failed_test_methods)} 个失败的测试方法，将删除")
             for method_name in failed_test_methods:
+                failed_entries = [m for m in valid_methods if m.method_name == method_name]
                 valid_methods = [m for m in valid_methods if m.method_name != method_name]
                 logger.warning(f"删除测试失败的方法: {method_name}")
-                self._delete_test_method_from_db(target_class, method_name)
+                for failed_method in failed_entries:
+                    self._delete_test_method_from_db(
+                        target_class,
+                        method_name,
+                        failed_method.target_method_signature,
+                    )
 
             if not valid_methods:
                 logger.warning("所有测试方法都失败了")
@@ -1703,7 +1741,12 @@ class ParallelPreprocessor:
             except Exception as e:
                 logger.warning(f"清理验证沙箱失败 {sandbox_id}: {e}")
 
-    def _delete_test_method_from_db(self, target_class: str, method_name: str) -> None:
+    def _delete_test_method_from_db(
+        self,
+        target_class: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ) -> None:
         """
         从数据库中删除指定的测试方法（包括 test_methods 表中的所有版本）
 
@@ -1718,7 +1761,7 @@ class ParallelPreprocessor:
 
             for test_case in test_cases:
                 # 使用新的 delete_test_method 方法直接删除 test_methods 表中的记录
-                if self.db.delete_test_method(test_case.id, method_name):
+                if self.db.delete_test_method(test_case.id, method_name, method_signature):
                     deleted_from_any = True
                     logger.debug(f"从数据库删除方法: {test_case.id}.{method_name}")
 

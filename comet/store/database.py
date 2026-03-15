@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from ..executor.coverage_parser import MethodCoverage
 from ..models import EvaluationResult, Mutant, TestCase, TestMethod
+from ..utils.code_utils import build_test_class
 from ..utils.method_keys import build_method_key
 
 logger = logging.getLogger(__name__)
@@ -604,13 +605,32 @@ class Database:
             results = []
             for row in rows:
                 test_case = self._row_to_test_case(row)
-                has_target_method = any(
-                    tm.target_method == method_name
-                    and (method_signature is None or tm.target_method_signature == method_signature)
+                filtered_methods = [
+                    tm
                     for tm in test_case.methods
-                )
-                if has_target_method:
-                    results.append(test_case)
+                    if tm.target_method == method_name
+                    and tm.target_method_signature == method_signature
+                ]
+                if not filtered_methods and method_signature is None:
+                    filtered_methods = [
+                        tm
+                        for tm in test_case.methods
+                        if tm.target_method == method_name and tm.target_method_signature is None
+                    ]
+
+                if filtered_methods:
+                    full_code = build_test_class(
+                        test_class_name=test_case.class_name,
+                        target_class=test_case.target_class,
+                        package_name=test_case.package_name,
+                        imports=test_case.imports,
+                        test_methods=[tm.code for tm in filtered_methods],
+                    )
+                    results.append(
+                        test_case.model_copy(
+                            update={"methods": filtered_methods, "full_code": full_code}
+                        )
+                    )
 
             if results:
                 logger.debug(f"查询到 {len(results)} 个针对 {class_name}.{method_name} 的测试用例")
@@ -632,7 +652,12 @@ class Database:
                 self.conn.rollback()
                 raise
 
-    def delete_test_method(self, test_case_id: str, method_name: str) -> bool:
+    def delete_test_method(
+        self,
+        test_case_id: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+    ) -> bool:
         """
         删除指定测试用例中的指定测试方法，并更新相关变异体的击杀信息
 
@@ -652,13 +677,12 @@ class Database:
                     logger.info(f"删除测试方法前，已更新 {updated_mutants} 个变异体的击杀信息")
 
                 # 删除该方法
-                cursor.execute(
-                    """
-                    DELETE FROM test_methods
-                    WHERE test_case_id = ? AND method_name = ?
-                """,
-                    (test_case_id, method_name),
-                )
+                query = "DELETE FROM test_methods WHERE test_case_id = ? AND method_name = ?"
+                params: list[Any] = [test_case_id, method_name]
+                if method_signature is not None:
+                    query += " AND target_method_signature = ?"
+                    params.append(method_signature)
+                cursor.execute(query, tuple(params))
                 deleted_count = cursor.rowcount
                 self.conn.commit()
 

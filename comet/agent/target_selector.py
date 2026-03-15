@@ -39,6 +39,30 @@ class TargetSelector:
         self.min_method_lines = min_method_lines
         self._class_cache: Optional[List[str]] = None
 
+    def _resolve_method_details(
+        self,
+        class_name: str,
+        method_name: str,
+        selected_signature: Optional[str] = None,
+    ) -> tuple[Optional[MethodInfo], Optional[str]]:
+        methods = self._get_public_methods(class_name)
+        selected_method_info = None
+        method_signature = selected_signature
+
+        if methods:
+            for method in methods:
+                if not isinstance(method, dict):
+                    continue
+                if method.get("name") != method_name:
+                    continue
+                if selected_signature and method.get("signature") != selected_signature:
+                    continue
+                selected_method_info = method
+                method_signature = method.get("signature") or selected_signature
+                break
+
+        return selected_method_info, method_signature
+
     def select(
         self,
         criteria: str = "coverage",
@@ -143,23 +167,12 @@ class TargetSelector:
                         f"(覆盖率: {selected.line_coverage_rate:.1%})"
                     )
 
-                # 获取方法签名
-                methods = self._get_public_methods(selected.class_name)
-                selected_method_info = None
-                method_signature = None
-
-                if methods:
-                    for method in methods:
-                        if not isinstance(method, dict):
-                            continue
-                        if method.get("name") != selected.method_name:
-                            continue
-                        selected_signature = getattr(selected, "method_signature", None)
-                        if selected_signature and method.get("signature") != selected_signature:
-                            continue
-                        selected_method_info = method
-                        method_signature = method.get("signature")
-                        break
+                selected_signature = getattr(selected, "method_signature", None)
+                selected_method_info, method_signature = self._resolve_method_details(
+                    selected.class_name,
+                    selected.method_name,
+                    selected_signature,
+                )
 
                 return {
                     "class_name": selected.class_name,
@@ -210,23 +223,12 @@ class TargetSelector:
                     f"(覆盖率: {selected.line_coverage_rate:.1%})"
                 )
 
-            # 获取方法签名
-            methods = self._get_public_methods(selected.class_name)
-            selected_method_info = None
-            method_signature = None
-
-            if methods:
-                for method in methods:
-                    if not isinstance(method, dict):
-                        continue
-                    if method.get("name") != selected.method_name:
-                        continue
-                    selected_signature = getattr(selected, "method_signature", None)
-                    if selected_signature and method.get("signature") != selected_signature:
-                        continue
-                    selected_method_info = method
-                    method_signature = method.get("signature")
-                    break
+            selected_signature = getattr(selected, "method_signature", None)
+            selected_method_info, method_signature = self._resolve_method_details(
+                selected.class_name,
+                selected.method_name,
+                selected_signature,
+            )
 
             return {
                 "class_name": selected.class_name,
@@ -577,22 +579,11 @@ class TargetSelector:
                 f"幸存: {selected_stat['survived']})"
             )
 
-        # 获取方法签名
-        methods = self._get_public_methods(class_name)
-        selected_method_info = None
-        method_signature = None
-
-        if methods:
-            for method in methods:
-                if not isinstance(method, dict):
-                    continue
-                if method.get("name") != method_name:
-                    continue
-                if selected_signature and method.get("signature") != selected_signature:
-                    continue
-                selected_method_info = method
-                method_signature = method.get("signature")
-                break
+        selected_method_info, method_signature = self._resolve_method_details(
+            class_name,
+            method_name,
+            selected_signature,
+        )
 
         return {
             "class_name": class_name,

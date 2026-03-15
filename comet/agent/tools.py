@@ -50,6 +50,30 @@ class AgentTools:
 
         self._register_default_tools()
 
+    def _inherit_current_target_signature(
+        self,
+        class_name: str,
+        method_name: Optional[str],
+        method_signature: Optional[str],
+    ) -> Optional[str]:
+        normalized_signature = normalize_method_signature(method_signature)
+        if normalized_signature is not None:
+            return normalized_signature
+
+        if not self.state or not method_name:
+            return None
+
+        current_target = self.state.current_target
+        if not current_target:
+            return None
+
+        if current_target.get("class_name") != class_name:
+            return None
+        if current_target.get("method_name") != method_name:
+            return None
+
+        return normalize_method_signature(current_target.get("method_signature"))
+
     def _get_formatting_config(self) -> tuple[bool | None, str | None]:
         """
         获取格式化配置
@@ -92,9 +116,16 @@ class AgentTools:
             metadata=ToolMetadata(
                 name="generate_mutants",
                 description="生成变异体",
-                params={"class_name": "类名", "method_name": "方法名"},
+                params={
+                    "class_name": "类名",
+                    "method_name": "方法名",
+                    "method_signature": "方法签名（重载方法时必须传）",
+                },
                 when_to_use="已有目标但变异体数量为 0 时",
-                notes=["如果有当前选中的目标方法，必须传递 method_name 参数"],
+                notes=[
+                    "如果有当前选中的目标方法，必须传递 method_name 参数",
+                    "重载方法必须传递 method_signature，避免不同重载共用同一个目标身份",
+                ],
             ),
         )
 
@@ -105,9 +136,16 @@ class AgentTools:
             metadata=ToolMetadata(
                 name="generate_tests",
                 description="生成测试（数量由LLM自主决定）",
-                params={"class_name": "类名", "method_name": "方法名"},
+                params={
+                    "class_name": "类名",
+                    "method_name": "方法名",
+                    "method_signature": "方法签名（重载方法时必须传）",
+                },
                 when_to_use="已有目标但还没有测试时",
-                notes=["生成的测试数量由LLM根据方法复杂度决定"],
+                notes=[
+                    "生成的测试数量由LLM根据方法复杂度决定",
+                    "重载方法必须传递 method_signature，避免测试绑定到错误的方法重载",
+                ],
             ),
         )
 
@@ -118,9 +156,16 @@ class AgentTools:
             metadata=ToolMetadata(
                 name="refine_tests",
                 description="完善现有测试（改进或补充）",
-                params={"class_name": "类名", "method_name": "方法名"},
+                params={
+                    "class_name": "类名",
+                    "method_name": "方法名",
+                    "method_signature": "方法签名（重载方法时必须传）",
+                },
                 when_to_use="已有测试但效果不佳时（如：变异分数低、有幸存变异体、覆盖率低）",
-                notes=["可以改进现有测试或补充新测试，由LLM自主决定策略"],
+                notes=[
+                    "可以改进现有测试或补充新测试，由LLM自主决定策略",
+                    "重载方法必须传递 method_signature，避免读取或覆盖错误的测试方法",
+                ],
             ),
         )
 
@@ -160,9 +205,13 @@ class AgentTools:
                 params={
                     "class_name": "类名",
                     "method_name": "方法名",
+                    "method_signature": "方法签名（重载方法时必须传）",
                 },
                 when_to_use="根据项目复杂度和测试质量自主判断（可选工具）",
-                notes=["简单项目高杀死率是正常的，不必强制使用此工具"],
+                notes=[
+                    "简单项目高杀死率是正常的，不必强制使用此工具",
+                    "重载方法必须传递 method_signature，避免混入其他重载的变异体统计",
+                ],
             ),
         )
 
@@ -591,6 +640,7 @@ class AgentTools:
                 test_case=original_test_case,
                 class_code=class_code,
                 target_method=method_name,
+                target_method_signature=method_signature,
                 survived_mutants=survived,
                 coverage_gaps=gaps,
                 evaluation_feedback=evaluation_feedback,
@@ -1296,6 +1346,10 @@ class AgentTools:
         from ..utils.code_utils import extract_class_from_file
         from ..utils.project_utils import find_java_file
 
+        method_signature = self._inherit_current_target_signature(
+            class_name, method_name, method_signature
+        )
+
         # 查找类文件（支持同一文件中的多个类）
         file_path = find_java_file(self.project_path, class_name, db=self.db)
 
@@ -1311,7 +1365,7 @@ class AgentTools:
             outdated_count = self.db.mark_mutants_outdated(
                 class_name,
                 method_name,
-                normalize_method_signature(method_signature),
+                method_signature,
             )
             if outdated_count > 0:
                 logger.info(f"已将 {outdated_count} 个旧变异体标记为 outdated")
@@ -1321,7 +1375,7 @@ class AgentTools:
             class_name=class_name,
             class_code=class_code,
             target_method=method_name,
-            target_method_signature=normalize_method_signature(method_signature),
+            target_method_signature=method_signature,
         )
 
         if not mutants:
@@ -1370,15 +1424,14 @@ class AgentTools:
             logger.warning("generate_tests: 缺少必要组件")
             return {"generated": 0}
 
+        method_signature = self._inherit_current_target_signature(
+            class_name, method_name, method_signature
+        )
+
         logger.info(f"开始生成测试: {class_name}.{method_name}")
 
         # ===== 阶段1：在验证沙箱中生成并验证测试 =====
-        normalized_signature = normalize_method_signature(method_signature)
-        result = self._generate_and_verify_in_sandbox(
-            class_name,
-            method_name,
-            normalized_signature,
-        )
+        result = self._generate_and_verify_in_sandbox(class_name, method_name, method_signature)
 
         if not result["success"]:
             # 验证失败，主空间完全不受影响
@@ -1393,14 +1446,14 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = build_method_key(class_name, method_name, normalized_signature)
+                target_key = build_method_key(class_name, method_name, method_signature)
                 if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
                     self.state.failed_targets.append(
                         {
                             "target": target_key,
                             "class_name": class_name,
                             "method_name": method_name,
-                            "method_signature": normalized_signature,
+                            "method_signature": method_signature,
                             "reason": "测试生成/验证失败（已在沙箱中重试）",
                             "error": result.get("error", "Unknown")[:500],
                             "timestamp": datetime.now().isoformat(),
@@ -1513,15 +1566,14 @@ class AgentTools:
             logger.warning("refine_tests: 缺少必要组件")
             return {"refined": 0}
 
+        method_signature = self._inherit_current_target_signature(
+            class_name, method_name, method_signature
+        )
+
         logger.info(f"开始完善测试: {class_name}.{method_name}")
 
         # ===== 阶段1：在验证沙箱中完善并验证测试 =====
-        normalized_signature = normalize_method_signature(method_signature)
-        result = self._refine_and_verify_in_sandbox(
-            class_name,
-            method_name,
-            normalized_signature,
-        )
+        result = self._refine_and_verify_in_sandbox(class_name, method_name, method_signature)
 
         if not result["success"]:
             # 验证失败，主空间完全不受影响
@@ -1536,14 +1588,14 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = build_method_key(class_name, method_name, normalized_signature)
+                target_key = build_method_key(class_name, method_name, method_signature)
                 if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
                     self.state.failed_targets.append(
                         {
                             "target": target_key,
                             "class_name": class_name,
                             "method_name": method_name,
-                            "method_signature": normalized_signature,
+                            "method_signature": method_signature,
                             "reason": "测试完善/验证失败（已在沙箱中重试）",
                             "error": result.get("error", "Unknown")[:500],
                             "timestamp": datetime.now().isoformat(),
@@ -2107,6 +2159,10 @@ class AgentTools:
         if not all([self.project_path, self.mutant_generator, self.static_guard, self.db]):
             logger.warning("refine_mutants: 缺少必要组件")
             return {"generated": 0}
+
+        method_signature = self._inherit_current_target_signature(
+            class_name, method_name, method_signature
+        )
 
         from ..utils.code_utils import extract_class_from_file
         from ..utils.project_utils import find_java_file

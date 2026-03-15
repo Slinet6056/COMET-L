@@ -164,6 +164,7 @@ class ParallelPlannerAgent:
                         result.class_name,
                         result.method_name,
                         result.error or "处理失败",
+                        result.method_signature,
                     )
 
                 # === 集中同步阶段 ===

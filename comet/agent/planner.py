@@ -180,6 +180,7 @@ class PlannerAgent:
                         current_class,
                         current_method,
                         f"连续 {no_improvement_count} 轮无改进",
+                        self.state.current_target.get("method_signature"),
                     )
 
                     # 重置无改进计数器

@@ -217,6 +217,7 @@ class TestGenerator:
         test_case: TestCase,
         class_code: str,
         target_method: Optional[str] = None,
+        target_method_signature: Optional[str] = None,
         survived_mutants: Optional[List[Mutant]] = None,
         coverage_gaps: Optional[Dict[str, Any]] = None,
         evaluation_feedback: Optional[str] = None,
@@ -288,7 +289,13 @@ class TestGenerator:
                     target_method=target_method
                     or (test_case.methods[0].target_method if test_case.methods else ""),
                     target_method_signature=(
-                        test_case.methods[0].target_method_signature if test_case.methods else None
+                        target_method_signature
+                        if target_method_signature is not None
+                        else (
+                            test_case.methods[0].target_method_signature
+                            if test_case.methods
+                            else None
+                        )
                     ),
                     created_at=datetime.now(),
                     updated_at=datetime.now(),

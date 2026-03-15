@@ -154,7 +154,13 @@ class AgentState:
             return self.previous_target
         return None
 
-    def add_failed_target(self, class_name: str, method_name: str, reason: str) -> None:
+    def add_failed_target(
+        self,
+        class_name: str,
+        method_name: str,
+        reason: str,
+        method_signature: Optional[str] = None,
+    ) -> None:
         """
         将目标添加到失败黑名单
 
@@ -162,11 +168,12 @@ class AgentState:
             class_name: 类名
             method_name: 方法名
             reason: 失败原因
+            method_signature: 方法签名（可选）
         """
-        method_signature = None
-        if self.current_target and self.current_target.get("class_name") == class_name:
-            if self.current_target.get("method_name") == method_name:
-                method_signature = self.current_target.get("method_signature")
+        if method_signature is None:
+            if self.current_target and self.current_target.get("class_name") == class_name:
+                if self.current_target.get("method_name") == method_name:
+                    method_signature = self.current_target.get("method_signature")
         target_key = build_method_key(class_name, method_name, method_signature)
 
         # 检查是否已经在黑名单中
@@ -179,6 +186,7 @@ class AgentState:
                 "target": target_key,
                 "class_name": class_name,
                 "method_name": method_name,
+                "method_signature": method_signature,
                 "reason": reason,
                 "iteration": self.iteration,
             }
