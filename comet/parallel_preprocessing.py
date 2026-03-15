@@ -523,20 +523,6 @@ class ParallelPreprocessor:
             # 计算时间窗口（超时时间 + 10秒缓冲）
             time_threshold = start_time - timedelta(seconds=10)
 
-            # 清理在本次处理期间创建的、针对该方法的测试用例
-            test_cases = self.db.get_tests_by_target_method(
-                class_name,
-                method_name,
-                method_signature,
-            )
-            for tc in test_cases:
-                # 检查是否是在本次处理期间创建的
-                if tc.created_at and tc.created_at >= time_threshold:
-                    # 检查是否编译失败
-                    if not tc.compile_success:
-                        logger.warning(f"清理超时任务创建的失败测试用例: {tc.id}")
-                        self.db.delete_test_case(tc.id)
-
             # 清理在本次处理期间创建的、针对该方法的变异体
             mutants = self.db.get_mutants_by_method(
                 class_name,
