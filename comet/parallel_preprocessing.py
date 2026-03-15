@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypedDict, cast
 
-from .models import TestCase, TestMethod
+from .models import Mutant, TestCase, TestMethod
+from .utils.code_utils import build_test_class
 from .utils.log_context import log_context, submit_with_log_context
 from .utils.method_keys import build_preprocess_task_id
 
@@ -74,6 +75,9 @@ class ParallelPreprocessor:
             "processing_times": [],
         }
         self._stats_lock = threading.Lock()
+        self._pending_results_lock = threading.Lock()
+        self._pending_test_cases: dict[str, TestCase] = {}
+        self._pending_mutants: dict[str, Mutant] = {}
 
         # 已分析的类（避免重复分析）
         self._analyzed_classes: set[str] = set()
@@ -800,16 +804,8 @@ class ParallelPreprocessor:
                 except Exception as e:
                     logger.warning(f"评估失败 {class_name}.{method_name}: {e}")
 
-            # ===== 所有验证通过，保存到数据库 =====
-            # 只有在沙箱中所有步骤都成功后，才保存到数据库
-            logger.debug(f"所有验证通过，保存到数据库: {class_name}.{method_name}")
-
-            # 保存测试用例
-            self.db.save_test_case(test_case)
-
-            # 保存变异体
-            for mutant in valid_mutants:
-                self.db.save_mutant(mutant)
+            logger.debug(f"所有验证通过，加入待提交缓存: {class_name}.{method_name}")
+            self._stage_preprocessing_result(test_case, valid_mutants)
 
             result["success"] = True
 
@@ -851,9 +847,8 @@ class ParallelPreprocessor:
         from .utils.code_utils import build_test_class
         from .utils.project_utils import clear_test_directory, write_test_file
 
-        # 1. 从数据库获取所有测试用例
-        logger.info("步骤 1: 从数据库加载所有测试用例...")
-        all_test_cases = self.db.get_all_test_cases()
+        logger.info("步骤 1: 从数据库和待提交缓存加载所有测试用例...")
+        all_test_cases = self._get_candidate_test_cases()
 
         if not all_test_cases:
             logger.info("没有测试用例需要重建")
@@ -878,18 +873,22 @@ class ParallelPreprocessor:
                     logger.warning(f"测试类 {class_name} 没有methods，跳过")
                     continue
 
+                package_name = test_case.package_name
+                if package_name is None:
+                    logger.warning(f"测试类 {class_name} 没有package_name，跳过")
+                    continue
+
                 # 在验证沙箱中构建和验证测试文件
                 valid_methods = self._build_and_validate_in_sandbox(
                     test_class_name=test_case.class_name,
                     target_class=test_case.target_class,
-                    package_name=test_case.package_name,
+                    package_name=package_name,
                     imports=test_case.imports,
                     all_methods=test_case.methods,
                 )
 
                 if valid_methods:
                     logger.debug(f"验证沙箱中验证通过: {class_name} ({len(valid_methods)} 个方法)")
-                    # 保存验证通过的测试信息
                     validated_tests[class_name] = (valid_methods, test_case)
                 else:
                     logger.warning(f"验证沙箱中验证失败: {class_name}")
@@ -903,25 +902,20 @@ class ParallelPreprocessor:
             logger.warning("清空测试目录失败")
             return
 
-        # 4. 将验证通过的测试写入workspace并更新数据库
         logger.info(f"步骤 4: 将 {len(validated_tests)} 个验证通过的测试写入workspace...")
+
+        workspace_test_cases: list[TestCase] = []
 
         for class_name, (valid_methods, test_case) in validated_tests.items():
             try:
-                # 如果有 full_code，直接使用；否则从 methods 重建
-                if test_case.full_code:
-                    final_full_code = test_case.full_code
-                else:
-                    # 回退方案：从methods重建
-                    logger.warning(f"TestCase {class_name} 没有full_code，从methods重建")
-                    method_codes = [m.code for m in valid_methods]
-                    final_full_code = build_test_class(
-                        test_class_name=test_case.class_name,
-                        target_class=test_case.target_class,
-                        package_name=test_case.package_name,
-                        imports=test_case.imports,
-                        test_methods=method_codes,
-                    )
+                method_codes = [m.code for m in valid_methods]
+                final_full_code = build_test_class(
+                    test_class_name=test_case.class_name,
+                    target_class=test_case.target_class,
+                    package_name=test_case.package_name,
+                    imports=test_case.imports,
+                    test_methods=method_codes,
+                )
 
                 # 写入workspace
                 formatting_enabled, formatting_style = self._get_formatting_config()
@@ -936,21 +930,28 @@ class ParallelPreprocessor:
 
                 logger.info(f"已写入workspace: {class_name} ({len(valid_methods)} 个方法)")
 
-                # 更新测试用例
-                test_case.full_code = final_full_code
-                test_case.methods = valid_methods
-                test_case.compile_success = True
-                test_case.compile_error = None
-                self.db.save_test_case(test_case)
+                workspace_test_cases.append(
+                    test_case.model_copy(
+                        update={
+                            "full_code": final_full_code,
+                            "methods": valid_methods,
+                            "compile_success": True,
+                            "compile_error": None,
+                        }
+                    )
+                )
 
             except Exception as e:
                 logger.warning(f"写入测试文件失败 {class_name}: {e}", exc_info=True)
 
         # 5. 整体验证：确保所有测试类组合在一起可以正常工作
         logger.info("步骤 5: 对 workspace 进行整体验证...")
-        self._validate_and_fix_workspace_tests()
+        final_test_cases = self._validate_and_fix_workspace_tests(workspace_test_cases)
 
-    def _validate_and_fix_workspace_tests(self) -> None:
+        logger.info("步骤 6: 将整体验证通过的结果提交到数据库...")
+        self._commit_preprocessing_results(final_test_cases)
+
+    def _validate_and_fix_workspace_tests(self, test_cases: list[TestCase]) -> list[TestCase]:
         """
         对 workspace 中的所有测试进行整体验证，如果失败则定位并删除有问题的测试类/方法
 
@@ -961,6 +962,8 @@ class ParallelPreprocessor:
         max_iterations = 10  # 防止无限循环
         iteration = 0
 
+        current_test_cases = list(test_cases)
+
         while iteration < max_iterations:
             iteration += 1
             logger.info(f"整体验证迭代 #{iteration}...")
@@ -970,7 +973,9 @@ class ParallelPreprocessor:
 
             if not compile_result.get("success"):
                 logger.warning("整体编译失败，开始定位有问题的测试类...")
-                removed = self._handle_workspace_compile_failure(compile_result)
+                current_test_cases, removed = self._handle_workspace_compile_failure(
+                    current_test_cases
+                )
 
                 if not removed:
                     logger.warning("无法定位编译失败的测试类，放弃修复")
@@ -986,10 +991,10 @@ class ParallelPreprocessor:
 
             if test_result.get("success"):
                 logger.info("✓ 整体测试通过，所有测试方法都正常工作")
-                return
+                return current_test_cases
 
             logger.warning("整体测试失败，开始定位失败的测试方法...")
-            removed = self._handle_workspace_test_failure()
+            current_test_cases, removed = self._handle_workspace_test_failure(current_test_cases)
 
             if not removed:
                 logger.warning("无法定位失败的测试方法，放弃修复")
@@ -1000,43 +1005,41 @@ class ParallelPreprocessor:
         if iteration >= max_iterations:
             logger.warning(f"整体验证达到最大迭代次数 {max_iterations}，停止修复")
 
-    def _handle_workspace_compile_failure(self, compile_result: Dict[str, Any]) -> int:
+        return current_test_cases
+
+    def _handle_workspace_compile_failure(
+        self, test_cases: List[TestCase]
+    ) -> tuple[list[TestCase], int]:
         """
         处理 workspace 整体编译失败的情况
 
         策略：使用二分查找定位有问题的测试类
 
-        Args:
-            compile_result: 编译结果
-
         Returns:
-            删除的测试类数量
+            (剩余测试用例, 删除的测试类数量)
         """
-        # 获取所有测试用例
-        all_test_cases = self.db.get_all_test_cases()
-        if not all_test_cases:
-            return 0
+        if not test_cases:
+            return ([], 0)
 
         # 使用二分查找定位有问题的测试类
         logger.info("使用二分查找定位编译失败的测试类...")
-        failed_classes = self._binary_search_failed_test_classes(all_test_cases)
+        failed_classes = self._binary_search_failed_test_classes(test_cases)
 
         if failed_classes:
             logger.info(f"二分查找识别到 {len(failed_classes)} 个有问题的测试类")
+            remaining_test_cases = [tc for tc in test_cases if tc.class_name not in failed_classes]
             for test_class_name in failed_classes:
-                # 从数据库删除
-                test_cases = [tc for tc in all_test_cases if tc.class_name == test_class_name]
-                for tc in test_cases:
-                    logger.warning(f"删除编译失败的测试类: {tc.class_name}")
-                    self.db.delete_test_case(tc.id)
+                logger.warning(f"移除编译失败的测试类: {test_class_name}")
 
             # 重新构建测试目录
-            self._rebuild_workspace_tests()
-            return len(failed_classes)
+            self._rebuild_workspace_tests(remaining_test_cases)
+            return (remaining_test_cases, len(failed_classes))
 
-        return 0
+        return (test_cases, 0)
 
-    def _handle_workspace_test_failure(self) -> int:
+    def _handle_workspace_test_failure(
+        self, test_cases: List[TestCase]
+    ) -> tuple[list[TestCase], int]:
         """
         处理 workspace 整体测试失败的情况
 
@@ -1046,17 +1049,15 @@ class ParallelPreprocessor:
         3. 重新构建测试文件
 
         Returns:
-            删除的测试方法数量
+            (剩余测试用例, 删除的测试方法数量)
         """
-        # 获取所有测试用例
-        all_test_cases = self.db.get_all_test_cases()
-        if not all_test_cases:
-            return 0
+        if not test_cases:
+            return ([], 0)
 
         # 从Surefire报告中识别所有失败的测试方法
         failed_methods_by_class = defaultdict(set)
 
-        for test_case in all_test_cases:
+        for test_case in test_cases:
             failed_methods = self._identify_failed_test_methods(
                 test_case.class_name, self.workspace_sandbox
             )
@@ -1065,23 +1066,52 @@ class ParallelPreprocessor:
 
         if not failed_methods_by_class:
             logger.warning("无法从Surefire报告中识别失败的测试方法")
-            return 0
+            return (test_cases, 0)
 
         # 删除失败的测试方法
         total_removed = 0
-        for test_case in all_test_cases:
-            if test_case.class_name in failed_methods_by_class:
-                failed_methods = failed_methods_by_class[test_case.class_name]
-                for method_name in failed_methods:
-                    logger.warning(f"删除失败的测试方法: {test_case.class_name}.{method_name}")
-                    self._delete_test_method_from_db(test_case.target_class, method_name)
-                    total_removed += 1
+        updated_test_cases: list[TestCase] = []
+        for test_case in test_cases:
+            failed_methods = failed_methods_by_class.get(test_case.class_name)
+            if not failed_methods:
+                updated_test_cases.append(test_case)
+                continue
+
+            logger.warning(
+                f"移除失败的测试方法: {test_case.class_name} -> {sorted(failed_methods)}"
+            )
+            remaining_methods = [
+                m for m in test_case.methods if m.method_name not in failed_methods
+            ]
+            total_removed += len(test_case.methods) - len(remaining_methods)
+
+            if not remaining_methods:
+                logger.warning(f"测试类已无可用方法，移除整个测试类: {test_case.class_name}")
+                continue
+
+            updated_full_code = build_test_class(
+                test_class_name=test_case.class_name,
+                target_class=test_case.target_class,
+                package_name=test_case.package_name,
+                imports=test_case.imports,
+                test_methods=[method.code for method in remaining_methods],
+            )
+            updated_test_cases.append(
+                test_case.model_copy(
+                    update={
+                        "methods": remaining_methods,
+                        "full_code": updated_full_code,
+                        "compile_success": True,
+                        "compile_error": None,
+                    }
+                )
+            )
 
         # 重新构建测试目录
         if total_removed > 0:
-            self._rebuild_workspace_tests()
+            self._rebuild_workspace_tests(updated_test_cases)
 
-        return total_removed
+        return (updated_test_cases if total_removed > 0 else test_cases, total_removed)
 
     def _binary_search_failed_test_classes(self, test_cases: List[TestCase]) -> List[str]:
         """
@@ -1197,7 +1227,7 @@ class ParallelPreprocessor:
             except Exception as e:
                 logger.warning(f"清理验证沙箱失败 {sandbox_id}: {e}")
 
-    def _rebuild_workspace_tests(self) -> None:
+    def _rebuild_workspace_tests(self, test_cases: Optional[List[TestCase]] = None) -> None:
         """
         从数据库重新构建 workspace 中的所有测试文件
         """
@@ -1207,22 +1237,58 @@ class ParallelPreprocessor:
         clear_test_directory(self.workspace_sandbox)
 
         # 从数据库获取所有测试用例
-        all_test_cases = self.db.get_all_test_cases()
+        all_test_cases = test_cases if test_cases is not None else self.db.get_all_test_cases()
 
         logger.info(f"重新构建 workspace 测试文件，共 {len(all_test_cases)} 个测试类")
 
         formatting_enabled, formatting_style = self._get_formatting_config()
         for test_case in all_test_cases:
+            package_name = test_case.package_name
+            if package_name is None:
+                logger.warning(f"测试类信息不完整，跳过重建: {test_case.class_name}")
+                continue
             if test_case.full_code and test_case.methods:
                 write_test_file(
                     project_path=self.workspace_sandbox,
-                    package_name=test_case.package_name,
+                    package_name=package_name,
                     test_code=test_case.full_code,
                     test_class_name=test_case.class_name,
                     formatting_enabled=formatting_enabled,
                     formatting_style=formatting_style,
                 )
                 logger.debug(f"重新写入测试类: {test_case.class_name}")
+
+    def _stage_preprocessing_result(self, test_case: TestCase, mutants: list[Mutant]) -> None:
+        with self._pending_results_lock:
+            self._pending_test_cases[test_case.id] = test_case
+            for mutant in mutants:
+                self._pending_mutants[mutant.id] = mutant
+
+    def _get_candidate_test_cases(self) -> list[TestCase]:
+        committed_cases = self.db.get_all_test_cases()
+        combined_cases = {test_case.id: test_case for test_case in committed_cases}
+        with self._pending_results_lock:
+            combined_cases.update(self._pending_test_cases)
+        return list(combined_cases.values())
+
+    def _commit_preprocessing_results(self, final_test_cases: list[TestCase]) -> None:
+        final_test_case_ids = {test_case.id for test_case in final_test_cases}
+        committed_cases = self.db.get_all_test_cases()
+        committed_case_ids = {test_case.id for test_case in committed_cases}
+
+        for obsolete_id in committed_case_ids - final_test_case_ids:
+            self.db.delete_test_case(obsolete_id)
+
+        for test_case in final_test_cases:
+            self.db.save_test_case(test_case)
+
+        with self._pending_results_lock:
+            pending_mutants = list(self._pending_mutants.values())
+            self._pending_test_cases.clear()
+            self._pending_mutants.clear()
+
+        for mutant in pending_mutants:
+            self.db.save_mutant(mutant)
 
     def _build_and_validate_in_sandbox(
         self,
