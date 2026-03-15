@@ -1,11 +1,12 @@
 """静态守护 - 过滤不合法的变异体"""
 
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from ..models import Mutant
 
@@ -14,6 +15,27 @@ logger = logging.getLogger(__name__)
 
 class StaticGuard:
     """静态守护 - 验证变异体是否可以编译"""
+
+    _RETRYABLE_JAVAC_MARKERS: tuple[str, ...] = (
+        "package ",
+        "程序包",
+        "cannot find symbol",
+        "找不到符号",
+        "class file for",
+        "无法访问",
+        "cannot access",
+    )
+
+    _NON_RETRYABLE_JAVAC_MARKERS: tuple[str, ...] = (
+        "';' expected",
+        "需要';'",
+        "not a statement",
+        "illegal start of expression",
+        "illegal start of type",
+        "reached end of file while parsing",
+        "')' expected",
+        "'}' expected",
+    )
 
     def __init__(
         self,
@@ -28,10 +50,11 @@ class StaticGuard:
         Args:
             java_runtime_jar: Java 运行时 JAR 路径
         """
-        self.java_runtime_jar = java_runtime_jar
-        self.javac_cmd = javac_cmd
-        self.mvn_cmd = mvn_cmd
-        self.env = env
+        self.java_runtime_jar: str = java_runtime_jar
+        self.javac_cmd: str = javac_cmd
+        self.mvn_cmd: str = mvn_cmd
+        self.env: dict[str, str] | None = env
+        self._classpath_cache: dict[str, Optional[str]] = {}
 
     def validate_mutant(self, mutant: Mutant, original_file: str) -> bool:
         """
@@ -61,7 +84,8 @@ class StaticGuard:
 
             # 如果找不到 target/classes，尝试编译项目
             classpath = self._build_classpath(project_root)
-            if not classpath and project_root:
+            target_classes = project_root / "target" / "classes" if project_root else None
+            if project_root and target_classes and not target_classes.exists():
                 logger.info(f"未找到编译输出，尝试编译项目: {project_root}")
                 if self._compile_project(project_root):
                     classpath = self._build_classpath(project_root)
@@ -110,19 +134,19 @@ class StaticGuard:
 
             logger.debug(f"创建临时文件: {tmp_path}")
 
-            # 尝试编译
-            javac_cmd = [self.javac_cmd]
-            if classpath:
-                javac_cmd.extend(["-cp", classpath])
-            javac_cmd.append(str(tmp_path))
+            result = self._run_javac(tmp_path, classpath)
 
-            result = subprocess.run(
-                javac_cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=self.env,
-            )
+            if (
+                result.returncode != 0
+                and project_root
+                and self._is_retryable_javac_failure(result.stderr)
+                and self._compile_mutant_with_maven(mutant, original_file, project_root)
+            ):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                mutant.compile_error = None
+                mutant.status = "valid"
+                logger.debug(f"变异体 {mutant.id} 通过 Maven 回退验证")
+                return True
 
             # 清理临时文件和目录
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -144,7 +168,7 @@ class StaticGuard:
             mutant.status = "invalid"
             return False
 
-    def filter_mutants(self, mutants: List[Mutant], original_file: str) -> List[Mutant]:
+    def filter_mutants(self, mutants: list[Mutant], original_file: str) -> list[Mutant]:
         """
         过滤变异体列表，只保留合法的
 
@@ -158,7 +182,7 @@ class StaticGuard:
         logger.info(f"开始过滤 {len(mutants)} 个变异体")
         logger.debug(f"原始文件: {original_file}")
 
-        valid_mutants = []
+        valid_mutants: list[Mutant] = []
         invalid_count = 0
         for idx, mutant in enumerate(mutants):
             logger.debug(f"处理变异体 {idx + 1}/{len(mutants)}")
@@ -208,6 +232,10 @@ class StaticGuard:
         if not project_root:
             return None
 
+        cache_key = str(project_root.resolve())
+        if cache_key in self._classpath_cache:
+            return self._classpath_cache[cache_key]
+
         classpath_parts = []
 
         # 添加项目的编译输出目录
@@ -218,10 +246,29 @@ class StaticGuard:
         else:
             logger.warning(f"target/classes 不存在: {target_classes}")
 
-        # 添加项目依赖的 jar 包（如果有）
+        maven_classpath = self._resolve_maven_classpath(project_root)
+        if maven_classpath:
+            classpath_parts.append(maven_classpath)
+        else:
+            filesystem_classpath = self._build_filesystem_classpath(project_root)
+            if filesystem_classpath:
+                classpath_parts.append(filesystem_classpath)
+
+        classpath = os.pathsep.join(part for part in classpath_parts if part)
+        if not classpath:
+            logger.warning("无法构建 classpath - 没有找到编译输出或依赖")
+            self._classpath_cache[cache_key] = None
+            return None
+
+        logger.debug(f"构建的 classpath: {classpath[:200]}...")
+        self._classpath_cache[cache_key] = classpath
+        return classpath
+
+    def _build_filesystem_classpath(self, project_root: Path) -> Optional[str]:
+        classpath_parts = []
+
         target_deps = project_root / "target" / "dependency"
         if target_deps.exists():
-            # 添加所有 jar 文件
             jar_files = list(target_deps.glob("*.jar"))
             for jar in jar_files:
                 classpath_parts.append(str(jar))
@@ -229,15 +276,110 @@ class StaticGuard:
                 logger.debug(f"添加 {len(jar_files)} 个依赖 jar 到 classpath")
 
         if not classpath_parts:
-            logger.warning("无法构建 classpath - 没有找到编译输出或依赖")
             return None
 
-        # 使用系统路径分隔符连接
-        import os
+        return os.pathsep.join(classpath_parts)
 
-        classpath = os.pathsep.join(classpath_parts)
-        logger.debug(f"构建的 classpath: {classpath[:200]}...")
-        return classpath
+    def _resolve_maven_classpath(self, project_root: Path) -> Optional[str]:
+        fd, output_path = tempfile.mkstemp(prefix="comet-classpath-", suffix=".txt")
+        os.close(fd)
+        output_file = Path(output_path)
+        try:
+            result = subprocess.run(
+                [
+                    self.mvn_cmd,
+                    "-q",
+                    "-DincludeScope=compile",
+                    f"-Dmdep.pathSeparator={os.pathsep}",
+                    "-Dmdep.outputAbsoluteArtifactFilename=true",
+                    f"-Dmdep.outputFile={output_file}",
+                    "dependency:build-classpath",
+                ],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=self.env,
+            )
+            if result.returncode != 0:
+                logger.debug(f"Maven classpath 解析失败: {result.stderr}")
+                return None
+
+            if not output_file.exists():
+                return None
+
+            content = output_file.read_text(encoding="utf-8").strip()
+            return content or None
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Maven classpath 解析超时: {project_root}")
+            return None
+        except Exception as e:
+            logger.warning(f"Maven classpath 解析出错: {e}")
+            return None
+        finally:
+            output_file.unlink(missing_ok=True)
+
+    def _run_javac(
+        self, file_path: Path, classpath: Optional[str]
+    ) -> subprocess.CompletedProcess[str]:
+        javac_cmd = [self.javac_cmd]
+        if classpath:
+            javac_cmd.extend(["-cp", classpath])
+        javac_cmd.append(str(file_path))
+        return subprocess.run(
+            javac_cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=self.env,
+        )
+
+    def _is_retryable_javac_failure(self, stderr: str) -> bool:
+        message = stderr.lower()
+        if any(marker.lower() in message for marker in self._NON_RETRYABLE_JAVAC_MARKERS):
+            return False
+        return any(marker.lower() in message for marker in self._RETRYABLE_JAVAC_MARKERS)
+
+    def _compile_mutant_with_maven(
+        self, mutant: Mutant, original_file: str, project_root: Path
+    ) -> bool:
+        original_path = Path(original_file)
+        original_content = original_path.read_text(encoding="utf-8")
+        mutated_content = self._build_mutated_source(mutant, original_content)
+        if mutated_content is None:
+            return False
+
+        try:
+            _ = original_path.write_text(mutated_content, encoding="utf-8")
+            return self._compile_project(project_root)
+        finally:
+            _ = original_path.write_text(original_content, encoding="utf-8")
+
+    def _build_mutated_source(self, mutant: Mutant, original_content: str) -> Optional[str]:
+        lines = original_content.splitlines(keepends=True)
+        mutated_lines = []
+        mutation_applied = False
+
+        for i, line in enumerate(lines):
+            line_num = i + 1
+            if line_num < mutant.patch.line_start:
+                mutated_lines.append(line)
+            elif line_num == mutant.patch.line_start:
+                mutated_code = mutant.patch.mutated_code
+                if not mutated_code.endswith("\n"):
+                    mutated_code += "\n"
+                mutated_lines.append(mutated_code)
+                mutation_applied = True
+            elif line_num > mutant.patch.line_start and line_num <= mutant.patch.line_end:
+                continue
+            else:
+                mutated_lines.append(line)
+
+        if not mutation_applied:
+            logger.warning(f"变异体 {mutant.id} 未成功应用（行号范围可能不正确）")
+            return None
+
+        return "".join(mutated_lines)
 
     def _compile_project(self, project_root: Path) -> bool:
         """
