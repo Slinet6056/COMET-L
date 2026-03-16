@@ -30,6 +30,20 @@ type ParallelSnapshotData = {
   batchResults: Array<Array<Record<string, unknown>>>;
 };
 
+type WorkerOutputRow = {
+  key: string;
+  targetId: string;
+  className: string;
+  methodName: string;
+  success: boolean;
+  error: string | null;
+  testsGenerated: number;
+  mutantsGenerated: number;
+  mutantsKilled: number;
+  localMutationScore: number | null;
+  methodCoverage: number | null;
+};
+
 const STATUS_LABELS: Record<string, string> = {
   created: '已创建',
   queued: '排队中',
@@ -47,6 +61,8 @@ const CONNECTION_LABELS: Record<ConnectionState, string> = {
   unavailable: '不可用',
   error: '异常',
 };
+
+const WORKER_OUTPUT_PAGE_SIZE = 15;
 
 function isTerminalRunStatus(status: string | null | undefined): boolean {
   return status === 'completed' || status === 'failed';
@@ -158,6 +174,45 @@ function formatWorkerStatusLabel(success: boolean): string {
   return success ? '已完成' : '失败';
 }
 
+function toStringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function toBooleanValue(value: unknown): boolean {
+  return value === true;
+}
+
+function toNumericValue(value: unknown): number | null {
+  if (typeof value === 'number' && !Number.isNaN(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+
+  return null;
+}
+
+function getTargetParts(targetId: string | null): { className: string; methodName: string } {
+  if (!targetId) {
+    return { className: 'UnknownClass', methodName: 'unknownMethod' };
+  }
+
+  const [memberPath] = targetId.split('#');
+  const separatorIndex = memberPath.lastIndexOf('.');
+
+  if (separatorIndex === -1) {
+    return { className: memberPath, methodName: 'unknownMethod' };
+  }
+
+  return {
+    className: memberPath.slice(0, separatorIndex),
+    methodName: memberPath.slice(separatorIndex + 1),
+  };
+}
+
 function toCoverageValue(value: unknown): number | null {
   if (typeof value === 'number' && !Number.isNaN(value)) {
     return value;
@@ -169,6 +224,32 @@ function toCoverageValue(value: unknown): number | null {
   }
 
   return null;
+}
+
+function buildWorkerOutputRows(parallel: ParallelSnapshotData): WorkerOutputRow[] {
+  return parallel.batchResults.flatMap((batch, batchIndex) =>
+    batch.map((result, resultIndex) => {
+      const targetId = toStringValue(result.targetId ?? result.target_id) ?? '';
+      const targetParts = getTargetParts(targetId || null);
+
+      return {
+        key: targetId || `batch-${batchIndex}-row-${resultIndex}`,
+        targetId,
+        className:
+          toStringValue(result.className ?? result.class_name) ?? targetParts.className,
+        methodName:
+          toStringValue(result.methodName ?? result.method_name) ?? targetParts.methodName,
+        success: toBooleanValue(result.success),
+        error: toStringValue(result.error),
+        testsGenerated: toNumericValue(result.testsGenerated ?? result.tests_generated) ?? 0,
+        mutantsGenerated: toNumericValue(result.mutantsGenerated ?? result.mutants_generated) ?? 0,
+        mutantsKilled: toNumericValue(result.mutantsKilled ?? result.mutants_killed) ?? 0,
+        localMutationScore:
+          toNumericValue(result.localMutationScore ?? result.local_mutation_score),
+        methodCoverage: toCoverageValue(result.methodCoverage ?? result.method_coverage),
+      };
+    }),
+  );
 }
 
 function buildWorkerCoverageLookup(parallel: ParallelSnapshotData): Map<string, number> {
@@ -535,7 +616,25 @@ function ParallelRunView(props: {
   const parallel = getParallelSnapshot(snapshot);
   const parallelStatsSummary = buildParallelStatsSummary(parallel.parallelStats);
   const workerCoverageLookup = useMemo(() => buildWorkerCoverageLookup(parallel), [parallel]);
+  const workerOutputRows = useMemo(() => buildWorkerOutputRows(parallel), [parallel]);
+  const workerPageCount = Math.ceil(workerOutputRows.length / WORKER_OUTPUT_PAGE_SIZE);
+  const [workerPage, setWorkerPage] = useState(0);
   const isPreprocessingPhase = snapshot.phase.key === 'preprocessing';
+
+  useEffect(() => {
+    setWorkerPage((current) => {
+      if (workerPageCount === 0) {
+        return 0;
+      }
+
+      return Math.min(current, workerPageCount - 1);
+    });
+  }, [workerPageCount]);
+
+  const visibleWorkerRows = useMemo(() => {
+    const start = workerPage * WORKER_OUTPUT_PAGE_SIZE;
+    return workerOutputRows.slice(start, start + WORKER_OUTPUT_PAGE_SIZE);
+  }, [workerOutputRows, workerPage]);
 
   return (
     <>
@@ -640,51 +739,82 @@ function ParallelRunView(props: {
             </div>
             <span className="run-badge">实时连接：{CONNECTION_LABELS[connectionState]}</span>
           </div>
-          {parallel.workerCards.length > 0 ? (
-            <table className="worker-output-table">
-              <thead>
-                <tr>
-                  <th scope="col">目标</th>
-                  <th scope="col">状态</th>
-                  <th scope="col">测试</th>
-                  <th scope="col">变异体</th>
-                  <th scope="col">已杀死</th>
-                  <th scope="col">分数</th>
-                  <th scope="col">覆盖率</th>
-                </tr>
-              </thead>
-              <tbody>
-                {parallel.workerCards.map((worker) => (
-                  <tr key={worker.targetId} className="worker-output-row">
-                    <td className="worker-output-row__target">
-                      <strong title={worker.targetId}>{worker.targetId}</strong>
-                      <span>
-                        {worker.className}.{worker.methodName}
-                      </span>
-                      {worker.error ? (
-                        <p className="worker-output-row__error">{worker.error}</p>
-                      ) : null}
-                    </td>
-                    <td>
-                      <span
-                        className={
-                          worker.success
-                            ? 'worker-pill worker-pill--success'
-                            : 'worker-pill worker-pill--error'
-                        }
-                      >
-                        {formatWorkerStatusLabel(worker.success)}
-                      </span>
-                    </td>
-                    <td>{worker.testsGenerated}</td>
-                    <td>{worker.mutantsGenerated}</td>
-                    <td>{worker.mutantsKilled}</td>
-                    <td>{formatPercent(worker.localMutationScore)}</td>
-                    <td>{formatPercent(workerCoverageLookup.get(worker.targetId))}</td>
+          {workerOutputRows.length > 0 ? (
+            <>
+              <table className="worker-output-table">
+                <thead>
+                  <tr>
+                    <th scope="col">目标</th>
+                    <th scope="col">状态</th>
+                    <th scope="col">测试</th>
+                    <th scope="col">变异体</th>
+                    <th scope="col">已杀死</th>
+                    <th scope="col">分数</th>
+                    <th scope="col">覆盖率</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {visibleWorkerRows.map((worker) => (
+                    <tr key={worker.key} className="worker-output-row">
+                      <td className="worker-output-row__target">
+                        <strong title={worker.targetId || worker.key}>
+                          {worker.targetId || '未命名目标'}
+                        </strong>
+                        <span>
+                          {worker.className}.{worker.methodName}
+                        </span>
+                        {worker.error ? (
+                          <p className="worker-output-row__error">{worker.error}</p>
+                        ) : null}
+                      </td>
+                      <td>
+                        <span
+                          className={
+                            worker.success
+                              ? 'worker-pill worker-pill--success'
+                              : 'worker-pill worker-pill--error'
+                          }
+                        >
+                          {formatWorkerStatusLabel(worker.success)}
+                        </span>
+                      </td>
+                      <td>{worker.testsGenerated}</td>
+                      <td>{worker.mutantsGenerated}</td>
+                      <td>{worker.mutantsKilled}</td>
+                      <td>{formatPercent(worker.localMutationScore)}</td>
+                      <td>
+                        {formatPercent(worker.methodCoverage ?? workerCoverageLookup.get(worker.targetId))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {workerPageCount > 1 ? (
+                <div className="run-log-viewer__pagination">
+                  <button
+                    type="button"
+                    className="run-log-viewer__pager-button"
+                    onClick={() => setWorkerPage((current) => Math.max(current - 1, 0))}
+                    disabled={workerPage === 0}
+                  >
+                    上一页
+                  </button>
+                  <span className="muted-copy">
+                    第 {workerPage + 1} / {workerPageCount} 页
+                  </span>
+                  <button
+                    type="button"
+                    className="run-log-viewer__pager-button"
+                    onClick={() =>
+                      setWorkerPage((current) => Math.min(current + 1, workerPageCount - 1))
+                    }
+                    disabled={workerPage >= workerPageCount - 1}
+                  >
+                    下一页
+                  </button>
+                </div>
+              ) : null}
+            </>
           ) : (
             <p className="muted-copy">正在等待首个工作线程批次完成。</p>
           )}

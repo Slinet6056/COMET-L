@@ -5,6 +5,67 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import * as api from '../lib/api';
 
+function buildWorkerResult(index: number, overrides: Record<string, unknown> = {}) {
+  const targetId = `Calculator.method${index}#sig-${String(index).padStart(3, '0')}`;
+
+  return {
+    targetId,
+    target_id: targetId,
+    className: 'Calculator',
+    class_name: 'Calculator',
+    methodName: `method${index}`,
+    method_name: `method${index}`,
+    success: index % 2 === 1,
+    error: null,
+    testsGenerated: index,
+    tests_generated: index,
+    mutantsGenerated: index + 1,
+    mutants_generated: index + 1,
+    mutantsEvaluated: index + 1,
+    mutants_evaluated: index + 1,
+    mutantsKilled: Math.max(index - 1, 0),
+    mutants_killed: Math.max(index - 1, 0),
+    localMutationScore: 0.5,
+    local_mutation_score: 0.5,
+    processingTime: 1.2,
+    processing_time: 1.2,
+    methodCoverage: 0.4,
+    method_coverage: 0.4,
+    ...overrides,
+  };
+}
+
+function buildWorkerCard(index: number, overrides: Record<string, unknown> = {}) {
+  const result = buildWorkerResult(index, overrides);
+
+  return {
+    targetId: result.targetId,
+    className: result.className,
+    methodName: result.methodName,
+    success: result.success,
+    error: result.error,
+    testsGenerated: result.testsGenerated,
+    mutantsGenerated: result.mutantsGenerated,
+    mutantsEvaluated: result.mutantsEvaluated,
+    mutantsKilled: result.mutantsKilled,
+    localMutationScore: result.localMutationScore,
+    processingTime: result.processingTime,
+    methodCoverage: result.methodCoverage,
+  };
+}
+
+function buildBatchResults(total: number) {
+  const firstBatchSize = Math.min(total, 8);
+  const secondBatchSize = Math.max(total - firstBatchSize, 0);
+
+  return [
+    Array.from({ length: firstBatchSize }, (_unused, index) => buildWorkerResult(index + 1)),
+    Array.from({ length: secondBatchSize }, (_unused, index) =>
+      buildWorkerResult(firstBatchSize + index + 1),
+    ),
+  ].filter((batch) => batch.length > 0);
+}
+
 function buildParallelSnapshot(overrides: Record<string, unknown> = {}) {
   return {
     runId: 'run-par-42',
@@ -72,7 +133,22 @@ function buildParallelSnapshot(overrides: Record<string, unknown> = {}) {
       [
         {
           targetId: 'Calculator.add#sig-aaa111',
+          target_id: 'Calculator.add#sig-aaa111',
+          className: 'Calculator',
+          class_name: 'Calculator',
+          methodName: 'add',
+          method_name: 'add',
           success: true,
+          testsGenerated: 2,
+          tests_generated: 2,
+          mutantsGenerated: 3,
+          mutants_generated: 3,
+          mutantsKilled: 2,
+          mutants_killed: 2,
+          localMutationScore: 2 / 3,
+          local_mutation_score: 2 / 3,
+          methodCoverage: 0.42,
+          method_coverage: 0.42,
         },
       ],
     ],
@@ -208,6 +284,7 @@ describe('Run page parallel mode', () => {
     expect(screen.queryByRole('columnheader', { name: 'Runtime' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Parallel Stats' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Active Targets' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '上一页' })).not.toBeInTheDocument();
     expect(screen.getByText('当前批次：2')).toBeInTheDocument();
     expect(screen.getByTitle('Calculator.add#sig-aaa111')).toBeInTheDocument();
     expect(screen.getByText('累计工作线程数')).toBeInTheDocument();
@@ -236,21 +313,50 @@ describe('Run page parallel mode', () => {
         sequence: 2,
         snapshot: buildParallelSnapshot({
           currentBatch: 3,
-          workerCards: [
-            {
-              targetId: 'Calculator.multiply#sig-ccc333',
-              className: 'Calculator',
-              methodName: 'multiply',
-              success: false,
-              error: 'Timed out while evaluating mutants.',
-              testsGenerated: 1,
-              mutantsGenerated: 4,
-              mutantsEvaluated: 2,
-              mutantsKilled: 1,
-              localMutationScore: 0.25,
-              processingTime: 2.7,
-              methodCoverage: 0.5,
-            },
+          workerCards: [buildWorkerCard(3)],
+          batchResults: [
+            [
+              buildWorkerResult(1, {
+                targetId: 'Calculator.add#sig-aaa111',
+                target_id: 'Calculator.add#sig-aaa111',
+                className: 'Calculator',
+                class_name: 'Calculator',
+                methodName: 'add',
+                method_name: 'add',
+                methodCoverage: 0.42,
+                method_coverage: 0.42,
+                localMutationScore: 2 / 3,
+                local_mutation_score: 2 / 3,
+                testsGenerated: 2,
+                tests_generated: 2,
+                mutantsGenerated: 3,
+                mutants_generated: 3,
+                mutantsKilled: 2,
+                mutants_killed: 2,
+              }),
+            ],
+            [
+              buildWorkerResult(3, {
+                targetId: 'Calculator.multiply#sig-ccc333',
+                target_id: 'Calculator.multiply#sig-ccc333',
+                className: 'Calculator',
+                class_name: 'Calculator',
+                methodName: 'multiply',
+                method_name: 'multiply',
+                success: false,
+                error: 'Timed out while evaluating mutants.',
+                testsGenerated: 1,
+                tests_generated: 1,
+                mutantsGenerated: 4,
+                mutants_generated: 4,
+                mutantsKilled: 1,
+                mutants_killed: 1,
+                localMutationScore: 0.25,
+                local_mutation_score: 0.25,
+                methodCoverage: 0.5,
+                method_coverage: 0.5,
+              }),
+            ],
           ],
           activeTargets: [
             {
@@ -265,9 +371,54 @@ describe('Run page parallel mode', () => {
     });
 
     expect(await screen.findByText('当前批次：3')).toBeInTheDocument();
+    expect(screen.getByTitle('Calculator.add#sig-aaa111')).toBeInTheDocument();
     expect(screen.getByTitle('Calculator.multiply#sig-ccc333')).toBeInTheDocument();
     expect(screen.getByText('50.0%')).toBeInTheDocument();
     expect(screen.getByText('Timed out while evaluating mutants.')).toBeInTheDocument();
+  });
+
+  it('paginates cumulative batch rows and keeps the current page during live snapshot updates', async () => {
+    vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue(
+      buildParallelSnapshot({
+        batchResults: buildBatchResults(16),
+        workerCards: [buildWorkerCard(16)],
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-par-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('第 1 / 2 页')).toBeInTheDocument();
+    expect(screen.getByTitle('Calculator.method1#sig-001')).toBeInTheDocument();
+    expect(screen.queryByTitle('Calculator.method16#sig-016')).not.toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByRole('button', { name: '下一页' }).click();
+    });
+
+    expect(screen.getByText('第 2 / 2 页')).toBeInTheDocument();
+    expect(screen.getByTitle('Calculator.method16#sig-016')).toBeInTheDocument();
+    expect(screen.queryByTitle('Calculator.method1#sig-001')).not.toBeInTheDocument();
+
+    await act(async () => {
+      onEvent?.({
+        type: 'run.snapshot',
+        sequence: 3,
+        snapshot: buildParallelSnapshot({
+          currentBatch: 3,
+          batchResults: buildBatchResults(17),
+          workerCards: [buildWorkerCard(17)],
+        }),
+      });
+    });
+
+    expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument();
+    expect(screen.getByTitle('Calculator.method16#sig-016')).toBeInTheDocument();
+    expect(screen.getByTitle('Calculator.method17#sig-017')).toBeInTheDocument();
+    expect(screen.queryByTitle('Calculator.method1#sig-001')).not.toBeInTheDocument();
   });
 
   it('keeps long worker target ids available in the dense row layout', async () => {
@@ -289,6 +440,32 @@ describe('Run page parallel mode', () => {
             localMutationScore: 2 / 3,
             processingTime: 1.4,
           },
+        ],
+        batchResults: [
+          [
+            buildWorkerResult(1, {
+              targetId:
+                'Calculator.withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
+              target_id:
+                'Calculator.withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
+              className: 'Calculator',
+              class_name: 'Calculator',
+              methodName:
+                'withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
+              method_name:
+                'withAnExceptionallyLongTargetIdentifierThatShouldStayInsideTheWorkerCardHeader',
+              success: true,
+              error: null,
+              testsGenerated: 2,
+              tests_generated: 2,
+              mutantsGenerated: 3,
+              mutants_generated: 3,
+              mutantsKilled: 2,
+              mutants_killed: 2,
+              localMutationScore: 2 / 3,
+              local_mutation_score: 2 / 3,
+            }),
+          ],
         ],
       }),
     );
