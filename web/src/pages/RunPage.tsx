@@ -376,19 +376,6 @@ function buildParallelStatsSummary(
   }));
 }
 
-function buildActiveTargetSummary(
-  activeTargets: RunActiveTarget[],
-): Array<{ label: string; value: string; title: string }> {
-  return activeTargets.slice(0, 4).map((target) => {
-    const targetId = formatTargetId(target);
-    return {
-      label: targetId,
-      value: `覆盖率 ${formatPercent(Number(target.method_coverage ?? target.methodCoverage ?? null))}`,
-      title: targetId,
-    };
-  });
-}
-
 function HistoricalLogNotice(props: { runId: string }) {
   const { runId } = props;
 
@@ -547,7 +534,6 @@ function ParallelRunView(props: {
   const { runId, snapshot, connectionState } = props;
   const parallel = getParallelSnapshot(snapshot);
   const parallelStatsSummary = buildParallelStatsSummary(parallel.parallelStats);
-  const activeTargetSummary = buildActiveTargetSummary(parallel.activeTargets);
   const workerCoverageLookup = useMemo(() => buildWorkerCoverageLookup(parallel), [parallel]);
   const isPreprocessingPhase = snapshot.phase.key === 'preprocessing';
 
@@ -630,31 +616,18 @@ function ParallelRunView(props: {
         </div>
       </section>
 
-      {!isPreprocessingPhase &&
-      (parallelStatsSummary.length > 0 || activeTargetSummary.length > 0) ? (
+      {!isPreprocessingPhase && parallelStatsSummary.length > 0 ? (
         <section className="run-card" aria-labelledby="run-parallel-summary-panel">
           <p className="eyebrow">摘要</p>
           <h3 id="run-parallel-summary-panel">批次摘要</h3>
-          {parallelStatsSummary.length > 0 ? (
-            <ul className="summary-list summary-list--compact summary-list--two-column">
-              {parallelStatsSummary.map((entry) => (
-                <li key={entry.label}>
-                  <strong>{entry.label}</strong>
-                  <span>{entry.value}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {activeTargetSummary.length > 0 ? (
-            <ul className="summary-list summary-list--compact summary-list--two-column">
-              {activeTargetSummary.map((entry) => (
-                <li key={entry.label}>
-                  <strong title={entry.title}>{entry.label}</strong>
-                  <span>{entry.value}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          <ul className="summary-list summary-list--compact summary-list--two-column">
+            {parallelStatsSummary.map((entry) => (
+              <li key={entry.label}>
+                <strong>{entry.label}</strong>
+                <span>{entry.value}</span>
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
 

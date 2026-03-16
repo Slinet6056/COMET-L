@@ -210,9 +210,8 @@ describe('Run page parallel mode', () => {
     expect(screen.queryByRole('heading', { name: 'Active Targets' })).not.toBeInTheDocument();
     expect(screen.getByText('当前批次：2')).toBeInTheDocument();
     expect(screen.getByTitle('Calculator.add#sig-aaa111')).toBeInTheDocument();
-    expect(screen.getByTitle('Calculator.divide#sig-bbb222')).toBeInTheDocument();
     expect(screen.getByText('累计工作线程数')).toBeInTheDocument();
-    expect(screen.getByText('覆盖率 42.0%')).toBeInTheDocument();
+    expect(screen.getByText('42.0%')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(api.subscribeToRunEvents).toHaveBeenCalledWith(
@@ -266,8 +265,8 @@ describe('Run page parallel mode', () => {
     });
 
     expect(await screen.findByText('当前批次：3')).toBeInTheDocument();
-    expect(screen.getAllByTitle('Calculator.multiply#sig-ccc333')).toHaveLength(2);
-    expect(screen.getByText('覆盖率 50.0%')).toBeInTheDocument();
+    expect(screen.getByTitle('Calculator.multiply#sig-ccc333')).toBeInTheDocument();
+    expect(screen.getByText('50.0%')).toBeInTheDocument();
     expect(screen.getByText('Timed out while evaluating mutants.')).toBeInTheDocument();
   });
 
