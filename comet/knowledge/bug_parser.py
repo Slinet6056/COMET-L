@@ -47,9 +47,10 @@ class BugReportParser:
     - .md: Markdown 文件（支持可选的 front-matter）
     - .txt: 纯文本文件
     - .diff / .patch: Diff/Patch 文件
+    - .json: JSON 文件
     """
 
-    SUPPORTED_EXTENSIONS = {".md", ".txt", ".diff", ".patch"}
+    SUPPORTED_EXTENSIONS = {".md", ".txt", ".diff", ".patch", ".json"}
 
     def __init__(self):
         """初始化解析器"""
