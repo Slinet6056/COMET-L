@@ -235,8 +235,7 @@ function buildWorkerOutputRows(parallel: ParallelSnapshotData): WorkerOutputRow[
       return {
         key: targetId || `batch-${batchIndex}-row-${resultIndex}`,
         targetId,
-        className:
-          toStringValue(result.className ?? result.class_name) ?? targetParts.className,
+        className: toStringValue(result.className ?? result.class_name) ?? targetParts.className,
         methodName:
           toStringValue(result.methodName ?? result.method_name) ?? targetParts.methodName,
         success: toBooleanValue(result.success),
@@ -244,8 +243,9 @@ function buildWorkerOutputRows(parallel: ParallelSnapshotData): WorkerOutputRow[
         testsGenerated: toNumericValue(result.testsGenerated ?? result.tests_generated) ?? 0,
         mutantsGenerated: toNumericValue(result.mutantsGenerated ?? result.mutants_generated) ?? 0,
         mutantsKilled: toNumericValue(result.mutantsKilled ?? result.mutants_killed) ?? 0,
-        localMutationScore:
-          toNumericValue(result.localMutationScore ?? result.local_mutation_score),
+        localMutationScore: toNumericValue(
+          result.localMutationScore ?? result.local_mutation_score,
+        ),
         methodCoverage: toCoverageValue(result.methodCoverage ?? result.method_coverage),
       };
     }),
@@ -783,7 +783,9 @@ function ParallelRunView(props: {
                       <td>{worker.mutantsKilled}</td>
                       <td>{formatPercent(worker.localMutationScore)}</td>
                       <td>
-                        {formatPercent(worker.methodCoverage ?? workerCoverageLookup.get(worker.targetId))}
+                        {formatPercent(
+                          worker.methodCoverage ?? workerCoverageLookup.get(worker.targetId),
+                        )}
                       </td>
                     </tr>
                   ))}
