@@ -3,15 +3,11 @@
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any, Dict, List, Optional
 
 import httpx
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 from openai.types.chat import ChatCompletion
-
-from comet.utils.log_context import submit_with_log_context
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +99,7 @@ class LLMClient:
                     "temperature": temp,
                     "max_tokens": max_tok,
                     "stream": False,  # 明确禁用流式响应
+                    "timeout": self.timeout,
                 }
 
                 if response_format and self.supports_json_mode:
@@ -124,21 +121,7 @@ class LLMClient:
                 )
                 logger.debug(f"开始请求 LLM，超时设置: {self.timeout}s")
 
-                # 为每次请求创建独立的线程池执行器，避免并发场景下的共享状态问题
-                def _make_request():
-                    return self.client.chat.completions.create(**kwargs)
-
-                # 使用 with 语句确保 executor 被正确清理
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = submit_with_log_context(executor, _make_request)
-
-                    try:
-                        response: ChatCompletion = future.result(timeout=self.timeout)
-                    except FutureTimeoutError:
-                        elapsed = time.time() - start_time
-                        raise httpx.TimeoutException(
-                            f"请求总超时 ({self.timeout}s)，实际耗时: {elapsed:.2f}s"
-                        )
+                response: ChatCompletion = self.client.chat.completions.create(**kwargs)
 
                 elapsed = time.time() - start_time
                 logger.debug(f"LLM 请求完成，耗时: {elapsed:.2f}s")
@@ -173,7 +156,7 @@ class LLMClient:
                 )
                 return content
 
-            except httpx.TimeoutException as e:
+            except (APITimeoutError, httpx.TimeoutException) as e:
                 elapsed = time.time() - start_time
                 logger.warning(
                     f"LLM 请求超时 (尝试 {attempt + 1}/{self.max_retries}): "
