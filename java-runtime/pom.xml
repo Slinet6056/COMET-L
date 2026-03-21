@@ -21,7 +21,7 @@
         <jacoco.version>0.8.14</jacoco.version>
         <gson.version>2.13.2</gson.version>
         <google-java-format.version>1.35.0</google-java-format.version>
-        <spotless.version>2.43.0</spotless.version>
+        <spotless.version>3.4.0</spotless.version>
     </properties>
 
     <dependencies>
