@@ -138,7 +138,7 @@ public class MavenExecutor {
     try {
       InvocationRequest request = new DefaultInvocationRequest();
       request.setPomFile(new File(projectPath, "pom.xml"));
-      request.setGoals(goals);
+      request.addArgs(goals);
       request.setBatchMode(true);
       if (javaHome != null) {
         request.setJavaHome(javaHome);
@@ -174,7 +174,7 @@ public class MavenExecutor {
   public JsonObject runSingleTest(String projectPath, String testClassName) {
     InvocationRequest request = new DefaultInvocationRequest();
     request.setPomFile(new File(projectPath, "pom.xml"));
-    request.setGoals(Arrays.asList("test"));
+    request.addArgs(Arrays.asList("test"));
     if (javaHome != null) {
       request.setJavaHome(javaHome);
     }
