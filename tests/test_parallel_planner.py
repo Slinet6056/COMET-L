@@ -9,6 +9,7 @@ from comet.agent.state import ParallelAgentState
 from comet.executor.coverage_parser import CoverageParser, MethodCoverage
 from comet.llm.client import LLMClient
 from comet.store.database import Database
+from comet.utils.method_keys import build_method_key
 from comet.utils.sandbox import SandboxManager
 
 
@@ -156,17 +157,176 @@ class FakeSandboxManager:
 
 
 class FakeWorkerFuture:
-    def __init__(self, result_value=None, error: Exception | None = None):
+    def __init__(
+        self,
+        result_value=None,
+        error: Exception | None = None,
+        *,
+        done: bool = True,
+        fail_on_result: bool = False,
+        can_cancel: bool = True,
+    ):
         self.result_value = result_value
         self.error = error
+        self.done_value = done
+        self.fail_on_result = fail_on_result
+        self.can_cancel = can_cancel
+        self.result_calls = 0
+        self.cancel_calls = 0
+        self.callbacks = []
 
     def result(self, timeout: int | None = None):
+        self.result_calls += 1
+        if self.fail_on_result:
+            raise AssertionError("unexpected result() call")
         if self.error is not None:
             raise self.error
         return self.result_value
 
+    def done(self) -> bool:
+        return self.done_value
+
+    def cancel(self) -> bool:
+        self.cancel_calls += 1
+        if self.done_value or not self.can_cancel:
+            return False
+        self.done_value = True
+        for callback in self.callbacks:
+            callback(self)
+        return True
+
+    def add_done_callback(self, callback) -> None:
+        self.callbacks.append(callback)
+        if self.done_value:
+            callback(self)
+
+    def finish(self) -> None:
+        self.done_value = True
+        for callback in list(self.callbacks):
+            callback(self)
+
 
 class ParallelPlannerLoggingTest(unittest.TestCase):
+    def test_process_single_target_skips_waiting_for_mutants_when_blacklisted_midflight(self):
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.project_path = "/tmp/project"
+        planner.sandbox_manager = cast(
+            SandboxManager,
+            cast(object, FakeSandboxManager("/tmp/sandboxes/target-1")),
+        )
+        planner.db = FakeTargetDatabase()
+        planner.state = ParallelAgentState()
+        planner.state.failed_targets.append(
+            {
+                "target": build_method_key(
+                    "org.example.Example",
+                    "doWork",
+                    "void doWork()",
+                ),
+                "class_name": "org.example.Example",
+                "method_name": "doWork",
+                "method_signature": "void doWork()",
+                "reason": "黑名单测试",
+            }
+        )
+
+        target = {
+            "class_name": "org.example.Example",
+            "method_name": "doWork",
+            "method_signature": "void doWork()",
+            "method_coverage": 0.5,
+        }
+
+        test_future = FakeWorkerFuture(result_value={"generated": 1, "test_files": {}})
+        mutant_future = FakeWorkerFuture(fail_on_result=True)
+
+        with patch(
+            "comet.agent.parallel_planner.submit_with_log_context",
+            side_effect=[test_future, mutant_future],
+        ):
+            result = planner._process_single_target_impl(
+                target,
+                "org.example.Example",
+                "doWork",
+                "org.example.Example#doWork:void doWork()",
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.mutants_generated, 0)
+        self.assertEqual(mutant_future.result_calls, 0)
+
+    def test_process_single_target_defers_cleanup_until_running_mutant_future_finishes(self):
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.project_path = "/tmp/project"
+        fake_sandbox_manager = FakeSandboxManager("/tmp/sandboxes/target-1")
+        planner.sandbox_manager = cast(SandboxManager, cast(object, fake_sandbox_manager))
+        planner.db = FakeTargetDatabase()
+        planner.state = ParallelAgentState()
+
+        target = {
+            "class_name": "org.example.Example",
+            "method_name": "doWork",
+            "method_signature": "void doWork()",
+            "method_coverage": 0.5,
+        }
+
+        test_future = FakeWorkerFuture(result_value={"generated": 0})
+        mutant_future = FakeWorkerFuture(done=False, can_cancel=False)
+
+        with patch(
+            "comet.agent.parallel_planner.submit_with_log_context",
+            side_effect=[test_future, mutant_future],
+        ):
+            result = planner._process_single_target_impl(
+                target,
+                "org.example.Example",
+                "doWork",
+                "org.example.Example#doWork:void doWork()",
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(fake_sandbox_manager.cleaned, [])
+        self.assertEqual(mutant_future.cancel_calls, 1)
+
+        mutant_future.finish()
+
+        self.assertEqual(fake_sandbox_manager.cleaned, ["target-1"])
+
+    def test_process_single_target_skips_waiting_for_mutants_after_test_failure(self):
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.project_path = "/tmp/project"
+        planner.sandbox_manager = cast(
+            SandboxManager,
+            cast(object, FakeSandboxManager("/tmp/sandboxes/target-1")),
+        )
+        planner.db = FakeTargetDatabase()
+        planner.state = ParallelAgentState()
+
+        target = {
+            "class_name": "org.example.Example",
+            "method_name": "doWork",
+            "method_signature": "void doWork()",
+            "method_coverage": 0.5,
+        }
+
+        test_future = FakeWorkerFuture(result_value={"generated": 0})
+        mutant_future = FakeWorkerFuture(fail_on_result=True)
+
+        with patch(
+            "comet.agent.parallel_planner.submit_with_log_context",
+            side_effect=[test_future, mutant_future],
+        ):
+            result = planner._process_single_target_impl(
+                target,
+                "org.example.Example",
+                "doWork",
+                "org.example.Example#doWork:void doWork()",
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, "测试生成失败")
+        self.assertEqual(mutant_future.result_calls, 0)
+
     def test_process_single_target_logs_explicit_timeout_for_test_generation(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"

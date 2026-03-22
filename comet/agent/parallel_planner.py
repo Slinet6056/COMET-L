@@ -1,8 +1,9 @@
 """并行 Agent 调度器 - 批量并行处理 + 集中同步"""
 
 import logging
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -394,6 +395,7 @@ class ParallelPlannerAgent:
         # 为此目标创建独立沙箱
         sandbox_path = None
         sandbox_id = None
+        cleanup_deferred = False
 
         try:
             sandbox_path = self.sandbox_manager.create_target_sandbox(
@@ -407,7 +409,8 @@ class ParallelPlannerAgent:
             test_result = None
             mutant_result = None
 
-            with ThreadPoolExecutor(max_workers=2) as gen_executor:
+            gen_executor = ThreadPoolExecutor(max_workers=2)
+            try:
                 test_future = submit_with_log_context(
                     gen_executor,
                     self._generate_tests_in_sandbox,
@@ -426,17 +429,43 @@ class ParallelPlannerAgent:
                 )
 
                 # 获取结果
+                generation_failed = False
                 try:
                     test_result = test_future.result(timeout=180)
                 except FutureTimeoutError:
                     logger.warning(f"测试生成超时: {target_id} (timeout=180s)")
+                    generation_failed = True
                 except Exception as e:
                     logger.warning(f"测试生成异常: {target_id} ({_format_exception_summary(e)})")
+                    generation_failed = True
 
-                try:
-                    mutant_result = mutant_future.result(timeout=180)
-                except Exception as e:
-                    logger.warning(f"变异体生成异常: {target_id} ({_format_exception_summary(e)})")
+                if self._should_stop_generation_wait(
+                    class_name,
+                    method_name,
+                    target.get("method_signature"),
+                    test_result,
+                    generation_failed,
+                ):
+                    self._cancel_future_if_possible(mutant_future, target_id, "变异体生成")
+                    cleanup_deferred = self._defer_sandbox_cleanup_if_needed(
+                        sandbox_id,
+                        [test_future, mutant_future],
+                        target_id,
+                    )
+                    gen_executor.shutdown(wait=False, cancel_futures=True)
+                else:
+                    try:
+                        mutant_result = mutant_future.result(timeout=180)
+                    except FutureTimeoutError:
+                        logger.warning(f"变异体生成超时: {target_id} (timeout=180s)")
+                    except Exception as e:
+                        logger.warning(
+                            f"变异体生成异常: {target_id} ({_format_exception_summary(e)})"
+                        )
+                    gen_executor.shutdown(wait=True)
+            except Exception:
+                gen_executor.shutdown(wait=False, cancel_futures=True)
+                raise
 
             # 处理测试生成结果
             if test_result:
@@ -510,13 +539,83 @@ class ParallelPlannerAgent:
 
         finally:
             # 清理沙箱
-            if sandbox_id:
+            if sandbox_id and not cleanup_deferred:
                 try:
                     self.sandbox_manager.cleanup_sandbox(sandbox_id)
                 except Exception as e:
                     logger.warning(f"清理沙箱失败: {e}")
 
         return result
+
+    def _should_stop_generation_wait(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str],
+        test_result: Optional[Dict[str, Any]],
+        generation_failed: bool,
+    ) -> bool:
+        if generation_failed:
+            return True
+        if not test_result or test_result.get("generated", 0) <= 0:
+            return True
+        return self._is_target_blacklisted(class_name, method_name, method_signature)
+
+    def _is_target_blacklisted(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str],
+    ) -> bool:
+        target_id = build_method_key(class_name, method_name, method_signature)
+        return any(ft.get("target") == target_id for ft in self.state.failed_targets)
+
+    def _cancel_future_if_possible(self, future: Future[Any], target_id: str, label: str) -> None:
+        if future.done():
+            return
+        if future.cancel():
+            logger.info(f"{label}任务已取消: {target_id}")
+            return
+        logger.info(f"{label}任务已在运行，停止等待: {target_id}")
+
+    def _defer_sandbox_cleanup_if_needed(
+        self,
+        sandbox_id: Optional[str],
+        futures: List[Future[Any]],
+        target_id: str,
+    ) -> bool:
+        if not sandbox_id:
+            return False
+
+        pending_futures = [future for future in futures if not future.done()]
+        if not pending_futures:
+            return False
+
+        remaining = len(pending_futures)
+        lock = threading.Lock()
+        cleaned = False
+
+        def cleanup_when_safe(_future: Future[Any]) -> None:
+            nonlocal remaining, cleaned
+            should_cleanup = False
+            with lock:
+                remaining -= 1
+                if remaining == 0 and not cleaned:
+                    cleaned = True
+                    should_cleanup = True
+            if not should_cleanup:
+                return
+            try:
+                self.sandbox_manager.cleanup_sandbox(sandbox_id)
+                logger.info(f"后台任务结束后已延迟清理沙箱: {target_id}")
+            except Exception as error:
+                logger.warning(f"延迟清理沙箱失败 {sandbox_id}: {error}")
+
+        for future in pending_futures:
+            future.add_done_callback(cleanup_when_safe)
+
+        logger.info(f"检测到后台生成任务仍在运行，延迟清理沙箱: {target_id}")
+        return True
 
     def _generate_tests_in_sandbox(
         self,
