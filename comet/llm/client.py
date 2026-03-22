@@ -3,13 +3,17 @@
 import logging
 import threading
 import time
+from math import ceil
 from typing import Any, Dict, List, Optional
 
 import httpx
+import tiktoken
 from openai import APITimeoutError, OpenAI
 from openai.types.chat import ChatCompletion
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_HEADROOM = 8
 
 
 class LLMClient:
@@ -37,7 +41,7 @@ class LLMClient:
             base_url: API 基础 URL
             model: 模型名称
             temperature: 温度参数
-            max_tokens: 最大 token 数
+            max_tokens: 单次请求的总 token 预算
             max_retries: 最大重试次数
             supports_json_mode: 是否支持 JSON 模式
             timeout: 请求超时时间（秒），默认 600 秒
@@ -81,14 +85,29 @@ class LLMClient:
         Args:
             messages: 消息列表
             temperature: 温度参数（覆盖默认值）
-            max_tokens: 最大 token 数（覆盖默认值）
+            max_tokens: 输出 token 上限（覆盖默认值，但仍受总预算约束）
             response_format: 响应格式（如 {"type": "json_object"}）
 
         Returns:
             模型响应内容
         """
         temp = temperature if temperature is not None else self.temperature
-        max_tok = max_tokens if max_tokens is not None else self.max_tokens
+        configured_budget = self.max_tokens
+        prompt_tokens = self._estimate_prompt_tokens(messages)
+
+        if prompt_tokens >= configured_budget:
+            raise ValueError(
+                f"提示词 token 数已达到或超过预算上限: prompt={prompt_tokens}, budget={configured_budget}"
+            )
+
+        remaining_budget = configured_budget - prompt_tokens
+        available_completion_budget = remaining_budget - _TOKEN_HEADROOM
+
+        if available_completion_budget < 1:
+            raise ValueError("提示词已接近预算上限，扣除请求开销后没有可用的输出 token 预算")
+
+        output_cap = max_tokens if max_tokens is not None else available_completion_budget
+        outbound_max_tokens = min(output_cap, available_completion_budget)
 
         for attempt in range(self.max_retries):
             start_time = time.time()
@@ -97,7 +116,7 @@ class LLMClient:
                     "model": self.model,
                     "messages": messages,
                     "temperature": temp,
-                    "max_tokens": max_tok,
+                    "max_tokens": outbound_max_tokens,
                     "stream": False,  # 明确禁用流式响应
                     "timeout": self.timeout,
                 }
@@ -117,7 +136,10 @@ class LLMClient:
                     kwargs["verbosity"] = self.verbosity
 
                 logger.debug(
-                    f"LLM 调用参数: model={self.model}, max_tokens={max_tok}, temperature={temp}, timeout={self.timeout}s"
+                    f"LLM 调用参数: model={self.model}, max_tokens={outbound_max_tokens}, "
+                    f"temperature={temp}, timeout={self.timeout}s, "
+                    f"prompt_tokens={prompt_tokens}, remaining_budget={remaining_budget}, "
+                    f"available_completion_budget={available_completion_budget}"
                 )
                 logger.debug(f"开始请求 LLM，超时设置: {self.timeout}s")
 
@@ -178,6 +200,27 @@ class LLMClient:
 
         raise RuntimeError("LLM 调用失败，已达最大重试次数")
 
+    def _estimate_prompt_tokens(self, messages: List[Dict[str, str]]) -> int:
+        text_parts: List[str] = []
+        for message in messages:
+            role = str(message.get("role", ""))
+            content = str(message.get("content", ""))
+            text_parts.append(f"{role}:{content}")
+
+        prompt_text = "\n".join(text_parts)
+
+        try:
+            encoding = tiktoken.encoding_for_model(self.model)
+            return len(encoding.encode(prompt_text))
+        except KeyError:
+            try:
+                encoding = tiktoken.get_encoding("cl100k_base")
+                return len(encoding.encode(prompt_text))
+            except Exception:
+                return max(1, ceil(len(prompt_text) / 2))
+        except Exception:
+            return max(1, ceil(len(prompt_text) / 2))
+
     def chat_with_system(
         self,
         system_prompt: str,
@@ -193,7 +236,7 @@ class LLMClient:
             system_prompt: 系统提示词
             user_prompt: 用户提示词
             temperature: 温度参数
-            max_tokens: 最大 token 数
+            max_tokens: 输出 token 上限
             response_format: 响应格式
 
         Returns:

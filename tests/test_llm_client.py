@@ -140,5 +140,110 @@ class LLMClientTimeoutTest(unittest.TestCase):
         self.assertIn("LLM 请求超时", str(ctx.exception))
 
 
+class LLMClientTokenBudgetTest(unittest.TestCase):
+    def _make_client(self, *, configured_budget: int) -> LLMClient:
+        return LLMClient(
+            api_key="test-key",
+            base_url="https://example.com/v1",
+            model="test-model",
+            max_retries=1,
+            max_tokens=configured_budget,
+        )
+
+    def _make_response(self) -> object:
+        class _Usage:
+            prompt_tokens = 1
+            completion_tokens = 1
+            total_tokens = 2
+
+        class _Message:
+            content = "ok"
+
+        class _Choice:
+            message = _Message()
+            finish_reason = "stop"
+
+        class _Response:
+            usage = _Usage()
+            choices = [_Choice()]
+
+        return _Response()
+
+    def test_chat_reduces_outbound_max_tokens_by_prompt_token_usage(self) -> None:
+        client = self._make_client(configured_budget=100)
+        captured_kwargs: dict[str, object] = {}
+
+        def _fake_create(**kwargs: object) -> object:
+            captured_kwargs.update(kwargs)
+            return self._make_response()
+
+        with (
+            patch.object(LLMClient, "_estimate_prompt_tokens", return_value=30, create=True),
+            patch.object(client.client.chat.completions, "create", side_effect=_fake_create),
+        ):
+            result = client.chat([{"role": "user", "content": "hello"}])
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(captured_kwargs["max_tokens"], 62)
+
+    def test_chat_clamps_per_call_max_tokens_by_remaining_budget(self) -> None:
+        client = self._make_client(configured_budget=100)
+        captured_kwargs: dict[str, object] = {}
+
+        def _fake_create(**kwargs: object) -> object:
+            captured_kwargs.update(kwargs)
+            return self._make_response()
+
+        with (
+            patch.object(LLMClient, "_estimate_prompt_tokens", return_value=30, create=True),
+            patch.object(client.client.chat.completions, "create", side_effect=_fake_create),
+        ):
+            result = client.chat([{"role": "user", "content": "hello"}], max_tokens=90)
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(captured_kwargs["max_tokens"], 62)
+
+    def test_chat_raises_when_prompt_tokens_use_all_remaining_budget_after_headroom(self) -> None:
+        client = self._make_client(configured_budget=100)
+
+        with (
+            patch.object(LLMClient, "_estimate_prompt_tokens", return_value=92, create=True),
+            patch.object(client.client.chat.completions, "create") as mock_create,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                client.chat([{"role": "user", "content": "hello"}])
+
+        mock_create.assert_not_called()
+        self.assertIn("输出 token", str(ctx.exception))
+
+    def test_chat_raises_when_prompt_tokens_exceed_total_budget(self) -> None:
+        client = self._make_client(configured_budget=100)
+
+        with (
+            patch.object(LLMClient, "_estimate_prompt_tokens", return_value=120, create=True),
+            patch.object(client.client.chat.completions, "create") as mock_create,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                client.chat([{"role": "user", "content": "hello"}])
+
+        mock_create.assert_not_called()
+        self.assertIn("prompt", str(ctx.exception).lower())
+        self.assertIn("budget", str(ctx.exception).lower())
+
+    def test_chat_raises_when_prompt_tokens_equal_total_budget(self) -> None:
+        client = self._make_client(configured_budget=100)
+
+        with (
+            patch.object(LLMClient, "_estimate_prompt_tokens", return_value=100, create=True),
+            patch.object(client.client.chat.completions, "create") as mock_create,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                client.chat([{"role": "user", "content": "hello"}])
+
+        mock_create.assert_not_called()
+        self.assertIn("prompt", str(ctx.exception).lower())
+        self.assertIn("budget", str(ctx.exception).lower())
+
+
 if __name__ == "__main__":
     unittest.main()
