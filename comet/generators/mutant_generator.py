@@ -1,6 +1,7 @@
 """变异生成器"""
 
 import logging
+import re
 from datetime import datetime
 from typing import List, Optional, Union, cast
 
@@ -14,6 +15,7 @@ from ..utils.method_keys import normalize_method_signature
 from ..utils.parsers import parse_mutation_response
 
 logger = logging.getLogger(__name__)
+JAVA_ANNOTATION_PATTERN = re.compile(r"^\s*@[\w.]+(?:\([^\n]*\))?\s*$")
 
 
 class MutantGenerator:
@@ -35,6 +37,134 @@ class MutantGenerator:
         self.kb = knowledge_base
         self.prompt_manager = PromptManager()
         self._is_rag_enabled = isinstance(knowledge_base, RAGKnowledgeBase)
+
+    def _build_mutant_from_data(
+        self,
+        class_name: str,
+        class_code: str,
+        target_method: Optional[str],
+        target_method_signature: Optional[str],
+        idx: int,
+        mut_data: dict[str, int | str],
+        refined: bool = False,
+    ) -> Optional[Mutant]:
+        reason = self._get_invalid_mutation_reason(
+            class_code=class_code,
+            line_start=int(mut_data["line_start"]),
+            line_end=int(mut_data["line_end"]),
+            original_code=str(mut_data["original"]),
+            mutated_code=str(mut_data["mutated"]),
+        )
+        if reason:
+            logger.warning(f"跳过无效的变异数据 #{idx + 1}: {reason}")
+            logger.debug(f"变异数据: {mut_data}")
+            return None
+
+        patch = MutationPatch(
+            file_path="",  # 将由调用者设置
+            line_start=int(mut_data["line_start"]),
+            line_end=int(mut_data["line_end"]),
+            original_code=str(mut_data["original"]),
+            mutated_code=str(mut_data["mutated"]),
+        )
+
+        mutant_key_prefix = f"{class_name}_refined" if refined else class_name
+        mutant = Mutant(
+            id=generate_id(
+                "mutant",
+                f"{mutant_key_prefix}_{target_method or ''}_{normalize_method_signature(target_method_signature) or ''}_{idx}",
+            ),
+            class_name=class_name,
+            method_name=target_method,
+            method_signature=normalize_method_signature(target_method_signature),
+            patch=patch,
+            status="pending",
+            created_at=datetime.now(),
+        )
+        return mutant
+
+    def _get_invalid_mutation_reason(
+        self,
+        class_code: str,
+        line_start: int,
+        line_end: int,
+        original_code: str,
+        mutated_code: str,
+    ) -> Optional[str]:
+        source_lines = class_code.splitlines()
+        if line_end < line_start:
+            return "LINES 范围无效"
+        if line_start < 1 or line_end > len(source_lines):
+            return "LINES 超出源代码范围"
+
+        expected_original_lines = source_lines[line_start - 1 : line_end]
+        if expected_original_lines != original_code.splitlines():
+            return "ORIGINAL 与指定行范围的源代码不一致"
+
+        if self._has_duplicate_leading_annotations(mutated_code):
+            return "MUTATED 包含重复的前置注解"
+
+        if self._has_uncovered_leading_annotations(
+            source_lines=source_lines,
+            line_start=line_start,
+            original_code=original_code,
+            mutated_code=mutated_code,
+        ):
+            return "MUTATED 重复包含了替换范围之外的前置注解"
+
+        return None
+
+    def _has_duplicate_leading_annotations(self, code: str) -> bool:
+        leading_annotations = self._extract_leading_annotations(code)
+        return len(leading_annotations) != len(set(leading_annotations))
+
+    def _has_uncovered_leading_annotations(
+        self,
+        source_lines: list[str],
+        line_start: int,
+        original_code: str,
+        mutated_code: str,
+    ) -> bool:
+        mutated_annotations = self._extract_leading_annotations(mutated_code)
+        if not mutated_annotations:
+            return False
+
+        original_annotations = self._extract_leading_annotations(original_code)
+        if len(mutated_annotations) <= len(original_annotations):
+            return False
+
+        preceding_annotations: list[str] = []
+        cursor = line_start - 2
+        while cursor >= 0:
+            candidate = source_lines[cursor]
+            if self._is_annotation_line(candidate):
+                preceding_annotations.append(candidate.strip())
+                cursor -= 1
+                continue
+            break
+
+        if not preceding_annotations:
+            return False
+
+        preceding_set = set(preceding_annotations)
+        for annotation in mutated_annotations[len(original_annotations) :]:
+            if annotation in preceding_set:
+                return True
+        return False
+
+    def _extract_leading_annotations(self, code: str) -> list[str]:
+        annotations: list[str] = []
+        for line in code.splitlines():
+            if self._is_annotation_line(line):
+                annotations.append(line.strip())
+                continue
+            if not line.strip():
+                continue
+            break
+        return annotations
+
+    def _is_annotation_line(self, line: str) -> bool:
+        return bool(JAVA_ANNOTATION_PATTERN.match(line))
 
     def _get_rag_context(
         self,
@@ -184,26 +314,16 @@ class MutantGenerator:
                 try:
                     logger.debug(f"处理变异 #{idx + 1}")
 
-                    patch = MutationPatch(
-                        file_path="",  # 将由调用者设置
-                        line_start=mut_data["line_start"],
-                        line_end=mut_data["line_end"],
-                        original_code=mut_data["original"],
-                        mutated_code=mut_data["mutated"],
-                    )
-
-                    mutant = Mutant(
-                        id=generate_id(
-                            "mutant",
-                            f"{class_name}_{target_method or ''}_{normalize_method_signature(target_method_signature) or ''}_{idx}",
-                        ),
+                    mutant = self._build_mutant_from_data(
                         class_name=class_name,
-                        method_name=target_method,
-                        method_signature=normalize_method_signature(target_method_signature),
-                        patch=patch,
-                        status="pending",
-                        created_at=datetime.now(),
+                        class_code=class_code,
+                        target_method=target_method,
+                        target_method_signature=target_method_signature,
+                        idx=idx,
+                        mut_data=mut_data,
                     )
+                    if mutant is None:
+                        continue
                     mutants.append(mutant)
                     logger.debug(f"成功创建变异 #{idx + 1}")
                 except Exception as e:
@@ -350,26 +470,17 @@ class MutantGenerator:
                 try:
                     logger.debug(f"处理变异 #{idx + 1}")
 
-                    patch = MutationPatch(
-                        file_path="",  # 将由调用者设置
-                        line_start=mut_data["line_start"],
-                        line_end=mut_data["line_end"],
-                        original_code=mut_data["original"],
-                        mutated_code=mut_data["mutated"],
-                    )
-
-                    mutant = Mutant(
-                        id=generate_id(
-                            "mutant",
-                            f"{class_name}_refined_{target_method or ''}_{normalize_method_signature(target_method_signature) or ''}_{idx}",
-                        ),
+                    mutant = self._build_mutant_from_data(
                         class_name=class_name,
-                        method_name=target_method,
-                        method_signature=normalize_method_signature(target_method_signature),
-                        patch=patch,
-                        status="pending",
-                        created_at=datetime.now(),
+                        class_code=class_code,
+                        target_method=target_method,
+                        target_method_signature=target_method_signature,
+                        idx=idx,
+                        mut_data=mut_data,
+                        refined=True,
                     )
+                    if mutant is None:
+                        continue
                     mutants.append(mutant)
                     logger.debug(f"成功创建变异 #{idx + 1}")
                 except Exception as e:
