@@ -19,7 +19,7 @@ class LLMConfig(BaseModel):
     api_key: str = Field(description="API 密钥")
     model: str = Field(default="gpt-4", description="模型名称")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
-    max_tokens: int = Field(default=4096, ge=1, description="最大 token 数")
+    max_tokens: int = Field(default=4096, ge=1, description="单次请求的总 token 预算")
     supports_json_mode: bool = Field(default=True, description="是否支持 JSON 模式")
     timeout: float = Field(default=600.0, ge=1.0, description="API 请求超时时间（秒）")
     reasoning_effort: Optional[str] = Field(

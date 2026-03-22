@@ -45,7 +45,7 @@ export const CONFIG_SECTIONS: ConfigSectionDefinition[] = [
       {
         path: ['llm', 'max_tokens'],
         label: '最大令牌数',
-        description: '响应最大令牌数。',
+        description: '单次请求的总令牌预算，包含输入与输出。',
         kind: 'number',
         step: '1',
       },

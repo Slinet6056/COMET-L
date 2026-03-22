@@ -3,6 +3,7 @@ llm:
   api_key: "your-api-key-here"
   model: "gpt-4"
   temperature: 0.7
+  # 单次请求的总 token 预算，包含输入与输出
   max_tokens: 4096
   supports_json_mode: true # 如果使用本地模型不支持 JSON 模式，请设置为 false
   timeout: 120 # API 请求超时时间（秒）
