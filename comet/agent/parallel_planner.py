@@ -3,6 +3,7 @@
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,13 @@ from .target_selector import TargetSelector
 from .tools import AgentTools
 
 logger = logging.getLogger(__name__)
+
+
+def _format_exception_summary(error: Exception) -> str:
+    message = str(error).strip()
+    if message:
+        return f"{type(error).__name__}: {message}"
+    return type(error).__name__
 
 
 class ParallelPlannerAgent:
@@ -420,13 +428,15 @@ class ParallelPlannerAgent:
                 # 获取结果
                 try:
                     test_result = test_future.result(timeout=180)
+                except FutureTimeoutError:
+                    logger.warning(f"测试生成超时: {target_id} (timeout=180s)")
                 except Exception as e:
-                    logger.warning(f"测试生成异常: {e}")
+                    logger.warning(f"测试生成异常: {target_id} ({_format_exception_summary(e)})")
 
                 try:
                     mutant_result = mutant_future.result(timeout=180)
                 except Exception as e:
-                    logger.warning(f"变异体生成异常: {e}")
+                    logger.warning(f"变异体生成异常: {target_id} ({_format_exception_summary(e)})")
 
             # 处理测试生成结果
             if test_result:

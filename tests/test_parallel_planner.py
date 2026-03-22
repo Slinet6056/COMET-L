@@ -2,12 +2,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 from comet.agent.parallel_planner import ParallelPlannerAgent
 from comet.agent.state import ParallelAgentState
 from comet.executor.coverage_parser import CoverageParser, MethodCoverage
 from comet.llm.client import LLMClient
 from comet.store.database import Database
+from comet.utils.sandbox import SandboxManager
 
 
 class FakeCoverageParser(CoverageParser):
@@ -47,6 +49,14 @@ class FakeDatabase(Database):
 
     def save_method_coverage(self, coverage: MethodCoverage, iteration: int) -> None:
         self.saved.append((coverage.class_name, coverage.method_name, iteration))
+
+
+class FakeTargetDatabase(Database):
+    def __init__(self):
+        super().__init__(":memory:")
+
+    def get_method_coverage(self, class_name: str, method_name: str, method_signature=None):
+        return None
 
 
 class ParallelPlannerCoverageSyncTest(unittest.TestCase):
@@ -131,6 +141,73 @@ class ParallelPlannerLLMCallSyncTest(unittest.TestCase):
 
         self.assertTrue(should_stop)
         self.assertEqual(planner.state.llm_calls, 3)
+
+
+class FakeSandboxManager:
+    def __init__(self, sandbox_path: str):
+        self.sandbox_path = sandbox_path
+        self.cleaned = []
+
+    def create_target_sandbox(self, project_path: str, class_name: str, method_name: str) -> str:
+        return self.sandbox_path
+
+    def cleanup_sandbox(self, sandbox_id: str) -> None:
+        self.cleaned.append(sandbox_id)
+
+
+class FakeWorkerFuture:
+    def __init__(self, result_value=None, error: Exception | None = None):
+        self.result_value = result_value
+        self.error = error
+
+    def result(self, timeout: int | None = None):
+        if self.error is not None:
+            raise self.error
+        return self.result_value
+
+
+class ParallelPlannerLoggingTest(unittest.TestCase):
+    def test_process_single_target_logs_explicit_timeout_for_test_generation(self):
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.project_path = "/tmp/project"
+        fake_sandbox_manager = FakeSandboxManager("/tmp/sandboxes/target-1")
+        planner.sandbox_manager = cast(SandboxManager, cast(object, fake_sandbox_manager))
+        planner.db = FakeTargetDatabase()
+
+        target = {
+            "class_name": "org.example.Example",
+            "method_name": "doWork",
+            "method_signature": "void doWork()",
+            "method_coverage": 0.5,
+        }
+
+        futures = iter(
+            [
+                FakeWorkerFuture(error=TimeoutError()),
+                FakeWorkerFuture(result_value={"generated": 1}),
+            ]
+        )
+
+        with patch(
+            "comet.agent.parallel_planner.submit_with_log_context",
+            side_effect=lambda *args, **kwargs: next(futures),
+        ):
+            with self.assertLogs("comet.agent.parallel_planner", level="WARNING") as captured_logs:
+                result = planner._process_single_target_impl(
+                    target,
+                    "org.example.Example",
+                    "doWork",
+                    "org.example.Example#doWork:void doWork()",
+                )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, "测试生成失败")
+        self.assertIn("target-1", fake_sandbox_manager.cleaned)
+        warning_output = "\n".join(captured_logs.output)
+        self.assertIn(
+            "测试生成超时: org.example.Example#doWork:void doWork() (timeout=180s)", warning_output
+        )
+        self.assertNotIn("测试生成异常:", warning_output)
 
 
 if __name__ == "__main__":
