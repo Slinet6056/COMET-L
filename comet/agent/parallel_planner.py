@@ -454,15 +454,26 @@ class ParallelPlannerAgent:
                     )
                     gen_executor.shutdown(wait=False, cancel_futures=True)
                 else:
+                    mutant_generation_timed_out = False
                     try:
                         mutant_result = mutant_future.result(timeout=180)
                     except FutureTimeoutError:
                         logger.warning(f"变异体生成超时: {target_id} (timeout=180s)")
+                        mutant_generation_timed_out = True
                     except Exception as e:
                         logger.warning(
                             f"变异体生成异常: {target_id} ({_format_exception_summary(e)})"
                         )
-                    gen_executor.shutdown(wait=True)
+                    if mutant_generation_timed_out:
+                        self._cancel_future_if_possible(mutant_future, target_id, "变异体生成")
+                        cleanup_deferred = self._defer_sandbox_cleanup_if_needed(
+                            sandbox_id,
+                            [test_future, mutant_future],
+                            target_id,
+                        )
+                        gen_executor.shutdown(wait=False, cancel_futures=True)
+                    else:
+                        gen_executor.shutdown(wait=True)
             except Exception:
                 gen_executor.shutdown(wait=False, cancel_futures=True)
                 raise

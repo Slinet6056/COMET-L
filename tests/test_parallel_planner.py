@@ -156,6 +156,15 @@ class FakeSandboxManager:
         self.cleaned.append(sandbox_id)
 
 
+class FakeExecutor:
+    def __init__(self, max_workers: int):
+        self.max_workers = max_workers
+        self.shutdown_calls = []
+
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        self.shutdown_calls.append((wait, cancel_futures))
+
+
 class FakeWorkerFuture:
     def __init__(
         self,
@@ -368,6 +377,59 @@ class ParallelPlannerLoggingTest(unittest.TestCase):
             "测试生成超时: org.example.Example#doWork:void doWork() (timeout=180s)", warning_output
         )
         self.assertNotIn("测试生成异常:", warning_output)
+
+    def test_process_single_target_does_not_block_after_mutant_generation_timeout(self):
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.project_path = "/tmp/project"
+        fake_sandbox_manager = FakeSandboxManager("/tmp/sandboxes/target-1")
+        planner.sandbox_manager = cast(SandboxManager, cast(object, fake_sandbox_manager))
+        planner.db = FakeTargetDatabase()
+        planner.state = ParallelAgentState()
+
+        target = {
+            "class_name": "org.example.Example",
+            "method_name": "doWork",
+            "method_signature": "void doWork()",
+            "method_coverage": 0.5,
+        }
+
+        fake_executor = FakeExecutor(max_workers=2)
+        test_future = FakeWorkerFuture(result_value={"generated": 1, "test_files": {}})
+        mutant_future = FakeWorkerFuture(error=TimeoutError(), done=False, can_cancel=False)
+
+        with patch(
+            "comet.agent.parallel_planner.ThreadPoolExecutor",
+            side_effect=lambda max_workers: fake_executor,
+        ):
+            with patch(
+                "comet.agent.parallel_planner.submit_with_log_context",
+                side_effect=[test_future, mutant_future],
+            ):
+                with self.assertLogs(
+                    "comet.agent.parallel_planner", level="WARNING"
+                ) as captured_logs:
+                    result = planner._process_single_target_impl(
+                        target,
+                        "org.example.Example",
+                        "doWork",
+                        "org.example.Example#doWork:void doWork()",
+                    )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.mutants_generated, 0)
+        self.assertEqual(mutant_future.cancel_calls, 1)
+        self.assertEqual(fake_executor.shutdown_calls, [(False, True)])
+        self.assertEqual(fake_sandbox_manager.cleaned, [])
+
+        warning_output = "\n".join(captured_logs.output)
+        self.assertIn(
+            "变异体生成超时: org.example.Example#doWork:void doWork() (timeout=180s)",
+            warning_output,
+        )
+
+        mutant_future.finish()
+
+        self.assertEqual(fake_sandbox_manager.cleaned, ["target-1"])
 
 
 if __name__ == "__main__":
