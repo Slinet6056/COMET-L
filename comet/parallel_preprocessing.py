@@ -173,6 +173,32 @@ class ParallelPreprocessor:
                 pass
         return (None, None)
 
+    def _failed_result(self, result: ProcessResult, error: str) -> ProcessResult:
+        result["error"] = error
+        return result
+
+    def _summarize_failure_reason(self, error: object) -> str:
+        if not isinstance(error, str):
+            return "Unknown"
+
+        summary = error.strip()
+        if not summary:
+            return "Unknown"
+
+        summary = summary.splitlines()[0].strip()
+        known_prefixes = (
+            "未找到类文件:",
+            "测试生成失败:",
+            "写入测试文件失败:",
+            "测试编译失败:",
+            "所有测试方法都包含错误:",
+        )
+        for prefix in known_prefixes:
+            if summary.startswith(prefix):
+                return prefix.removesuffix(":")
+
+        return summary
+
     def _extract_and_index_contract(
         self,
         class_name: str,
@@ -413,9 +439,10 @@ class ParallelPreprocessor:
                                 f"耗时: {result['elapsed']:.2f}s)"
                             )
                         else:
+                            failure_reason = self._summarize_failure_reason(result.get("error"))
                             logger.warning(
                                 f"[{completed_count}/{len(all_methods)}] ✗ {class_name}.{method_name} "
-                                f"失败: {result.get('error', 'Unknown')}"
+                                f"失败: {failure_reason}"
                             )
                     except TimeoutError:
                         logger.warning(
@@ -593,8 +620,9 @@ class ParallelPreprocessor:
             # 获取文件路径（传入数据库以支持多类文件）
             file_path = find_java_file(self.workspace_sandbox, class_name, db=self.db)
             if not file_path:
-                logger.warning(f"未找到类文件: {class_name}")
-                return result
+                error = f"未找到类文件: {class_name}"
+                logger.warning(error)
+                return self._failed_result(result, error)
 
             # 索引源码分析（每个类只分析一次）
             with self._analyzed_classes_lock:
@@ -629,8 +657,9 @@ class ParallelPreprocessor:
             )
 
             if not test_case:
-                logger.warning(f"测试生成失败: {class_name}.{method_name}")
-                return result
+                error = f"测试生成失败: {class_name}.{method_name}"
+                logger.warning(error)
+                return self._failed_result(result, error)
 
             # 检查超时
             if time.time() > timeout_deadline:
@@ -663,8 +692,9 @@ class ParallelPreprocessor:
             )
 
             if not test_file:
-                logger.warning(f"写入测试文件失败: {class_name}.{method_name}")
-                return result
+                error = f"写入测试文件失败: {class_name}.{method_name}"
+                logger.warning(error)
+                return self._failed_result(result, error)
 
             # 验证和修复测试
             # 检查超时
@@ -702,8 +732,11 @@ class ParallelPreprocessor:
             )
 
             if not test_case.compile_success:
-                logger.warning(f"测试编译失败: {class_name}.{method_name}")
-                return result
+                error = f"测试编译失败: {class_name}.{method_name}"
+                if test_case.compile_error:
+                    error = f"{error} - {test_case.compile_error}"
+                logger.warning(error)
+                return self._failed_result(result, error)
 
             # 检查超时
             if time.time() > timeout_deadline:
@@ -734,8 +767,9 @@ class ParallelPreprocessor:
                 ]
 
                 if not test_case.methods:
-                    logger.warning(f"所有测试方法都包含错误: {class_name}.{method_name}")
-                    return result
+                    error = f"所有测试方法都包含错误: {class_name}.{method_name}"
+                    logger.warning(error)
+                    return self._failed_result(result, error)
 
                 # 重新构建测试代码
                 from .utils.code_utils import build_test_class

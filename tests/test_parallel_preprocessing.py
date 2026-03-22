@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from comet.models import Mutant, MutationPatch, TestMethod
 from comet.models import TestCase as GeneratedTestCase
@@ -123,6 +123,90 @@ class ParallelPreprocessingLifecycleTests(TestCase):
         assert second_stream is not None
         self.assertEqual(first_stream["status"], "failed")
         self.assertEqual(second_stream["status"], "completed")
+
+
+class ParallelPreprocessingFailureReasonTests(TestCase):
+    def _build_preprocessor(self) -> tuple[ParallelPreprocessor, Mock]:
+        config = SimpleNamespace(
+            preprocessing=SimpleNamespace(max_workers=1, timeout_per_method=30),
+            evolution=SimpleNamespace(min_method_lines=1),
+            formatting=SimpleNamespace(enabled=False, style="google"),
+        )
+        sandbox_manager = Mock()
+        sandbox_manager.create_target_sandbox.return_value = "/tmp/sandbox-1"
+        components = {
+            "sandbox_manager": sandbox_manager,
+            "java_executor": Mock(),
+            "test_generator": Mock(),
+            "mutant_generator": Mock(),
+            "static_guard": Mock(),
+            "mutation_evaluator": Mock(),
+            "db": Mock(),
+            "project_scanner": Mock(),
+        }
+        preprocessor = ParallelPreprocessor(config, components)
+        preprocessor.project_path = "/tmp/project"
+        preprocessor.workspace_sandbox = "/tmp/workspace"
+        return preprocessor, sandbox_manager
+
+    def test_process_method_returns_specific_reason_when_class_file_is_missing(self) -> None:
+        preprocessor, sandbox_manager = self._build_preprocessor()
+
+        with patch("comet.utils.project_utils.find_java_file", return_value=None):
+            result = preprocessor._process_method(
+                "Calculator",
+                "add",
+                {"signature": "int add(int a, int b)"},
+            )
+
+        self.assertFalse(result.get("success", False))
+        self.assertEqual(result.get("error"), "未找到类文件: Calculator")
+        sandbox_manager.cleanup_sandbox.assert_called_once_with("sandbox-1")
+
+    def test_parallel_process_logs_concise_failure_reason(self) -> None:
+        preprocessor, _ = self._build_preprocessor()
+        setattr(
+            preprocessor,
+            "_process_method_with_timeout",
+            Mock(
+                return_value={
+                    "success": False,
+                    "error": "未找到类文件: Calculator",
+                    "elapsed": 0.1,
+                }
+            ),
+        )
+
+        with self.assertLogs("comet.parallel_preprocessing", level="WARNING") as captured_logs:
+            preprocessor._parallel_process_methods([("Calculator", "add", {})])
+
+        logs = "\n".join(captured_logs.output)
+        self.assertIn("✗ Calculator.add 失败: 未找到类文件", logs)
+        self.assertNotIn("未找到类文件: Calculator", logs)
+        self.assertNotIn("失败: Unknown", logs)
+
+    def test_parallel_process_logs_compile_failure_without_verbose_details(self) -> None:
+        preprocessor, _ = self._build_preprocessor()
+        setattr(
+            preprocessor,
+            "_process_method_with_timeout",
+            Mock(
+                return_value={
+                    "success": False,
+                    "error": "测试编译失败: Calculator.add - [ERROR] Maven 编译失败\n[ERROR] line 12",
+                    "elapsed": 0.1,
+                }
+            ),
+        )
+
+        with self.assertLogs("comet.parallel_preprocessing", level="WARNING") as captured_logs:
+            preprocessor._parallel_process_methods([("Calculator", "add", {})])
+
+        logs = "\n".join(captured_logs.output)
+        self.assertIn("✗ Calculator.add 失败: 测试编译失败", logs)
+        self.assertNotIn("测试编译失败: Calculator.add", logs)
+        self.assertNotIn("Maven 编译失败", logs)
+        self.assertNotIn("line 12", logs)
 
 
 class ParallelPreprocessingPersistenceGuardTests(TestCase):
