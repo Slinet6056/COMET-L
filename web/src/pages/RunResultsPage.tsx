@@ -114,9 +114,7 @@ function buildModeHighlights(results: RunResultsResponse): Array<{ label: string
       { label: '执行模式', value: '并行批次演化' },
       {
         label: mutationDisabled ? '变异分析状态' : '全局变异分数',
-        value: mutationDisabled
-          ? '未启用'
-          : formatPercent(metrics.globalMutationScore),
+        value: mutationDisabled ? '未启用' : formatPercent(metrics.globalMutationScore),
       },
       {
         label: '全局已杀死变异体',

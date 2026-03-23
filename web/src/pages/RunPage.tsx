@@ -522,9 +522,7 @@ function StandardRunView(props: {
           <article>
             <span>变异分数</span>
             <strong>
-              {mutationDisabled
-                ? '未启用'
-                : formatPercent(snapshot.metrics.mutationScore)}
+              {mutationDisabled ? '未启用' : formatPercent(snapshot.metrics.mutationScore)}
             </strong>
           </article>
           <article>
@@ -687,9 +685,7 @@ function ParallelRunView(props: {
           <article>
             <span>变异分数</span>
             <strong>
-              {mutationDisabled
-                ? '未启用'
-                : formatPercent(snapshot.metrics.globalMutationScore)}
+              {mutationDisabled ? '未启用' : formatPercent(snapshot.metrics.globalMutationScore)}
             </strong>
           </article>
           <article>
@@ -820,9 +816,7 @@ function ParallelRunView(props: {
                         {mutationDisabled ? '未启用' : formatMetricValue(worker.mutantsKilled)}
                       </td>
                       <td>
-                        {mutationDisabled
-                          ? '未启用'
-                          : formatPercent(worker.localMutationScore)}
+                        {mutationDisabled ? '未启用' : formatPercent(worker.localMutationScore)}
                       </td>
                       <td>
                         {formatPercent(
