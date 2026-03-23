@@ -101,7 +101,7 @@ function getMutationScoreLabel(results: RunResultsResponse): string {
 
 function getMutationScoreDisplay(results: RunResultsResponse): string {
   return isMutationDisabled(results.mutationEnabled)
-    ? '未启用（测试生成消融模式）'
+    ? '未启用'
     : formatPercent(getDisplayMutationScore(results));
 }
 
@@ -115,7 +115,7 @@ function buildModeHighlights(results: RunResultsResponse): Array<{ label: string
       {
         label: mutationDisabled ? '变异分析状态' : '全局变异分数',
         value: mutationDisabled
-          ? '未启用（测试生成消融模式）'
+          ? '未启用'
           : formatPercent(metrics.globalMutationScore),
       },
       {
@@ -343,7 +343,7 @@ export function RunResultsPage() {
             <span>{isMutationDisabled(results.mutationEnabled) ? '变异体状态' : '变异体总数'}</span>
             <strong>
               {isMutationDisabled(results.mutationEnabled)
-                ? '未启用（测试生成消融模式）'
+                ? '未启用'
                 : formatCount(displayTotalMutants)}
             </strong>
           </article>

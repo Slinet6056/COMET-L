@@ -329,8 +329,8 @@ describe('Run results page', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '最终统计' })).toBeInTheDocument();
-    expectMetricValue('变异分析状态', '未启用（测试生成消融模式）');
-    expectMetricValue('变异体状态', '未启用（测试生成消融模式）');
+    expectMetricValue('变异分析状态', '未启用');
+    expectMetricValue('变异体状态', '未启用');
     expect(screen.queryByText('80.0%')).not.toBeInTheDocument();
   });
 });

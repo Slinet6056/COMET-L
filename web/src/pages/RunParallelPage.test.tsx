@@ -529,7 +529,7 @@ describe('Run page parallel mode', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '并行运行状态' })).toBeInTheDocument();
-    expect(screen.getAllByText('未启用（测试生成消融模式）')).toHaveLength(3);
+    expect(screen.getAllByText('未启用')).toHaveLength(3);
     expect(screen.getByText('变异分析')).toBeInTheDocument();
     expect(screen.queryByText('变异体总数')).not.toBeInTheDocument();
     expect(screen.queryByText('已杀死变异体')).not.toBeInTheDocument();
@@ -568,6 +568,6 @@ describe('Run page parallel mode', () => {
     expect(screen.getByText('已启用')).toBeInTheDocument();
     expect(screen.getByText('25')).toBeInTheDocument();
     expect(screen.getByText('17')).toBeInTheDocument();
-    expect(screen.queryByText('未启用（测试生成消融模式）')).not.toBeInTheDocument();
+    expect(screen.queryByText('未启用')).not.toBeInTheDocument();
   });
 });

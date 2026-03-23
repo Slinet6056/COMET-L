@@ -462,7 +462,7 @@ function isMutationDisabled(mutationEnabled: boolean | null | undefined): boolea
 }
 
 function getMutationStatusText(mutationEnabled: boolean | null | undefined): string {
-  return isMutationDisabled(mutationEnabled) ? '未启用（测试生成消融模式）' : '已启用';
+  return isMutationDisabled(mutationEnabled) ? '未启用' : '已启用';
 }
 
 function HistoricalLogNotice(props: { runId: string }) {
@@ -523,7 +523,7 @@ function StandardRunView(props: {
             <span>变异分数</span>
             <strong>
               {mutationDisabled
-                ? '未启用（测试生成消融模式）'
+                ? '未启用'
                 : formatPercent(snapshot.metrics.mutationScore)}
             </strong>
           </article>
@@ -688,7 +688,7 @@ function ParallelRunView(props: {
             <span>变异分数</span>
             <strong>
               {mutationDisabled
-                ? '未启用（测试生成消融模式）'
+                ? '未启用'
                 : formatPercent(snapshot.metrics.globalMutationScore)}
             </strong>
           </article>
@@ -821,7 +821,7 @@ function ParallelRunView(props: {
                       </td>
                       <td>
                         {mutationDisabled
-                          ? '未启用（测试生成消融模式）'
+                          ? '未启用'
                           : formatPercent(worker.localMutationScore)}
                       </td>
                       <td>

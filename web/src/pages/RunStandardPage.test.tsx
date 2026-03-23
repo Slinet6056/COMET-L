@@ -300,7 +300,7 @@ describe('Run page standard mode', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
-    expect(screen.getAllByText('未启用（测试生成消融模式）')).toHaveLength(2);
+    expect(screen.getAllByText('未启用')).toHaveLength(2);
     expect(screen.getByText('变异分析')).toBeInTheDocument();
     expect(screen.queryByText('已杀死变异体')).not.toBeInTheDocument();
     expect(screen.queryByText('存活变异体')).not.toBeInTheDocument();
