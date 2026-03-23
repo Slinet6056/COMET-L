@@ -232,8 +232,8 @@ class ParallelPlannerAgent:
                     no_improvement_count += 1
                     if self._has_untried_frontier():
                         logger.info(
-                            "本轮无显著改进，但仍有未尝试目标，继续探索 "
-                            f"(当前连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)"
+                            f"本轮无显著改进，当前连续 {no_improvement_count} 轮；"
+                            "低覆盖率前沿未耗尽，继续探索"
                         )
                     else:
                         logger.info(
@@ -251,7 +251,7 @@ class ParallelPlannerAgent:
                 if no_improvement_count >= stop_on_no_improvement_rounds:
                     if self._has_untried_frontier():
                         logger.info(
-                            f"连续 {no_improvement_count} 轮无改进，但仍有未尝试目标，继续探索"
+                            f"连续 {no_improvement_count} 轮无改进；低覆盖率前沿未耗尽，继续探索"
                         )
                     else:
                         logger.info(f"连续 {no_improvement_count} 轮无改进，且前沿已耗尽，停止")
