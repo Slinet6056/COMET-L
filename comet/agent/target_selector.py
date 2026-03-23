@@ -86,6 +86,7 @@ class TargetSelector:
         criteria: str = "coverage",
         blacklist: Optional[set[str]] = None,
         processed_targets: Optional[set[str]] = None,
+        require_unprocessed: bool = False,
     ) -> TargetInfo:
         """
         根据策略选择目标
@@ -106,21 +107,24 @@ class TargetSelector:
         self._ensure_strategy_available(criteria)
 
         if criteria == "coverage":
-            return self.select_by_coverage(blacklist, processed_targets)
+            return self.select_by_coverage(blacklist, processed_targets, require_unprocessed)
         elif criteria == "killrate":
-            return self.select_by_killrate(blacklist, processed_targets)
+            return self.select_by_killrate(blacklist, processed_targets, require_unprocessed)
         elif criteria == "mutations":
-            return self.select_by_mutations(blacklist, processed_targets)
+            return self.select_by_mutations(blacklist, processed_targets, require_unprocessed)
         elif criteria == "priority":
-            return self.select_by_priority(blacklist, processed_targets)
+            return self.select_by_priority(blacklist, processed_targets, require_unprocessed)
         elif criteria == "random":
-            return self.select_random(blacklist, processed_targets)
+            return self.select_random(blacklist, processed_targets, require_unprocessed)
         else:
             logger.warning(f"未知策略: {criteria}，使用默认策略")
-            return self.select_by_priority(blacklist, processed_targets)
+            return self.select_by_priority(blacklist, processed_targets, require_unprocessed)
 
     def select_by_coverage(
-        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+        self,
+        blacklist: Optional[set[str]] = None,
+        processed_targets: Optional[set[str]] = None,
+        require_unprocessed: bool = False,
     ) -> TargetInfo:
         """
         选择覆盖率最低的方法
@@ -165,7 +169,11 @@ class TargetSelector:
                     processed_selected = selected
 
             # 优先使用未处理的目标
-            selected = unprocessed_selected or processed_selected
+            selected = (
+                unprocessed_selected
+                if require_unprocessed
+                else (unprocessed_selected or processed_selected)
+            )
 
             if selected:
                 target_key = build_method_key(
@@ -204,7 +212,13 @@ class TargetSelector:
                     "missed_lines": selected.missed_lines,
                 }
 
-            logger.info("所有低覆盖率方法都在黑名单中或已处理")
+            if require_unprocessed:
+                logger.info("当前没有可用的未处理低覆盖率方法")
+            else:
+                logger.info("所有低覆盖率方法都在黑名单中或已处理")
+
+        if require_unprocessed:
+            return {"class_name": None, "method_name": None}
 
         # 如果没有低覆盖率方法，尝试获取所有覆盖率数据
         all_coverage = self.db.get_all_method_coverage()
@@ -235,6 +249,9 @@ class TargetSelector:
                     f"选择目标（最低覆盖率）: {selected.class_name}.{selected.method_name} "
                     f"(覆盖率: {selected.line_coverage_rate:.1%})"
                 )
+            elif require_unprocessed:
+                logger.info("当前没有可用的未处理覆盖率目标")
+                return {"class_name": None, "method_name": None}
             else:
                 # 所有目标都已处理，选择已处理中覆盖率最低的
                 selected = min(filtered, key=lambda x: x.line_coverage_rate)
@@ -326,7 +343,10 @@ class TargetSelector:
         return {"class_name": None, "method_name": None}
 
     def select_by_mutations(
-        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+        self,
+        blacklist: Optional[set[str]] = None,
+        processed_targets: Optional[set[str]] = None,
+        require_unprocessed: bool = False,
     ) -> TargetInfo:
         """
         选择变异体最少的类
@@ -367,6 +387,7 @@ class TargetSelector:
                 blacklist,
                 processed_targets,
                 prefer_unprocessed=True,
+                require_unprocessed=require_unprocessed,
             )
             if method_name is not None:
                 target_key = build_method_key(candidate_class, method_name, method_signature)
@@ -391,7 +412,10 @@ class TargetSelector:
         return {"class_name": None, "method_name": None}
 
     def select_by_priority(
-        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+        self,
+        blacklist: Optional[set[str]] = None,
+        processed_targets: Optional[set[str]] = None,
+        require_unprocessed: bool = False,
     ) -> TargetInfo:
         """
         综合评分选择目标
@@ -438,6 +462,7 @@ class TargetSelector:
                 blacklist,
                 processed_targets,
                 prefer_unprocessed=True,
+                require_unprocessed=require_unprocessed,
             )
             if method_name is not None:
                 target_key = build_method_key(candidate_class, method_name, method_signature)
@@ -461,7 +486,10 @@ class TargetSelector:
         return {"class_name": None, "method_name": None}
 
     def select_random(
-        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+        self,
+        blacklist: Optional[set[str]] = None,
+        processed_targets: Optional[set[str]] = None,
+        require_unprocessed: bool = False,
     ) -> TargetInfo:
         """
         随机选择目标
@@ -512,6 +540,9 @@ class TargetSelector:
                 unprocessed_targets
             )
             logger.info(f"选择目标（随机）: {selected_class}.{method_name}")
+        elif require_unprocessed:
+            logger.info("当前没有可用的未处理随机目标")
+            return {"class_name": None, "method_name": None}
         elif processed_targets_list:
             selected_class, selected_method_info, method_name, method_signature = random.choice(
                 processed_targets_list
@@ -530,7 +561,10 @@ class TargetSelector:
         }
 
     def select_by_killrate(
-        self, blacklist: Optional[set[str]] = None, processed_targets: Optional[set[str]] = None
+        self,
+        blacklist: Optional[set[str]] = None,
+        processed_targets: Optional[set[str]] = None,
+        require_unprocessed: bool = False,
     ) -> TargetInfo:
         """
         按杀死率选择目标（优先选择杀死率低的方法）
@@ -580,6 +614,9 @@ class TargetSelector:
         if unprocessed_candidates:
             selected_key, selected_stat = unprocessed_candidates[0]
             is_processed = False
+        elif require_unprocessed:
+            logger.info("当前没有可用的未处理 killrate 目标")
+            return {"class_name": None, "method_name": None}
         else:
             # 所有候选都已处理，选择已处理中杀死率最低的
             selected_key, selected_stat = candidates[0]
@@ -724,6 +761,7 @@ class TargetSelector:
         processed_targets: Optional[set[str]] = None,
         prefer_unprocessed: bool = True,
         allow_first_only: bool = True,
+        require_unprocessed: bool = False,
     ) -> Tuple[Optional[MethodInfo], Optional[str], Optional[str]]:
         """
         获取指定类中未命中黑名单的第一个 public 方法
@@ -769,16 +807,30 @@ class TargetSelector:
             # 优先返回未处理的，没有的话返回已处理的
             if unprocessed_candidates:
                 return unprocessed_candidates[0]
-            elif processed_candidates:
+            elif processed_candidates and not require_unprocessed:
                 return processed_candidates[0]
         else:
             # 不区分优先级，优先返回已处理的，没有的话返回未处理的
-            if processed_candidates:
+            if processed_candidates and not require_unprocessed:
                 return processed_candidates[0]
             elif unprocessed_candidates:
                 return unprocessed_candidates[0]
 
         return None, None, None
+
+    def has_unprocessed_target(
+        self,
+        criteria: str = "coverage",
+        blacklist: Optional[set[str]] = None,
+        processed_targets: Optional[set[str]] = None,
+    ) -> bool:
+        selected = self.select(
+            criteria=criteria,
+            blacklist=blacklist,
+            processed_targets=processed_targets,
+            require_unprocessed=True,
+        )
+        return bool(selected.get("class_name"))
 
     def clear_cache(self) -> None:
         """清除缓存"""

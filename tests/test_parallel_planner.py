@@ -314,6 +314,88 @@ class ParallelPlannerLoggingTest(unittest.TestCase):
         self.assertEqual(result.mutants_generated, 0)
         self.assertEqual(mutant_future.result_calls, 0)
 
+
+class ParallelPlannerFrontierAwareStopTest(unittest.TestCase):
+    def test_run_does_not_stop_on_no_improvement_when_untried_targets_remain(self):
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.state = ParallelAgentState()
+        planner.max_parallel_targets = 4
+        planner.max_iterations = 10
+        planner.budget = 100
+        planner.max_eval_workers = 2
+        planner.timeout_per_target = 60
+        planner.mutation_enabled = False
+        planner._interrupted = False
+        planner._llm_calls_base = 0
+        planner._sync_global_state = Mock()
+        planner._collect_global_coverage = Mock()
+        planner._merge_test_files = Mock()
+        planner._validate_and_fix_conflicts = Mock()
+        planner._log_final_summary = Mock()
+        planner._check_excellent_quality = Mock(return_value=False)
+        planner._check_improvement = Mock(return_value=False)
+        planner._should_stop = Mock(side_effect=[False, False, True])
+        planner._select_batch_targets = Mock(
+            side_effect=[
+                [{"class_name": "A", "method_name": "m1"}],
+                [{"class_name": "B", "method_name": "m2"}],
+            ]
+        )
+        planner._process_targets_parallel = Mock(
+            return_value=[
+                WorkerResult(
+                    target_id="A#m1",
+                    class_name="A",
+                    method_name="m1",
+                    success=False,
+                    error="生成失败",
+                    mutation_enabled=False,
+                )
+            ]
+        )
+        planner._has_untried_frontier = Mock(side_effect=[True, True, False, False])
+
+        result = planner.run(stop_on_no_improvement_rounds=1, min_improvement_threshold=0.01)
+
+        self.assertIs(result, planner.state)
+        self.assertEqual(planner._select_batch_targets.call_count, 2)
+        self.assertEqual(planner._process_targets_parallel.call_count, 2)
+
+
+class ParallelPlannerExplorationSlotsTest(unittest.TestCase):
+    def test_select_batch_targets_reserves_slot_for_unprocessed_target(self):
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.max_parallel_targets = 4
+        planner.state = ParallelAgentState()
+        planner.target_selector = Mock(spec=TargetSelector)
+        planner.target_selector.has_unprocessed_target.return_value = True
+
+        regular_target = {
+            "class_name": "Example",
+            "method_name": "regular",
+            "method_signature": "void regular()",
+        }
+        unprocessed_target = {
+            "class_name": "Example",
+            "method_name": "fresh",
+            "method_signature": "void fresh()",
+        }
+
+        planner.target_selector.select.side_effect = [
+            unprocessed_target,
+            regular_target,
+            {"class_name": None, "method_name": None},
+            {"class_name": None, "method_name": None},
+        ]
+
+        selected = planner._select_batch_targets()
+
+        self.assertEqual(selected, [unprocessed_target, regular_target])
+        first_call = planner.target_selector.select.call_args_list[0]
+        second_call = planner.target_selector.select.call_args_list[1]
+        self.assertTrue(first_call.kwargs["require_unprocessed"])
+        self.assertFalse(second_call.kwargs["require_unprocessed"])
+
     def test_process_single_target_defers_cleanup_until_running_mutant_future_finishes(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"

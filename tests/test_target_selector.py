@@ -156,6 +156,71 @@ class TargetSelectorCoverageSignatureTests(unittest.TestCase):
             self.assertEqual(selected["method_name"], "subtract")
             self.assertEqual(selected["method_signature"], "int subtract(int a, int b)")
 
+    def test_select_by_coverage_require_unprocessed_skips_processed_fallback(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database = Mock()
+            low_cov = MethodCoverage(
+                class_name="Calculator",
+                method_name="add",
+                method_signature="int add(int a, int b)",
+                covered_lines=[],
+                missed_lines=[10, 11],
+                total_lines=2,
+                covered_branches=0,
+                missed_branches=0,
+                total_branches=0,
+                line_coverage_rate=0.0,
+                branch_coverage_rate=0.0,
+            )
+            database.get_low_coverage_methods.return_value = [low_cov]
+            database.get_all_method_coverage.return_value = [low_cov]
+
+            selector = TargetSelector(
+                project_path=str(Path(tmp_dir)),
+                java_executor=Mock(),
+                database=database,
+            )
+            selector._get_public_methods = Mock(return_value=[])
+
+            selected = selector.select_by_coverage(
+                processed_targets={build_method_key("Calculator", "add", "int add(int a, int b)")},
+                require_unprocessed=True,
+            )
+
+            self.assertIsNone(selected["class_name"])
+            self.assertIsNone(selected["method_name"])
+
+    def test_select_by_coverage_require_unprocessed_only_counts_low_coverage_targets(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database = Mock()
+            high_cov = MethodCoverage(
+                class_name="Calculator",
+                method_name="stable",
+                method_signature="int stable()",
+                covered_lines=[10, 11, 12, 13],
+                missed_lines=[],
+                total_lines=4,
+                covered_branches=0,
+                missed_branches=0,
+                total_branches=0,
+                line_coverage_rate=1.0,
+                branch_coverage_rate=0.0,
+            )
+            database.get_low_coverage_methods.return_value = []
+            database.get_all_method_coverage.return_value = [high_cov]
+
+            selector = TargetSelector(
+                project_path=str(Path(tmp_dir)),
+                java_executor=Mock(),
+                database=database,
+            )
+            selector._get_public_methods = Mock(return_value=[])
+
+            selected = selector.select_by_coverage(require_unprocessed=True)
+
+            self.assertIsNone(selected["class_name"])
+            self.assertIsNone(selected["method_name"])
+
 
 class TargetSelectorMutationDisabledFailFastTests(unittest.TestCase):
     def test_select_rejects_killrate_without_mutation_data_when_mutation_disabled(self) -> None:

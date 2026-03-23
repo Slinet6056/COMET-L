@@ -1,6 +1,7 @@
 """并行 Agent 调度器 - 批量并行处理 + 集中同步"""
 
 import logging
+import math
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -229,9 +230,15 @@ class ParallelPlannerAgent:
                     )
                 else:
                     no_improvement_count += 1
-                    logger.info(
-                        f"无显著改进 (连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)"
-                    )
+                    if self._has_untried_frontier():
+                        logger.info(
+                            "本轮无显著改进，但仍有未尝试目标，继续探索 "
+                            f"(当前连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)"
+                        )
+                    else:
+                        logger.info(
+                            f"无显著改进 (连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)"
+                        )
 
                 if (
                     self.state.global_mutation_enabled
@@ -242,8 +249,13 @@ class ParallelPlannerAgent:
 
                 # 10. 检查停止条件
                 if no_improvement_count >= stop_on_no_improvement_rounds:
-                    logger.info(f"连续 {no_improvement_count} 轮无改进，停止")
-                    break
+                    if self._has_untried_frontier():
+                        logger.info(
+                            f"连续 {no_improvement_count} 轮无改进，但仍有未尝试目标，继续探索"
+                        )
+                    else:
+                        logger.info(f"连续 {no_improvement_count} 轮无改进，且前沿已耗尽，停止")
+                        break
 
                 if self._check_excellent_quality():
                     logger.info("已达到优秀质量水平，停止")
@@ -279,14 +291,27 @@ class ParallelPlannerAgent:
         active_targets = {
             target for target in self.state.get_active_targets() if isinstance(target, str)
         }
+        exploration_slots = self._calculate_exploration_slots(blacklist | active_targets, processed)
 
-        for _ in range(self.max_parallel_targets):
+        if exploration_slots > 0:
+            logger.info(f"本批次保留 {exploration_slots} 个探索槽位给未尝试目标")
+
+        for index in range(self.max_parallel_targets):
+            require_unprocessed = index < exploration_slots
             # 使用目标选择器选择下一个目标
             target = self.target_selector.select(
                 criteria="coverage",
                 blacklist=blacklist | active_targets,
                 processed_targets=processed,
+                require_unprocessed=require_unprocessed,
             )
+
+            if require_unprocessed and (not target or not target.get("class_name")):
+                target = self.target_selector.select(
+                    criteria="coverage",
+                    blacklist=blacklist | active_targets,
+                    processed_targets=processed,
+                )
 
             if not target or not target.get("class_name"):
                 break
@@ -310,6 +335,34 @@ class ParallelPlannerAgent:
                 blacklist.add(target_id)
 
         return targets
+
+    def _calculate_exploration_slots(self, blacklist: set[str], processed_targets: set[str]) -> int:
+        if not self.target_selector.has_unprocessed_target(
+            criteria="coverage",
+            blacklist=blacklist,
+            processed_targets=processed_targets,
+        ):
+            return 0
+
+        return min(self.max_parallel_targets, max(1, math.ceil(self.max_parallel_targets * 0.25)))
+
+    def _has_untried_frontier(self) -> bool:
+        blacklist = {
+            target
+            for target in (
+                failed_target.get("target") for failed_target in self.state.failed_targets
+            )
+            if isinstance(target, str)
+        }
+        processed = {target for target in self.state.processed_targets if isinstance(target, str)}
+        active_targets = {
+            target for target in self.state.get_active_targets() if isinstance(target, str)
+        }
+        return self.target_selector.has_unprocessed_target(
+            criteria="coverage",
+            blacklist=blacklist | active_targets,
+            processed_targets=processed,
+        )
 
     def _process_targets_parallel(self, targets: List[Dict[str, Any]]) -> List[WorkerResult]:
         """
