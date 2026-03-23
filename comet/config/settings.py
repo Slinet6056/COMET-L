@@ -226,6 +226,10 @@ class PreprocessingConfig(BaseModel):
     """并行预处理配置"""
 
     enabled: bool = Field(default=True, description="是否启用并行预处理")
+    exit_after_preprocessing: bool = Field(
+        default=False,
+        description="预处理完成后导出测试并退出，不进入主循环",
+    )
     max_workers: Optional[int] = Field(
         default=None, description="最大并发数，null表示自动（cpu_count）"
     )

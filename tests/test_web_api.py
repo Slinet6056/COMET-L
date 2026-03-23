@@ -48,6 +48,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertIn("config", payload)
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4")
         self.assertTrue(payload["config"]["evolution"]["mutation_enabled"])
+        self.assertFalse(payload["config"]["preprocessing"]["exit_after_preprocessing"])
         self.assertNotIn("paths", payload["config"])
 
     def test_parse_valid_yaml_returns_normalized_config(self) -> None:
@@ -65,6 +66,8 @@ class ConfigApiTests(unittest.TestCase):
                             "  model: gpt-4o-mini\n"
                             "execution:\n"
                             "  timeout: 123\n"
+                            "preprocessing:\n"
+                            "  exit_after_preprocessing: true\n"
                             "evolution:\n"
                             "  mutation_enabled: false\n"
                             "agent:\n"
@@ -82,6 +85,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["config"]["llm"]["api_key"], "test-key")
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4o-mini")
         self.assertEqual(payload["config"]["execution"]["timeout"], 123)
+        self.assertTrue(payload["config"]["preprocessing"]["exit_after_preprocessing"])
         self.assertFalse(payload["config"]["evolution"]["mutation_enabled"])
         self.assertTrue(payload["config"]["agent"]["parallel"]["enabled"])
         self.assertNotIn("paths", payload["config"])

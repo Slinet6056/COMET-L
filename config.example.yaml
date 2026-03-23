@@ -54,6 +54,7 @@ logging:
 
 preprocessing:
   enabled: true # 是否启用并行预处理
+  exit_after_preprocessing: false # 预处理完成后导出测试并退出，不进入主循环
   max_workers: null # 最大并发数，null表示自动（cpu_count）
   timeout_per_method: 300 # 单个方法的超时时间（秒）
 

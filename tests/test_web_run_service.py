@@ -198,6 +198,7 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertTrue(resolved_config_path.exists())
             resolved_snapshot = json.loads(resolved_config_path.read_text(encoding="utf-8"))
             self.assertEqual(resolved_snapshot["logging"]["file"], session.paths["log"])
+            self.assertFalse(resolved_snapshot["preprocessing"]["exit_after_preprocessing"])
             self.assertNotIn("vector_db", resolved_snapshot["knowledge"])
             self.assertNotIn("paths", resolved_snapshot)
 

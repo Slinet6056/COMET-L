@@ -415,16 +415,25 @@ def run_evolution(
         )
         snapshot_thread.start()
 
+    def save_final_state_and_export_tests() -> None:
+        state_file = config.resolve_output_root() / "final_state.json"
+        planner.save_state(str(state_file))
+        logger.info(f"最终状态已保存: {state_file}")
+
+        logger.info("=" * 60)
+        logger.info("导出测试文件到原项目...")
+        sandbox_manager.export_test_files("workspace", project_path)
+        logger.info("=" * 60)
+
     try:
         start_snapshot_publisher()
 
         # ===== 新增：并行预处理阶段 =====
         if not resume_state:  # 只在非恢复模式下执行预处理
             # 检查是否启用预处理
-            try:
-                preprocessing_enabled = config.preprocessing.enabled
-            except AttributeError:
-                preprocessing_enabled = True  # 默认启用
+            preprocessing_enabled = config.preprocessing.enabled
+            exit_after_preprocessing = config.preprocessing.exit_after_preprocessing
+            preprocessing_completed = False
 
             if preprocessing_enabled:
                 current_phase.update({"key": "preprocessing", "label": "Preprocessing"})
@@ -520,6 +529,8 @@ def run_evolution(
                                 raise RuntimeError(
                                     f"初始覆盖率测试异常（已重试 {max_retries} 次）: {e}"
                                 )
+
+                    preprocessing_completed = True
                 except KeyboardInterrupt:
                     # 中断信号会传播到外层处理
                     raise
@@ -532,6 +543,13 @@ def run_evolution(
                     logger.warning("将跳过预处理，继续正常流程")
             else:
                 logger.info("并行预处理已禁用，跳过预处理阶段")
+
+            if preprocessing_completed and exit_after_preprocessing:
+                logger.info("已配置为预处理完成后退出，跳过主循环")
+                current_phase.update({"key": "completed", "label": "Completed"})
+                publish_runtime_snapshot()
+                save_final_state_and_export_tests()
+                return
 
         current_phase.update({"key": "running", "label": "Running"})
         publish_runtime_snapshot()
@@ -550,16 +568,7 @@ def run_evolution(
         current_phase.update({"key": "completed", "label": "Completed"})
         publish_runtime_snapshot()
 
-        # 保存最终状态
-        state_file = config.resolve_output_root() / "final_state.json"
-        planner.save_state(str(state_file))
-        logger.info(f"最终状态已保存: {state_file}")
-
-        # 导出测试文件到原项目
-        logger.info("=" * 60)
-        logger.info("导出测试文件到原项目...")
-        sandbox_manager.export_test_files("workspace", project_path)
-        logger.info("=" * 60)
+        save_final_state_and_export_tests()
 
     except KeyboardInterrupt:
         logger.info("\n用户中断，保存当前状态...")

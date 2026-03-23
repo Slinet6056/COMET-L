@@ -11,6 +11,7 @@ class SettingsPathsTests(unittest.TestCase):
         settings = Settings(llm=LLMConfig(api_key="test-key"))
 
         self.assertTrue(settings.to_dict()["evolution"]["mutation_enabled"])
+        self.assertFalse(settings.to_dict()["preprocessing"]["exit_after_preprocessing"])
 
     def test_ensure_directories_creates_fixed_runtime_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

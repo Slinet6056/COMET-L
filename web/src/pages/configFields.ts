@@ -308,6 +308,12 @@ export const CONFIG_SECTIONS: ConfigSectionDefinition[] = [
         kind: 'boolean',
       },
       {
+        path: ['preprocessing', 'exit_after_preprocessing'],
+        label: '预处理后退出',
+        description: '预处理完成后导出测试并退出，不进入主循环。',
+        kind: 'boolean',
+      },
+      {
         path: ['preprocessing', 'max_workers'],
         label: '最大工作线程数',
         description: '可选的预处理工作线程数量。',

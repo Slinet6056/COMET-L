@@ -61,6 +61,7 @@ const defaultConfig = {
   },
   preprocessing: {
     enabled: true,
+    exit_after_preprocessing: false,
     max_workers: null,
     timeout_per_method: 300,
   },
