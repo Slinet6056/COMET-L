@@ -201,6 +201,100 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertNotIn("vector_db", resolved_snapshot["knowledge"])
             self.assertNotIn("paths", resolved_snapshot)
 
+    def test_create_run_persists_and_restores_mutation_enabled_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+            )
+
+            service = RunLifecycleService(workspace_root=root)
+            session = service.create_run(
+                RunRequest(
+                    project_path=str(project_path),
+                    config_path="config.yaml",
+                    mutation_enabled=False,
+                ),
+                settings_loader=lambda _: settings,
+            )
+
+            self.assertFalse(session.config_snapshot["evolution"]["mutation_enabled"])
+            resolved_config_path = Path(session.paths["resolved_config"])
+            resolved_snapshot = json.loads(resolved_config_path.read_text(encoding="utf-8"))
+            self.assertFalse(resolved_snapshot["evolution"]["mutation_enabled"])
+
+            service.mark_completed(session.run_id)
+
+            restored_service = RunLifecycleService(workspace_root=root)
+            restored_session = restored_service.get_session(session.run_id)
+            restored_request = restored_service.get_run_request(session.run_id)
+
+            self.assertFalse(restored_session.config_snapshot["evolution"]["mutation_enabled"])
+            self.assertFalse(restored_request.mutation_enabled)
+
+    def test_restored_request_keeps_missing_mutation_enabled_compatible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+            )
+
+            service = RunLifecycleService(workspace_root=root)
+            session = service.create_run(
+                RunRequest(project_path=str(project_path), config_path="config.yaml"),
+                settings_loader=lambda _: settings,
+            )
+
+            legacy_state_payload = {
+                "iteration": 3,
+                "llm_calls": 7,
+                "budget": 21,
+                "total_tests": 5,
+                "total_mutants": 8,
+                "killed_mutants": 6,
+                "survived_mutants": 2,
+                "mutation_score": 0.75,
+                "line_coverage": 0.8,
+                "branch_coverage": 0.6,
+            }
+            final_state_path = Path(session.paths["final_state"])
+            final_state_path.parent.mkdir(parents=True, exist_ok=True)
+            final_state_path.write_text(json.dumps(legacy_state_payload), encoding="utf-8")
+            service.mark_completed(session.run_id)
+
+            manifest_path = service._session_manifest_path(session.run_id)
+            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_payload.setdefault("config_snapshot", {}).setdefault("evolution", {}).pop(
+                "mutation_enabled", None
+            )
+            manifest_path.write_text(
+                json.dumps(manifest_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            restored_service = RunLifecycleService(workspace_root=root)
+
+            restored_request = restored_service.get_run_request(session.run_id)
+            restored_snapshot = restored_service.build_snapshot(session.run_id)
+            restored_results = restored_service.build_results(session.run_id)
+
+            self.assertIsNone(restored_request.mutation_enabled)
+            self.assertTrue(restored_snapshot["mutationEnabled"])
+            self.assertEqual(restored_snapshot["metrics"]["mutationScore"], 0.75)
+            self.assertEqual(restored_snapshot["metrics"]["totalMutants"], 8)
+            self.assertEqual(restored_results["summary"]["metrics"]["mutationScore"], 0.75)
+            self.assertEqual(restored_service.list_runs()[0]["mutationEnabled"], True)
+
     def test_second_active_run_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

@@ -16,6 +16,12 @@ export type ConfigPayload = {
   config: Record<string, unknown>;
 };
 
+export type RunConfigPayload = Record<string, unknown> & {
+  evolution?: {
+    mutation_enabled?: boolean;
+  };
+};
+
 export type RunCreateResponse = {
   runId: string;
   status: string;
@@ -40,6 +46,7 @@ export type RunHistoryEntry = {
   metrics: RunMetrics;
   artifacts: Record<string, RunArtifact>;
   isHistorical?: boolean;
+  mutationEnabled?: boolean | null;
 };
 
 export type RunHistoryResponse = {
@@ -56,17 +63,17 @@ export type RunPhase = {
 };
 
 export type RunMetrics = {
-  mutationScore: number;
-  globalMutationScore: number;
+  mutationScore: number | null;
+  globalMutationScore: number | null;
   lineCoverage: number;
   branchCoverage: number;
   totalTests: number;
-  totalMutants: number;
-  globalTotalMutants: number;
-  killedMutants: number;
-  globalKilledMutants: number;
-  survivedMutants: number;
-  globalSurvivedMutants: number;
+  totalMutants: number | null;
+  globalTotalMutants: number | null;
+  killedMutants: number | null;
+  globalKilledMutants: number | null;
+  survivedMutants: number | null;
+  globalSurvivedMutants: number | null;
   currentMethodCoverage?: number | null;
 };
 
@@ -82,10 +89,10 @@ export type RunWorkerCard = {
   success: boolean;
   error?: string | null;
   testsGenerated: number;
-  mutantsGenerated: number;
-  mutantsEvaluated: number;
-  mutantsKilled: number;
-  localMutationScore: number;
+  mutantsGenerated: number | null;
+  mutantsEvaluated: number | null;
+  mutantsKilled: number | null;
+  localMutationScore: number | null;
   processingTime: number;
   methodCoverage?: number | null;
 };
@@ -204,6 +211,7 @@ export type RunResultsResponse = {
   phase: RunPhase;
   summary: RunResultsSummary;
   artifacts: Record<string, RunResultsArtifact>;
+  mutationEnabled?: boolean | null;
 };
 
 export type RunSnapshot = {
@@ -222,6 +230,7 @@ export type RunSnapshot = {
   phase: RunPhase;
   artifacts: Record<string, RunArtifact>;
   isHistorical?: boolean;
+  mutationEnabled?: boolean | null;
   parallel?: {
     currentBatch: number;
     parallelStats: Record<string, unknown>;
@@ -307,12 +316,15 @@ export async function parseConfigFile(file: File): Promise<ConfigPayload> {
 export async function createRun(options: {
   projectPath: string;
   bugReportsDir?: string | null;
-  config: Record<string, unknown>;
+  config: RunConfigPayload;
 }): Promise<RunCreateResponse> {
   const formData = new FormData();
   formData.set('projectPath', options.projectPath);
   if (options.bugReportsDir && options.bugReportsDir.trim().length > 0) {
     formData.set('bugReportsDir', options.bugReportsDir.trim());
+  }
+  if (typeof options.config.evolution?.mutation_enabled === 'boolean') {
+    formData.set('mutationEnabled', String(options.config.evolution.mutation_enabled));
   }
   formData.set(
     'configFile',

@@ -47,6 +47,7 @@ class ConfigApiTests(unittest.TestCase):
         payload = response.json()
         self.assertIn("config", payload)
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4")
+        self.assertTrue(payload["config"]["evolution"]["mutation_enabled"])
         self.assertNotIn("paths", payload["config"])
 
     def test_parse_valid_yaml_returns_normalized_config(self) -> None:
@@ -64,6 +65,8 @@ class ConfigApiTests(unittest.TestCase):
                             "  model: gpt-4o-mini\n"
                             "execution:\n"
                             "  timeout: 123\n"
+                            "evolution:\n"
+                            "  mutation_enabled: false\n"
                             "agent:\n"
                             "  parallel:\n"
                             "    enabled: true\n"
@@ -79,8 +82,37 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["config"]["llm"]["api_key"], "test-key")
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4o-mini")
         self.assertEqual(payload["config"]["execution"]["timeout"], 123)
+        self.assertFalse(payload["config"]["evolution"]["mutation_enabled"])
         self.assertTrue(payload["config"]["agent"]["parallel"]["enabled"])
         self.assertNotIn("paths", payload["config"])
+
+    def test_parse_yaml_rejects_invalid_mutation_enabled_type(self) -> None:
+        client = TestClient(create_app(run_service=RunLifecycleService()))
+
+        response = client.post(
+            "/api/config/parse",
+            files={
+                "file": (
+                    "config.yaml",
+                    BytesIO(
+                        (
+                            "llm:\n"
+                            "  api_key: test-key\n"
+                            "evolution:\n"
+                            "  mutation_enabled: 'disabled'\n"
+                        ).encode("utf-8")
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "invalid_config")
+        field_errors = payload["error"]["fieldErrors"]
+        error_map = {tuple(item["path"]): item["code"] for item in field_errors}
+        self.assertEqual(error_map[("evolution", "mutation_enabled")], "bool_type")
 
     def test_parse_valid_yaml_accepts_large_parallel_values(self) -> None:
         client = TestClient(create_app(run_service=RunLifecycleService()))
@@ -237,6 +269,36 @@ class SnapshotTests(unittest.TestCase):
         )
         self.assertEqual(snapshot["improvementSummary"]["count"], 1)
         self.assertEqual(snapshot["improvementSummary"]["latest"]["mutation_score_delta"], 0.1)
+
+    def test_snapshot_marks_disabled_mutation_and_nulls_mutation_metrics(self) -> None:
+        state = AgentState()
+        state.global_mutation_enabled = False
+        state.total_mutants = 0
+        state.global_total_mutants = 0
+        state.killed_mutants = 0
+        state.global_killed_mutants = 0
+        state.survived_mutants = 0
+        state.global_survived_mutants = 0
+        state.mutation_score = 0.0
+        state.global_mutation_score = 0.0
+        state.total_tests = 2
+        state.line_coverage = 0.6
+        state.branch_coverage = 0.4
+
+        snapshot = build_run_snapshot("run-disabled", "running", state)
+
+        self.assertFalse(snapshot["mutationEnabled"])
+        self.assertIsNone(snapshot["metrics"]["mutationScore"])
+        self.assertIsNone(snapshot["metrics"]["globalMutationScore"])
+        self.assertIsNone(snapshot["metrics"]["totalMutants"])
+        self.assertIsNone(snapshot["metrics"]["globalTotalMutants"])
+        self.assertIsNone(snapshot["metrics"]["killedMutants"])
+        self.assertIsNone(snapshot["metrics"]["globalKilledMutants"])
+        self.assertIsNone(snapshot["metrics"]["survivedMutants"])
+        self.assertIsNone(snapshot["metrics"]["globalSurvivedMutants"])
+        self.assertEqual(snapshot["metrics"]["totalTests"], 2)
+        self.assertEqual(snapshot["metrics"]["lineCoverage"], 0.6)
+        self.assertEqual(snapshot["metrics"]["branchCoverage"], 0.4)
 
     def test_parallel_snapshot_includes_worker_cards(self) -> None:
         state = ParallelAgentState()
@@ -589,6 +651,7 @@ class RunApiTests(unittest.TestCase):
             config = components["config"]
             assert isinstance(config, Settings)
             state = ParallelAgentState() if components["parallel_mode"] else AgentState()
+            state.global_mutation_enabled = config.evolution.mutation_enabled
             state.iteration = 1
             state.llm_calls = 3
             state.budget = config.evolution.budget_llm_calls
@@ -664,6 +727,7 @@ class RunApiTests(unittest.TestCase):
                 "projectPath": str(self.project_path),
                 "maxIterations": "7",
                 "budget": "42",
+                "mutationEnabled": "false",
                 "parallel": "true",
             },
             files={
@@ -671,7 +735,13 @@ class RunApiTests(unittest.TestCase):
                     "config.yaml",
                     BytesIO(
                         (
-                            "llm:\n  api_key: yaml-key\nagent:\n  parallel:\n    enabled: false\n"
+                            "llm:\n"
+                            "  api_key: yaml-key\n"
+                            "evolution:\n"
+                            "  mutation_enabled: true\n"
+                            "agent:\n"
+                            "  parallel:\n"
+                            "    enabled: false\n"
                         ).encode("utf-8")
                     ),
                     "application/x-yaml",
@@ -694,12 +764,15 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(current_payload["runId"], run_id)
         self.assertEqual(current_payload["status"], "running")
         self.assertEqual(current_payload["mode"], "parallel")
+        self.assertFalse(current_payload["mutationEnabled"])
         self.assertEqual(current_payload["phase"]["key"], "preprocessing")
         self.assertEqual(current_payload["phase"]["label"], "Preprocessing")
         self.assertEqual(current_payload["iteration"], 1)
         self.assertIn("metrics", current_payload)
         self.assertIn("mutationScore", current_payload["metrics"])
-        self.assertEqual(current_payload["metrics"]["mutationScore"], 0.5)
+        self.assertIsNone(current_payload["metrics"]["mutationScore"])
+        self.assertIsNone(current_payload["metrics"]["totalMutants"])
+        self.assertEqual(current_payload["metrics"]["lineCoverage"], 0.25)
         self.assertTrue(current_payload["artifacts"]["resolvedConfig"]["exists"])
         self.assertEqual(current_payload["logStreams"]["taskIds"], ["main"])
         self.assertEqual(current_payload["logStreams"]["byTaskId"]["main"]["status"], "running")
@@ -719,7 +792,9 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(resolved_config["llm"]["api_key"], "yaml-key")
         self.assertEqual(resolved_config["evolution"]["max_iterations"], 7)
         self.assertEqual(resolved_config["evolution"]["budget_llm_calls"], 42)
+        self.assertFalse(resolved_config["evolution"]["mutation_enabled"])
         self.assertTrue(resolved_config["agent"]["parallel"]["enabled"])
+        self.assertFalse(session.config_snapshot["evolution"]["mutation_enabled"])
 
         conflict = self.client.post("/api/runs", data={"projectPath": str(self.project_path)})
         self.assertEqual(conflict.status_code, 409)
@@ -732,9 +807,12 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(completed_response.status_code, 200)
         completed_payload = completed_response.json()
         self.assertEqual(completed_payload["status"], "completed")
+        self.assertFalse(completed_payload["mutationEnabled"])
         self.assertEqual(completed_payload["phase"]["key"], "completed")
         self.assertEqual(completed_payload["iteration"], 2)
         self.assertEqual(completed_payload["metrics"]["totalTests"], 4)
+        self.assertIsNone(completed_payload["metrics"]["mutationScore"])
+        self.assertIsNone(completed_payload["metrics"]["globalMutationScore"])
         self.assertEqual(
             completed_payload["logStreams"]["byTaskId"]["main"]["status"],
             "completed",
@@ -1025,6 +1103,53 @@ class ResultsApiTests(unittest.TestCase):
         self.assertFalse(payload["summary"]["sources"]["database"])
         self.assertTrue(payload["summary"]["sources"]["runLog"])
         self.assertEqual(payload["artifacts"]["finalState"]["exists"], False)
+
+    def test_results_endpoint_preserves_disabled_mutation_as_null_metrics(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        session = self.run_service.get_session(run_id)
+
+        session.config_snapshot.setdefault("evolution", {})["mutation_enabled"] = False
+        self.run_service.get_run_request(run_id).mutation_enabled = False
+
+        state = AgentState()
+        state.global_mutation_enabled = False
+        state.iteration = 2
+        state.llm_calls = 5
+        state.budget = 21
+        state.total_tests = 3
+        state.total_mutants = 0
+        state.global_total_mutants = 0
+        state.killed_mutants = 0
+        state.global_killed_mutants = 0
+        state.survived_mutants = 0
+        state.global_survived_mutants = 0
+        state.mutation_score = 0.0
+        state.global_mutation_score = 0.0
+        state.line_coverage = 0.7
+        state.branch_coverage = 0.5
+
+        Path(session.paths["final_state"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(session.paths["final_state"]).write_text(
+            json.dumps(state.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        Path(session.paths["log"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(session.paths["log"]).write_text("run completed\n", encoding="utf-8")
+        self.run_service.mark_completed(run_id)
+
+        response = self.client.get(f"/api/runs/{run_id}/results")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["mutationEnabled"])
+        self.assertIsNone(payload["summary"]["metrics"]["mutationScore"])
+        self.assertIsNone(payload["summary"]["metrics"]["globalMutationScore"])
+        self.assertIsNone(payload["summary"]["metrics"]["totalMutants"])
+        self.assertIsNone(payload["summary"]["metrics"]["globalTotalMutants"])
+        self.assertEqual(payload["summary"]["metrics"]["totalTests"], 3)
+        self.assertEqual(payload["summary"]["metrics"]["lineCoverage"], 0.7)
 
 
 class RunHistoryApiTests(unittest.TestCase):

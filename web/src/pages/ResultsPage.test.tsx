@@ -261,4 +261,76 @@ describe('Run results page', () => {
     expectMetricValue('变异分数', '80.0%');
     expectMetricValue('变异体总数', '5');
   });
+
+  it('shows disabled mutation semantics and avoids fallback score recomputation', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              mutationEnabled: false,
+              summary: {
+                metrics: {
+                  mutationScore: null,
+                  globalMutationScore: null,
+                  lineCoverage: 0.9,
+                  branchCoverage: 0.75,
+                  totalTests: 7,
+                  totalMutants: null,
+                  globalTotalMutants: null,
+                  killedMutants: null,
+                  globalKilledMutants: null,
+                  survivedMutants: null,
+                  globalSurvivedMutants: null,
+                  currentMethodCoverage: 0.75,
+                },
+                tests: {
+                  totalCases: 1,
+                  compiledCases: 1,
+                  totalMethods: 2,
+                  targetMethods: 1,
+                },
+                mutants: {
+                  total: 5,
+                  evaluated: 5,
+                  killed: 4,
+                  survived: 1,
+                  pending: 0,
+                  valid: 5,
+                  invalid: 0,
+                  outdated: 0,
+                },
+                coverage: {
+                  latestIteration: 3,
+                  methodsTracked: 1,
+                  averageLineCoverage: 0.75,
+                  averageBranchCoverage: 0.5,
+                },
+                sources: {
+                  finalState: true,
+                  database: true,
+                  runLog: true,
+                },
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '最终统计' })).toBeInTheDocument();
+    expectMetricValue('变异分析状态', '未启用（测试生成消融模式）');
+    expectMetricValue('变异体状态', '未启用（测试生成消融模式）');
+    expect(screen.queryByText('80.0%')).not.toBeInTheDocument();
+  });
 });

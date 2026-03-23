@@ -91,27 +91,63 @@ function buildTerminalMessage(results: RunResultsResponse): string {
   return '本次运行尚未进入终态。页面仍会展示当前可获得的最新结果数据。';
 }
 
+function isMutationDisabled(mutationEnabled: boolean | null | undefined): boolean {
+  return mutationEnabled === false;
+}
+
+function getMutationScoreLabel(results: RunResultsResponse): string {
+  return isMutationDisabled(results.mutationEnabled) ? '变异分析状态' : '变异分数';
+}
+
+function getMutationScoreDisplay(results: RunResultsResponse): string {
+  return isMutationDisabled(results.mutationEnabled)
+    ? '未启用（测试生成消融模式）'
+    : formatPercent(getDisplayMutationScore(results));
+}
+
 function buildModeHighlights(results: RunResultsResponse): Array<{ label: string; value: string }> {
   const metrics = results.summary.metrics;
+  const mutationDisabled = isMutationDisabled(results.mutationEnabled);
 
   if (results.mode === 'parallel') {
     return [
       { label: '执行模式', value: '并行批次演化' },
-      { label: '全局变异分数', value: formatPercent(metrics.globalMutationScore) },
-      { label: '全局已杀死变异体', value: formatCount(metrics.globalKilledMutants) },
-      { label: '全局存活变异体', value: formatCount(metrics.globalSurvivedMutants) },
+      {
+        label: mutationDisabled ? '变异分析状态' : '全局变异分数',
+        value: mutationDisabled
+          ? '未启用（测试生成消融模式）'
+          : formatPercent(metrics.globalMutationScore),
+      },
+      {
+        label: '全局已杀死变异体',
+        value: mutationDisabled ? '未启用' : formatCount(metrics.globalKilledMutants),
+      },
+      {
+        label: '全局存活变异体',
+        value: mutationDisabled ? '未启用' : formatCount(metrics.globalSurvivedMutants),
+      },
     ];
   }
 
   return [
     { label: '执行模式', value: '标准单目标演化' },
     { label: '当前方法覆盖率', value: formatPercent(metrics.currentMethodCoverage) },
-    { label: '已杀死变异体', value: formatCount(metrics.killedMutants) },
-    { label: '存活变异体', value: formatCount(metrics.survivedMutants) },
+    {
+      label: '已杀死变异体',
+      value: mutationDisabled ? '未启用' : formatCount(metrics.killedMutants),
+    },
+    {
+      label: '存活变异体',
+      value: mutationDisabled ? '未启用' : formatCount(metrics.survivedMutants),
+    },
   ];
 }
 
 function getDisplayTotalMutants(results: RunResultsResponse): number | null | undefined {
+  if (isMutationDisabled(results.mutationEnabled)) {
+    return null;
+  }
+
   if (typeof results.summary.mutants.total === 'number') {
     return results.summary.mutants.total;
   }
@@ -124,6 +160,10 @@ function getDisplayTotalMutants(results: RunResultsResponse): number | null | un
 }
 
 function getDisplayMutationScore(results: RunResultsResponse): number | null | undefined {
+  if (isMutationDisabled(results.mutationEnabled)) {
+    return null;
+  }
+
   const preferredScore =
     results.mode === 'parallel'
       ? results.summary.metrics.globalMutationScore
@@ -232,10 +272,6 @@ export function RunResultsPage() {
     () => (results ? getDisplayTotalMutants(results) : null),
     [results],
   );
-  const displayMutationScore = useMemo(
-    () => (results ? getDisplayMutationScore(results) : null),
-    [results],
-  );
 
   if (isLoading) {
     return (
@@ -292,8 +328,8 @@ export function RunResultsPage() {
         <h3 id="results-final-stats">最终统计</h3>
         <div className="metric-grid metric-grid--hero">
           <article>
-            <span>变异分数</span>
-            <strong>{formatPercent(displayMutationScore)}</strong>
+            <span>{getMutationScoreLabel(results)}</span>
+            <strong>{getMutationScoreDisplay(results)}</strong>
           </article>
           <article>
             <span>行覆盖率</span>
@@ -304,8 +340,12 @@ export function RunResultsPage() {
             <strong>{formatPercent(results.summary.metrics.branchCoverage)}</strong>
           </article>
           <article>
-            <span>变异体总数</span>
-            <strong>{formatCount(displayTotalMutants)}</strong>
+            <span>{isMutationDisabled(results.mutationEnabled) ? '变异体状态' : '变异体总数'}</span>
+            <strong>
+              {isMutationDisabled(results.mutationEnabled)
+                ? '未启用（测试生成消融模式）'
+                : formatCount(displayTotalMutants)}
+            </strong>
           </article>
           <article>
             <span>测试总数</span>

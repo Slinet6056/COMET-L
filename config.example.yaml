@@ -21,6 +21,7 @@ execution:
   maven_home: null # 留空使用系统默认
 
 evolution:
+  mutation_enabled: true # 是否启用变异分析
   max_iterations: 10
   min_improvement_threshold: 0.01 # 绝对增量阈值，0.01 表示提升 1 个百分点
   budget_llm_calls: 1000

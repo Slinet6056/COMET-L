@@ -143,6 +143,12 @@ export const CONFIG_SECTIONS: ConfigSectionDefinition[] = [
     description: '迭代限制、停止规则和质量目标。',
     fields: [
       {
+        path: ['evolution', 'mutation_enabled'],
+        label: '启用变异分析',
+        description: '关闭后进入测试生成消融模式，不再执行变异分析。',
+        kind: 'boolean',
+      },
+      {
         path: ['evolution', 'max_iterations'],
         label: '最大迭代次数',
         description: '规划器最大迭代次数。',

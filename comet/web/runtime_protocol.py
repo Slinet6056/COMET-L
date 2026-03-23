@@ -9,9 +9,37 @@ from comet.agent.state import AgentState, ParallelAgentState
 
 from .log_router import RunLogRouter
 
+MUTATION_METRIC_KEYS = (
+    "mutationScore",
+    "globalMutationScore",
+    "totalMutants",
+    "globalTotalMutants",
+    "killedMutants",
+    "globalKilledMutants",
+    "survivedMutants",
+    "globalSurvivedMutants",
+)
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def normalize_mutation_metrics(
+    metrics: dict[str, Any], mutation_enabled: bool | None
+) -> dict[str, Any]:
+    normalized = dict(metrics)
+    if mutation_enabled is False:
+        for key in MUTATION_METRIC_KEYS:
+            normalized[key] = None
+    return normalized
+
+
+def resolve_state_mutation_enabled(state: AgentState) -> bool | None:
+    mutation_enabled = getattr(state, "global_mutation_enabled", None)
+    if isinstance(mutation_enabled, bool):
+        return mutation_enabled
+    return None
 
 
 class RuntimeEventBus:
@@ -70,22 +98,12 @@ def build_run_snapshot(
     log_router: Optional[RunLogRouter] = None,
 ) -> dict[str, Any]:
     improvement_summary = state.improvement_summary or {"count": 0, "latest": None}
+    mutation_enabled = resolve_state_mutation_enabled(state)
     if log_router is not None and isinstance(state, ParallelAgentState):
         log_router.sync_parallel_state(state)
 
-    snapshot: dict[str, Any] = {
-        "runId": run_id,
-        "status": status,
-        "mode": "parallel" if isinstance(state, ParallelAgentState) else "standard",
-        "iteration": state.iteration,
-        "llmCalls": state.llm_calls,
-        "budget": state.budget,
-        "decisionReasoning": state.decision_reasoning,
-        "currentTarget": state.current_target,
-        "previousTarget": state.previous_target,
-        "recentImprovements": list(state.recent_improvements),
-        "improvementSummary": improvement_summary,
-        "metrics": {
+    metrics = normalize_mutation_metrics(
+        {
             "mutationScore": state.mutation_score,
             "globalMutationScore": state.global_mutation_score,
             "lineCoverage": state.line_coverage,
@@ -99,6 +117,23 @@ def build_run_snapshot(
             "globalSurvivedMutants": state.global_survived_mutants,
             "currentMethodCoverage": state.current_method_coverage,
         },
+        mutation_enabled,
+    )
+
+    snapshot: dict[str, Any] = {
+        "runId": run_id,
+        "status": status,
+        "mode": "parallel" if isinstance(state, ParallelAgentState) else "standard",
+        "mutationEnabled": mutation_enabled,
+        "iteration": state.iteration,
+        "llmCalls": state.llm_calls,
+        "budget": state.budget,
+        "decisionReasoning": state.decision_reasoning,
+        "currentTarget": state.current_target,
+        "previousTarget": state.previous_target,
+        "recentImprovements": list(state.recent_improvements),
+        "improvementSummary": improvement_summary,
+        "metrics": metrics,
     }
 
     if log_router is not None:

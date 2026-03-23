@@ -1,12 +1,15 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from comet.agent.parallel_planner import ParallelPlannerAgent
-from comet.agent.state import ParallelAgentState
+from comet.agent.state import ParallelAgentState, WorkerResult
+from comet.agent.target_selector import TargetSelector
 from comet.executor.coverage_parser import CoverageParser, MethodCoverage
+from comet.executor.java_executor import JavaExecutor
 from comet.llm.client import LLMClient
 from comet.store.database import Database
 from comet.utils.method_keys import build_method_key
@@ -216,6 +219,53 @@ class FakeWorkerFuture:
 
 
 class ParallelPlannerLoggingTest(unittest.TestCase):
+    def test_process_single_target_does_not_create_mutant_future_when_mutation_disabled(self):
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.project_path = "/tmp/project"
+        planner.mutation_enabled = False
+        planner.sandbox_manager = cast(
+            SandboxManager,
+            cast(object, FakeSandboxManager("/tmp/sandboxes/target-1")),
+        )
+        planner.db = FakeTargetDatabase()
+        planner.state = ParallelAgentState()
+
+        target = {
+            "class_name": "org.example.Example",
+            "method_name": "doWork",
+            "method_signature": "void doWork()",
+            "method_coverage": 0.5,
+        }
+
+        test_files = {"org/example/ExampleTest.java": "class ExampleTest {}"}
+        test_future = FakeWorkerFuture(result_value={"generated": 1, "test_files": test_files})
+
+        with patch(
+            "comet.agent.parallel_planner.submit_with_log_context",
+            side_effect=[test_future],
+        ) as submit_mock:
+            with patch.object(
+                planner,
+                "_evaluate_in_sandbox",
+                side_effect=AssertionError("mutation disabled should not evaluate mutants"),
+            ):
+                result = planner._process_single_target_impl(
+                    target,
+                    "org.example.Example",
+                    "doWork",
+                    "org.example.Example#doWork:void doWork()",
+                )
+
+        self.assertEqual(submit_mock.call_count, 1)
+        self.assertTrue(result.success)
+        self.assertEqual(result.tests_generated, 1)
+        self.assertEqual(result.test_files, test_files)
+        self.assertIsNone(result.mutants_generated)
+        self.assertIsNone(result.mutants_evaluated)
+        self.assertIsNone(result.mutants_killed)
+        self.assertIsNone(result.local_mutation_score)
+        self.assertFalse(result.mutation_enabled)
+
     def test_process_single_target_skips_waiting_for_mutants_when_blacklisted_midflight(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"
@@ -430,6 +480,93 @@ class ParallelPlannerLoggingTest(unittest.TestCase):
         mutant_future.finish()
 
         self.assertEqual(fake_sandbox_manager.cleaned, ["target-1"])
+
+
+class ParallelPlannerMutationAggregationTest(unittest.TestCase):
+    def test_init_seeds_global_mutation_flag_before_later_sync(self):
+        tools = Mock()
+        tools.config = SimpleNamespace(
+            evolution=SimpleNamespace(mutation_enabled=False),
+        )
+
+        planner = ParallelPlannerAgent(
+            llm_client=cast(LLMClient, cast(object, FakeLLMCounter())),
+            tools=tools,
+            target_selector=cast(TargetSelector, cast(object, Mock())),
+            java_executor=cast(JavaExecutor, cast(object, Mock())),
+            sandbox_manager=cast(SandboxManager, cast(object, Mock())),
+            database=cast(Database, Mock()),
+            project_path="/tmp/project",
+            workspace_path="/tmp/workspace",
+        )
+
+        self.assertFalse(planner.mutation_enabled)
+        self.assertFalse(planner.state.global_mutation_enabled)
+        payload = planner.state.to_dict()
+        self.assertFalse(payload["global_mutation_enabled"])
+        self.assertFalse(payload["globalMutationEnabled"])
+
+    def test_sync_global_state_marks_mutation_disabled_and_skips_mutant_aggregation(self):
+        planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+        planner.mutation_enabled = False
+        planner.state = ParallelAgentState()
+        planner.state.line_coverage = 0.6
+        planner.state.branch_coverage = 0.4
+
+        fake_db = Mock()
+        fake_db.get_all_evaluated_mutants.side_effect = AssertionError(
+            "mutation disabled should not query evaluated mutants"
+        )
+        fake_db.get_all_test_cases.return_value = []
+        planner.db = fake_db
+
+        planner._sync_global_state()
+        payload = planner.state.to_dict()
+
+        fake_db.get_all_evaluated_mutants.assert_not_called()
+        self.assertFalse(planner.state.global_mutation_enabled)
+        self.assertIsNone(planner.state.global_total_mutants)
+        self.assertIsNone(planner.state.global_killed_mutants)
+        self.assertIsNone(planner.state.global_survived_mutants)
+        self.assertIsNone(planner.state.global_mutation_score)
+        self.assertIsNone(payload["global_total_mutants"])
+        self.assertIsNone(payload["global_killed_mutants"])
+        self.assertIsNone(payload["global_survived_mutants"])
+        self.assertIsNone(payload["global_mutation_score"])
+        self.assertFalse(payload["global_mutation_enabled"])
+        self.assertFalse(payload["globalMutationEnabled"])
+
+    def test_worker_card_preserves_disabled_mutation_semantics(self):
+        state = ParallelAgentState()
+        state.add_batch_result(
+            [
+                WorkerResult(
+                    target_id=build_method_key("Calculator", "add", "int add(int a, int b)"),
+                    class_name="Calculator",
+                    method_name="add",
+                    method_signature="int add(int a, int b)",
+                    success=True,
+                    tests_generated=2,
+                    mutants_generated=None,
+                    mutants_evaluated=None,
+                    mutants_killed=None,
+                    local_mutation_score=None,
+                    mutation_enabled=False,
+                    processing_time=1.5,
+                    method_coverage=0.4,
+                )
+            ]
+        )
+
+        card = state.get_worker_cards()[0]
+        payload = state.to_dict()
+
+        self.assertFalse(card["mutationEnabled"])
+        self.assertIsNone(card["mutantsGenerated"])
+        self.assertIsNone(card["mutantsEvaluated"])
+        self.assertIsNone(card["mutantsKilled"])
+        self.assertIsNone(card["localMutationScore"])
+        self.assertFalse(payload["workerCards"][0]["mutationEnabled"])
 
 
 if __name__ == "__main__":

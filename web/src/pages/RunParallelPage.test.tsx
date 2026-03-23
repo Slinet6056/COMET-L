@@ -500,4 +500,74 @@ describe('Run page parallel mode', () => {
     expect(screen.queryByRole('heading', { name: '工作线程输出' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '日志查看器' })).toBeInTheDocument();
   });
+
+  it('shows disabled mutation copy only when mutationEnabled is explicitly false', async () => {
+    vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue(
+      buildParallelSnapshot({
+        mutationEnabled: false,
+        metrics: {
+          mutationScore: null,
+          globalMutationScore: null,
+          lineCoverage: 0.78,
+          branchCoverage: 0.61,
+          totalTests: 11,
+          totalMutants: null,
+          globalTotalMutants: null,
+          killedMutants: null,
+          globalKilledMutants: null,
+          survivedMutants: null,
+          globalSurvivedMutants: null,
+          currentMethodCoverage: null,
+        },
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-par-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '并行运行状态' })).toBeInTheDocument();
+    expect(screen.getAllByText('未启用（测试生成消融模式）')).toHaveLength(3);
+    expect(screen.getByText('变异分析')).toBeInTheDocument();
+    expect(screen.queryByText('变异体总数')).not.toBeInTheDocument();
+    expect(screen.queryByText('已杀死变异体')).not.toBeInTheDocument();
+    expect(screen.getAllByText('未启用')).toHaveLength(2);
+  });
+
+  it('keeps legacy display behavior when mutationEnabled is missing', async () => {
+    vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue(
+      buildParallelSnapshot({
+        mutationEnabled: undefined,
+        metrics: {
+          mutationScore: 0.52,
+          globalMutationScore: 0.67,
+          lineCoverage: 0.78,
+          branchCoverage: 0.61,
+          totalTests: 11,
+          totalMutants: 20,
+          globalTotalMutants: 25,
+          killedMutants: 12,
+          globalKilledMutants: 17,
+          survivedMutants: 8,
+          globalSurvivedMutants: 8,
+          currentMethodCoverage: null,
+        },
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-par-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '并行运行状态' })).toBeInTheDocument();
+    expect(screen.getByText('67.0%')).toBeInTheDocument();
+    expect(screen.getByText('已启用')).toBeInTheDocument();
+    expect(screen.getByText('25')).toBeInTheDocument();
+    expect(screen.getByText('17')).toBeInTheDocument();
+    expect(screen.queryByText('未启用（测试生成消融模式）')).not.toBeInTheDocument();
+  });
 });

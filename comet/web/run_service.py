@@ -14,7 +14,11 @@ from comet.agent.state import AgentState, ParallelAgentState
 from comet.config import Settings
 from comet.utils.log_context import ContextFilter
 from comet.web.log_router import RunLogRouter
-from comet.web.runtime_protocol import RuntimeEventBus, build_run_snapshot
+from comet.web.runtime_protocol import (
+    RuntimeEventBus,
+    build_run_snapshot,
+    normalize_mutation_metrics,
+)
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 LOG_DATE_FORMAT = "%H:%M:%S"
@@ -72,6 +76,7 @@ class RunRequest:
     config_path: str = "config.yaml"
     max_iterations: Optional[int] = None
     budget: Optional[int] = None
+    mutation_enabled: Optional[bool] = None
     resume_state: Optional[str] = None
     debug: bool = False
     bug_reports_dir: Optional[str] = None
@@ -230,6 +235,7 @@ class RunLifecycleService:
         snapshot["artifacts"] = self._build_artifacts(session)
         snapshot["logStreams"] = self.get_log_streams_snapshot(run_id)
         snapshot["isHistorical"] = session.is_historical
+        self._apply_mutation_semantics(run_id, snapshot)
         return snapshot
 
     def list_runs(self) -> list[dict[str, Any]]:
@@ -249,6 +255,7 @@ class RunLifecycleService:
                     "runId": run_id,
                     "status": session.status,
                     "mode": snapshot["mode"],
+                    "mutationEnabled": snapshot.get("mutationEnabled"),
                     "projectPath": session.project_path,
                     "configPath": session.config_path,
                     "createdAt": session.created_at,
@@ -369,6 +376,8 @@ class RunLifecycleService:
             for key, value in snapshot_updates.items():
                 snapshot[key] = value
 
+            self._apply_mutation_semantics(run_id, snapshot)
+
             self._runtime_snapshots[run_id] = copy.deepcopy(snapshot)
 
         event_bus.publish(
@@ -403,6 +412,7 @@ class RunLifecycleService:
             "runId": snapshot["runId"],
             "status": snapshot["status"],
             "mode": snapshot["mode"],
+            "mutationEnabled": snapshot.get("mutationEnabled"),
             "iteration": snapshot["iteration"],
             "llmCalls": snapshot["llmCalls"],
             "budget": snapshot["budget"],
@@ -629,9 +639,44 @@ class RunLifecycleService:
             state,
             log_router=self._log_routers.get(run_id),
         )
+        self._apply_mutation_semantics(run_id, snapshot, state=state)
         snapshot["phase"] = self._build_phase(session)
         snapshot["artifacts"] = self._build_artifacts(session)
         return snapshot
+
+    def _resolve_mutation_enabled(
+        self, run_id: str, *, state: AgentState | None = None
+    ) -> bool | None:
+        if state is not None:
+            state_value = getattr(state, "global_mutation_enabled", None)
+            if isinstance(state_value, bool):
+                return state_value
+
+        request = self._requests.get(run_id)
+        if request is not None and isinstance(request.mutation_enabled, bool):
+            return request.mutation_enabled
+
+        session = self._sessions.get(run_id)
+        if session is None:
+            return None
+
+        config_value = session.config_snapshot.get("evolution", {}).get("mutation_enabled")
+        if isinstance(config_value, bool):
+            return config_value
+        return None
+
+    def _apply_mutation_semantics(
+        self, run_id: str, payload: dict[str, Any], *, state: AgentState | None = None
+    ) -> None:
+        mutation_enabled = self._resolve_mutation_enabled(run_id, state=state)
+        if mutation_enabled is None:
+            payload_value = payload.get("mutationEnabled")
+            mutation_enabled = payload_value if isinstance(payload_value, bool) else None
+        payload["mutationEnabled"] = mutation_enabled
+
+        metrics = payload.get("metrics")
+        if isinstance(metrics, dict):
+            payload["metrics"] = normalize_mutation_metrics(metrics, mutation_enabled)
 
     def _build_artifacts(self, session: RunSession) -> dict[str, dict[str, object]]:
         paths = {
@@ -958,9 +1003,11 @@ class RunLifecycleService:
         parallel_config = session.config_snapshot.get("agent", {}).get("parallel", {})
         parallel_enabled = bool(parallel_config.get("enabled", False))
         parallel_targets = parallel_config.get("max_parallel_targets")
+        mutation_enabled = session.config_snapshot.get("evolution", {}).get("mutation_enabled")
         return RunRequest(
             project_path=session.project_path,
             config_path=session.config_path,
+            mutation_enabled=mutation_enabled if isinstance(mutation_enabled, bool) else None,
             parallel=parallel_enabled,
             parallel_targets=parallel_targets if isinstance(parallel_targets, int) else None,
             log_file=session.paths.get("log"),
@@ -1004,6 +1051,7 @@ class RunLifecycleService:
             config_path=request.config_path,
             max_iterations=request.max_iterations,
             budget=request.budget,
+            mutation_enabled=request.mutation_enabled,
             resume_state=request.resume_state,
             debug=request.debug,
             bug_reports_dir=request.bug_reports_dir,
@@ -1117,6 +1165,8 @@ def apply_run_overrides(config: Settings, request: RunRequest) -> None:
         config.evolution.max_iterations = request.max_iterations
     if request.budget is not None:
         config.evolution.budget_llm_calls = request.budget
+    if request.mutation_enabled is not None:
+        config.evolution.mutation_enabled = request.mutation_enabled
     if request.parallel or request.parallel_targets is not None:
         config.agent.parallel.enabled = True
     if request.parallel_targets is not None:

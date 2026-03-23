@@ -305,3 +305,75 @@ class ParallelPreprocessingPersistenceGuardTests(TestCase):
 
         db.save_test_case.assert_called_once_with(test_case)
         db.save_mutant.assert_called_once_with(mutant)
+
+
+class ParallelPreprocessingMutationDisabledTests(TestCase):
+    def _build_preprocessor(self) -> tuple[ParallelPreprocessor, Mock, Mock, Mock]:
+        config = SimpleNamespace(
+            preprocessing=SimpleNamespace(max_workers=1, timeout_per_method=30),
+            evolution=SimpleNamespace(min_method_lines=1, mutation_enabled=False),
+            formatting=SimpleNamespace(enabled=False, style="google"),
+        )
+        sandbox_manager = Mock()
+        sandbox_manager.create_target_sandbox.return_value = "/tmp/sandbox-1"
+        mutant_generator = Mock()
+        mutation_evaluator = Mock()
+        db = Mock()
+        db.get_tests_by_target_class.return_value = []
+        db.get_all_test_cases.return_value = []
+        components = {
+            "sandbox_manager": sandbox_manager,
+            "java_executor": Mock(),
+            "test_generator": Mock(),
+            "mutant_generator": mutant_generator,
+            "static_guard": Mock(),
+            "mutation_evaluator": mutation_evaluator,
+            "db": db,
+            "project_scanner": Mock(),
+        }
+        preprocessor = ParallelPreprocessor(config, components)
+        preprocessor.project_path = "/tmp/project"
+        preprocessor.workspace_sandbox = "/tmp/workspace"
+        return preprocessor, sandbox_manager, mutant_generator, mutation_evaluator
+
+    def test_process_method_skips_mutant_generation_when_mutation_disabled(self) -> None:
+        preprocessor, sandbox_manager, mutant_generator, mutation_evaluator = (
+            self._build_preprocessor()
+        )
+        test_case = GeneratedTestCase(
+            id="tc-1",
+            class_name="FooTest",
+            target_class="Foo",
+            package_name="com.example",
+            imports=[],
+            methods=[
+                TestMethod(
+                    method_name="testValue",
+                    code="@Test void testValue() {}",
+                    target_method="value",
+                    target_method_signature="int value()",
+                )
+            ],
+            full_code="class FooTest {}",
+            compile_success=True,
+        )
+        preprocessor.test_generator.generate_tests_for_method.return_value = test_case
+
+        with (
+            patch("comet.utils.project_utils.find_java_file") as mock_find_java_file,
+            patch("comet.utils.code_utils.extract_class_from_file", return_value="class Foo {}"),
+            patch("comet.utils.project_utils.write_test_file", return_value="/tmp/FooTest.java"),
+            patch("comet.agent.tools.AgentTools._verify_and_fix_tests", return_value=test_case),
+            patch("comet.utils.code_utils.validate_test_methods", return_value=[]),
+        ):
+            mock_find_java_file.side_effect = ["/tmp/workspace/Foo.java", "/tmp/sandbox-1/Foo.java"]
+
+            result = preprocessor._process_method("Foo", "value", {"signature": "int value()"})
+
+        self.assertTrue(result.get("success"))
+        self.assertEqual(result.get("tests"), 1)
+        self.assertEqual(result.get("mutants"), 0)
+        mutant_generator.generate_mutants.assert_not_called()
+        mutation_evaluator.build_kill_matrix.assert_not_called()
+        self.assertEqual(preprocessor._get_candidate_test_cases(), [test_case])
+        sandbox_manager.cleanup_sandbox.assert_called_once_with("sandbox-1")

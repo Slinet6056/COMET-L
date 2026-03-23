@@ -17,12 +17,15 @@ TargetInfo = dict[str, Any]
 class TargetSelector:
     """目标选择器 - 实现多种目标选择策略"""
 
+    MUTATION_DEPENDENT_STRATEGIES = {"killrate", "mutations", "priority"}
+
     def __init__(
         self,
         project_path: str,
         java_executor: JavaExecutor,
         database: Database,
         min_method_lines: int = 5,
+        mutation_enabled: bool = True,
     ):
         """
         初始化目标选择器
@@ -37,7 +40,22 @@ class TargetSelector:
         self.java_executor = java_executor
         self.db = database
         self.min_method_lines = min_method_lines
+        self.mutation_enabled = mutation_enabled
         self._class_cache: Optional[List[str]] = None
+
+    def _ensure_strategy_available(self, criteria: str) -> None:
+        if criteria not in self.MUTATION_DEPENDENT_STRATEGIES:
+            return
+
+        if self.mutation_enabled:
+            return
+
+        message = (
+            "已禁用变异分析（evolution.mutation_enabled=false），"
+            f"无法使用依赖变异数据的目标选择策略：{criteria}。"
+            "请改用 coverage 或 random。"
+        )
+        raise ValueError(message)
 
     def _resolve_method_details(
         self,
@@ -84,6 +102,8 @@ class TargetSelector:
             blacklist = set()
         if processed_targets is None:
             processed_targets = set()
+
+        self._ensure_strategy_available(criteria)
 
         if criteria == "coverage":
             return self.select_by_coverage(blacklist, processed_targets)
@@ -323,6 +343,8 @@ class TargetSelector:
         if processed_targets is None:
             processed_targets = set()
 
+        self._ensure_strategy_available("mutations")
+
         all_classes = self._get_all_classes()
 
         if not all_classes:
@@ -385,6 +407,8 @@ class TargetSelector:
             blacklist = set()
         if processed_targets is None:
             processed_targets = set()
+
+        self._ensure_strategy_available("priority")
 
         all_classes = self._get_all_classes()
 
@@ -525,13 +549,13 @@ class TargetSelector:
         if processed_targets is None:
             processed_targets = set()
 
+        self._ensure_strategy_available("killrate")
+
         # 获取所有方法的变异体统计信息
         stats = self.db.get_method_mutant_stats()
 
         if not stats:
-            logger.info("没有变异体统计数据，使用默认选择策略")
-            # 如果没有变异体数据，回退到 coverage 策略
-            return self.select_by_coverage(blacklist, processed_targets)
+            raise ValueError("当前没有可用的变异统计数据，无法使用 killrate 目标选择策略。")
 
         # 过滤黑名单，只保留有变异体的方法
         candidates = []

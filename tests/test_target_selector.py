@@ -155,3 +155,59 @@ class TargetSelectorCoverageSignatureTests(unittest.TestCase):
 
             self.assertEqual(selected["method_name"], "subtract")
             self.assertEqual(selected["method_signature"], "int subtract(int a, int b)")
+
+
+class TargetSelectorMutationDisabledFailFastTests(unittest.TestCase):
+    def test_select_rejects_killrate_without_mutation_data_when_mutation_disabled(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database = Mock()
+            selector = TargetSelector(
+                project_path=str(Path(tmp_dir)),
+                java_executor=Mock(),
+                database=database,
+                mutation_enabled=False,
+            )
+
+            with self.assertRaisesRegex(ValueError, "已禁用变异分析.*killrate"):
+                selector.select(criteria="killrate")
+
+            database.get_method_mutant_stats.assert_not_called()
+            database.get_low_coverage_methods.assert_not_called()
+
+    def test_mutation_dependent_strategies_fail_fast_when_mutation_disabled(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database = Mock()
+            selector = TargetSelector(
+                project_path=str(Path(tmp_dir)),
+                java_executor=Mock(),
+                database=database,
+                mutation_enabled=False,
+            )
+
+            strategies = [
+                ("mutations", selector.select_by_mutations),
+                ("priority", selector.select_by_priority),
+            ]
+            for strategy_name, strategy_method in strategies:
+                with self.subTest(strategy=strategy_name):
+                    with self.assertRaisesRegex(ValueError, f"已禁用变异分析.*{strategy_name}"):
+                        strategy_method()
+
+            database.get_all_mutants.assert_not_called()
+
+
+class TargetSelectorKillrateFailFastTests(unittest.TestCase):
+    def test_select_by_killrate_no_longer_falls_back_to_coverage_when_stats_missing(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database = Mock()
+            database.get_method_mutant_stats.return_value = {}
+            selector = TargetSelector(
+                project_path=str(Path(tmp_dir)),
+                java_executor=Mock(),
+                database=database,
+            )
+
+            with self.assertRaisesRegex(ValueError, "没有可用的变异统计数据"):
+                selector.select_by_killrate()
+
+            database.get_low_coverage_methods.assert_not_called()

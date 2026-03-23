@@ -267,6 +267,45 @@ describe('Run page standard mode', () => {
     expect(screen.queryByRole('heading', { name: '工作线程输出' })).not.toBeInTheDocument();
   });
 
+  it('shows disabled mutation copy only when mutationEnabled is explicitly false', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(
+          buildSnapshot({
+            mutationEnabled: false,
+            metrics: {
+              mutationScore: null,
+              globalMutationScore: null,
+              lineCoverage: 0.7,
+              branchCoverage: 0.55,
+              totalTests: 8,
+              totalMutants: null,
+              globalTotalMutants: null,
+              killedMutants: null,
+              globalKilledMutants: null,
+              survivedMutants: null,
+              globalSurvivedMutants: null,
+              currentMethodCoverage: 0.75,
+            },
+          }),
+        ),
+      ),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
+    expect(screen.getAllByText('未启用（测试生成消融模式）')).toHaveLength(2);
+    expect(screen.getByText('变异分析')).toBeInTheDocument();
+    expect(screen.queryByText('已杀死变异体')).not.toBeInTheDocument();
+    expect(screen.queryByText('存活变异体')).not.toBeInTheDocument();
+  });
+
   it('falls back to snapshot polling when live events are unavailable', async () => {
     let fetchCalls = 0;
     vi.stubGlobal(

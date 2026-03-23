@@ -252,6 +252,7 @@ def initialize_system(
             tools=tools,
             max_iterations=max_iterations,
             budget=budget,
+            mutation_enabled=config.evolution.mutation_enabled,
             excellent_mutation_score=config.evolution.excellent_mutation_score,
             excellent_line_coverage=config.evolution.excellent_line_coverage,
             excellent_branch_coverage=config.evolution.excellent_branch_coverage,
@@ -333,6 +334,7 @@ def run_evolution(
             java_executor=components["java_executor"],
             database=components["db"],
             min_method_lines=config.evolution.min_method_lines,
+            mutation_enabled=config.evolution.mutation_enabled,
         )
 
         # 获取并行配置
@@ -430,6 +432,9 @@ def run_evolution(
                 logger.info("=" * 60)
                 logger.info("开始并行预处理阶段")
                 logger.info("=" * 60)
+
+                if not config.evolution.mutation_enabled:
+                    logger.info("当前已禁用变异分析，预处理阶段将仅批量生成测试并跳过 mutant 生成")
 
                 try:
                     from comet.parallel_preprocessing import ParallelPreprocessor

@@ -2,10 +2,32 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from comet.config.settings import ExecutionConfig
+from pydantic import ValidationError
+
+from comet.config.settings import ExecutionConfig, Settings
 
 
 class ExecutionConfigTests(unittest.TestCase):
+    def test_evolution_mutation_enabled_defaults_to_true(self) -> None:
+        settings = Settings.model_validate({"llm": {"api_key": "test-key"}})
+
+        self.assertTrue(settings.evolution.mutation_enabled)
+
+    def test_evolution_mutation_enabled_preserves_explicit_false(self) -> None:
+        settings = Settings.model_validate(
+            {"llm": {"api_key": "test-key"}, "evolution": {"mutation_enabled": False}}
+        )
+
+        self.assertFalse(settings.evolution.mutation_enabled)
+
+    def test_evolution_mutation_enabled_rejects_non_boolean_values(self) -> None:
+        with self.assertRaises(ValidationError) as context:
+            Settings.model_validate(
+                {"llm": {"api_key": "test-key"}, "evolution": {"mutation_enabled": "false"}}
+            )
+
+        self.assertIn("evolution.mutation_enabled", str(context.exception))
+
     def test_defaults_use_system_commands(self) -> None:
         config = ExecutionConfig()
 

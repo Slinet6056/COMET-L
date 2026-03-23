@@ -29,6 +29,7 @@ const defaultConfig = {
     maven_home: null,
   },
   evolution: {
+    mutation_enabled: true,
     max_iterations: 10,
     min_improvement_threshold: 0.01,
     budget_llm_calls: 1000,
@@ -98,6 +99,7 @@ describe('Config page', () => {
         },
         evolution: {
           ...defaultConfig.evolution,
+          mutation_enabled: false,
           max_iterations: 7,
         },
       },
@@ -124,6 +126,7 @@ describe('Config page', () => {
       expect(screen.getByLabelText('API 密钥')).toHaveValue('yaml-key');
     });
     expect(screen.getByLabelText('模型')).toHaveValue('gpt-4o-mini');
+    expect(screen.getByLabelText('启用变异分析')).not.toBeChecked();
     expect(screen.getByLabelText('最大迭代次数')).toHaveValue(7);
     expect(screen.getByText('config.yaml 已解析并回填到表单中。')).toBeInTheDocument();
   });
@@ -208,6 +211,7 @@ describe('Config page', () => {
 
     await screen.findByLabelText('项目路径');
     await user.click(screen.getByRole('button', { name: '计算器示例' }));
+    await user.click(screen.getByLabelText('启用变异分析'));
     await user.type(screen.getByLabelText('缺陷报告目录'), 'examples/calculator-demo/bug-reports');
     await user.click(screen.getByRole('button', { name: '启动运行' }));
 
@@ -216,6 +220,9 @@ describe('Config page', () => {
         expect.objectContaining({
           projectPath: 'examples/calculator-demo',
           bugReportsDir: 'examples/calculator-demo/bug-reports',
+          config: expect.objectContaining({
+            evolution: expect.objectContaining({ mutation_enabled: false }),
+          }),
         }),
       );
       expect(fetchRunSnapshotSpy).toHaveBeenCalledWith('run-123');

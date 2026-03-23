@@ -89,6 +89,59 @@ class AgentTools:
                 pass
         return (None, None)
 
+    def _is_mutation_enabled(self) -> bool:
+        if self.config is not None:
+            try:
+                return self.config.evolution.mutation_enabled
+            except AttributeError:
+                pass
+        return True
+
+    def _build_mutation_disabled_result(
+        self,
+        action: str,
+        count_key: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        message = f"mutation 已禁用，跳过 {action}"
+        logger.info(f"{action}: {message}")
+
+        result: Dict[str, Any] = {
+            count_key: 0,
+            "action": action,
+            "status": "disabled",
+            "skipped": True,
+            "disabled": True,
+            "reason": "mutation_disabled",
+            "mutation_enabled": False,
+            "message": message,
+        }
+        if extra:
+            result.update(extra)
+        return result
+
+    def _build_mutation_empty_result(
+        self,
+        action: str,
+        count_key: str,
+        reason: str,
+        message: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            count_key: 0,
+            "action": action,
+            "status": "empty",
+            "skipped": False,
+            "disabled": False,
+            "reason": reason,
+            "mutation_enabled": True,
+            "message": message,
+        }
+        if extra:
+            result.update(extra)
+        return result
+
     def _register_default_tools(self) -> None:
         """注册默认工具"""
         # 注册 select_target
@@ -1260,7 +1313,11 @@ class AgentTools:
         from .target_selector import TargetSelector
 
         selector = TargetSelector(
-            self.project_path, self.java_executor, self.db, self.min_method_lines
+            self.project_path,
+            self.java_executor,
+            self.db,
+            self.min_method_lines,
+            mutation_enabled=self._is_mutation_enabled(),
         )
 
         # 获取黑名单
@@ -1339,6 +1396,13 @@ class AgentTools:
             class_name: 类名
             method_name: 目标方法名（可选，如果指定则只生成该方法的变异体）
         """
+        if not self._is_mutation_enabled():
+            return self._build_mutation_disabled_result(
+                action="generate_mutants",
+                count_key="generated",
+                extra={"mutant_ids": []},
+            )
+
         if not all([self.project_path, self.mutant_generator, self.static_guard, self.db]):
             logger.warning("generate_mutants: 缺少必要组件")
             return {"generated": 0}
@@ -1379,11 +1443,27 @@ class AgentTools:
         )
 
         if not mutants:
-            logger.warning(f"未生成任何变异体: {class_name}")
-            return {"generated": 0}
+            logger.info(f"generate_mutants: 未生成任何变异体: {class_name}")
+            return self._build_mutation_empty_result(
+                action="generate_mutants",
+                count_key="generated",
+                reason="no_mutants",
+                message=f"未生成任何变异体: {class_name}",
+                extra={"mutant_ids": []},
+            )
 
         # 静态过滤
         valid_mutants = self.static_guard.filter_mutants(mutants, str(file_path))
+
+        if not valid_mutants:
+            logger.info(f"generate_mutants: 静态过滤后无可用变异体: {class_name}")
+            return self._build_mutation_empty_result(
+                action="generate_mutants",
+                count_key="generated",
+                reason="no_valid_mutants",
+                message=f"静态过滤后无可用变异体: {class_name}",
+                extra={"mutant_ids": []},
+            )
 
         # 保存到数据库
         for mutant in valid_mutants:
@@ -1394,6 +1474,10 @@ class AgentTools:
         return {
             "generated": len(valid_mutants),
             "mutant_ids": [m.id for m in valid_mutants],
+            "status": "completed",
+            "skipped": False,
+            "disabled": False,
+            "mutation_enabled": True,
         }
 
     def generate_tests(
@@ -1703,6 +1787,13 @@ class AgentTools:
         注意：此方法假设所有测试用例都已在 generate_tests/refine_tests 阶段验证通过。
         如果测试失败，说明项目源代码可能被修改，需要用户检查。
         """
+        if not self._is_mutation_enabled():
+            return self._build_mutation_disabled_result(
+                action="run_evaluation",
+                count_key="evaluated",
+                extra={"killed": 0, "survived": 0, "mutation_score": 0.0},
+            )
+
         if not all([self.project_path, self.mutation_evaluator, self.java_executor, self.db]):
             logger.warning("run_evaluation: 缺少必要组件")
             return {"evaluated": 0}
@@ -1734,12 +1825,29 @@ class AgentTools:
         test_cases = self.db.get_all_tests()
 
         if not mutants:
-            logger.warning("没有变异体需要评估")
-            return {"evaluated": 0, "killed": 0, "mutation_score": 0.0}
+            logger.info("run_evaluation: 没有变异体需要评估")
+            return self._build_mutation_empty_result(
+                action="run_evaluation",
+                count_key="evaluated",
+                reason="no_mutants",
+                message="没有变异体需要评估",
+                extra={"killed": 0, "survived": 0, "mutation_score": 0.0},
+            )
 
         if not test_cases:
             logger.warning("没有测试用例")
-            return {"evaluated": len(mutants), "killed": 0, "mutation_score": 0.0}
+            return {
+                "evaluated": len(mutants),
+                "killed": 0,
+                "survived": len(mutants),
+                "mutation_score": 0.0,
+                "status": "blocked",
+                "skipped": False,
+                "disabled": False,
+                "reason": "no_tests",
+                "mutation_enabled": True,
+                "message": "没有测试用例",
+            }
 
         logger.info(f"开始评估 {len(mutants)} 个变异体 和 {len(test_cases)} 个测试")
 
@@ -1927,6 +2035,10 @@ class AgentTools:
             "killed": killed_count,
             "survived": len(mutants) - killed_count,
             "mutation_score": mutation_score,
+            "status": "completed",
+            "skipped": False,
+            "disabled": False,
+            "mutation_enabled": True,
         }
 
     def update_knowledge(
@@ -2156,6 +2268,13 @@ class AgentTools:
         Returns:
             结果字典
         """
+        if not self._is_mutation_enabled():
+            return self._build_mutation_disabled_result(
+                action="refine_mutants",
+                count_key="generated",
+                extra={"mutant_ids": []},
+            )
+
         if not all([self.project_path, self.mutant_generator, self.static_guard, self.db]):
             logger.warning("refine_mutants: 缺少必要组件")
             return {"generated": 0}
@@ -2190,7 +2309,16 @@ class AgentTools:
 
         if not test_cases:
             logger.warning(f"没有找到 {class_name} 的测试用例，无法完善变异体")
-            return {"generated": 0, "message": "No test cases found"}
+            return {
+                "generated": 0,
+                "mutant_ids": [],
+                "status": "blocked",
+                "skipped": False,
+                "disabled": False,
+                "reason": "no_tests",
+                "mutation_enabled": True,
+                "message": "No test cases found",
+            }
 
         # 计算击杀率
         valid_mutants = [m for m in existing_mutants if m.status == "valid"]
@@ -2217,11 +2345,27 @@ class AgentTools:
         )
 
         if not mutants:
-            logger.warning(f"未生成任何完善变异体: {class_name}.{method_name}")
-            return {"generated": 0}
+            logger.info(f"refine_mutants: 未生成任何完善变异体: {class_name}.{method_name}")
+            return self._build_mutation_empty_result(
+                action="refine_mutants",
+                count_key="generated",
+                reason="no_mutants",
+                message=f"未生成任何完善变异体: {class_name}.{method_name}",
+                extra={"mutant_ids": [], "kill_rate": kill_rate},
+            )
 
         # 静态过滤
         valid_mutants = self.static_guard.filter_mutants(mutants, str(file_path))
+
+        if not valid_mutants:
+            logger.info(f"refine_mutants: 静态过滤后无可用完善变异体: {class_name}.{method_name}")
+            return self._build_mutation_empty_result(
+                action="refine_mutants",
+                count_key="generated",
+                reason="no_valid_mutants",
+                message=f"静态过滤后无可用完善变异体: {class_name}.{method_name}",
+                extra={"mutant_ids": [], "kill_rate": kill_rate},
+            )
 
         # 保存到数据库
         for mutant in valid_mutants:
@@ -2233,6 +2377,10 @@ class AgentTools:
             "generated": len(valid_mutants),
             "mutant_ids": [m.id for m in valid_mutants],
             "kill_rate": kill_rate,
+            "status": "completed",
+            "skipped": False,
+            "disabled": False,
+            "mutation_enabled": True,
         }
 
     def trigger_pitest(self, project_path: str) -> Dict[str, Any]:

@@ -156,6 +156,7 @@ class ExecutionConfig(BaseModel):
 class EvolutionConfig(BaseModel):
     """进化配置"""
 
+    mutation_enabled: bool = Field(default=True, strict=True, description="是否启用变异分析")
     max_iterations: int = Field(default=10, ge=1, description="最大迭代次数")
     min_improvement_threshold: float = Field(
         default=0.01,

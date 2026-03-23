@@ -57,17 +57,17 @@ class RunPhase(BaseModel):
 
 
 class RunMetrics(BaseModel):
-    mutationScore: float
-    globalMutationScore: float
+    mutationScore: float | None = None
+    globalMutationScore: float | None = None
     lineCoverage: float
     branchCoverage: float
     totalTests: int
-    totalMutants: int
-    globalTotalMutants: int
-    killedMutants: int
-    globalKilledMutants: int
-    survivedMutants: int
-    globalSurvivedMutants: int
+    totalMutants: int | None = None
+    globalTotalMutants: int | None = None
+    killedMutants: int | None = None
+    globalKilledMutants: int | None = None
+    survivedMutants: int | None = None
+    globalSurvivedMutants: int | None = None
     currentMethodCoverage: float | None = None
 
 
@@ -77,6 +77,7 @@ class RunSnapshotResponse(BaseModel):
     runId: str
     status: str
     mode: str
+    mutationEnabled: bool | None = None
     iteration: int
     llmCalls: int
     budget: int
@@ -95,6 +96,7 @@ class RunHistoryEntry(BaseModel):
     runId: str
     status: str
     mode: str
+    mutationEnabled: bool | None = None
     projectPath: str
     configPath: str
     createdAt: str
@@ -169,6 +171,7 @@ class RunResultsResponse(BaseModel):
     runId: str
     status: str
     mode: str
+    mutationEnabled: bool | None = None
     iteration: int
     llmCalls: int
     budget: int

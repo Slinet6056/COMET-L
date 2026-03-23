@@ -93,6 +93,91 @@ class AgentToolsSignatureInheritanceTests(unittest.TestCase):
         )
 
 
+class AgentToolsMutationDisabledTests(unittest.TestCase):
+    def _build_tools(self, mutation_enabled: bool) -> AgentTools:
+        tools = AgentTools()
+        tools.config = SimpleNamespace(evolution=SimpleNamespace(mutation_enabled=mutation_enabled))
+        tools.project_path = "/tmp/project"
+        tools.mutant_generator = Mock()
+        tools.static_guard = Mock()
+        tools.db = Mock()
+        tools.mutation_evaluator = Mock()
+        tools.java_executor = Mock()
+        return tools
+
+    def test_generate_mutants_returns_disabled_status_when_mutation_disabled(self) -> None:
+        tools = self._build_tools(mutation_enabled=False)
+
+        result = tools.generate_mutants("Calculator", "add")
+
+        self.assertEqual(result["status"], "disabled")
+        self.assertTrue(result["skipped"])
+        self.assertTrue(result["disabled"])
+        self.assertFalse(result["mutation_enabled"])
+        self.assertEqual(result["reason"], "mutation_disabled")
+        self.assertEqual(result["generated"], 0)
+        tools.mutant_generator.generate_mutants.assert_not_called()
+
+    def test_refine_mutants_returns_disabled_status_when_mutation_disabled(self) -> None:
+        tools = self._build_tools(mutation_enabled=False)
+
+        result = tools.refine_mutants("Calculator", "add")
+
+        self.assertEqual(result["status"], "disabled")
+        self.assertTrue(result["skipped"])
+        self.assertTrue(result["disabled"])
+        self.assertFalse(result["mutation_enabled"])
+        self.assertEqual(result["reason"], "mutation_disabled")
+        self.assertEqual(result["generated"], 0)
+        tools.db.get_mutants_by_method.assert_not_called()
+        tools.mutant_generator.refine_mutants.assert_not_called()
+
+    def test_run_evaluation_returns_disabled_status_without_calling_mutation_boundary(
+        self,
+    ) -> None:
+        tools = self._build_tools(mutation_enabled=False)
+
+        result = tools.run_evaluation()
+
+        self.assertEqual(result["status"], "disabled")
+        self.assertTrue(result["skipped"])
+        self.assertTrue(result["disabled"])
+        self.assertFalse(result["mutation_enabled"])
+        self.assertEqual(result["reason"], "mutation_disabled")
+        self.assertEqual(result["evaluated"], 0)
+        self.assertEqual(result["killed"], 0)
+        self.assertEqual(result["survived"], 0)
+        self.assertEqual(result["mutation_score"], 0.0)
+        tools.db.get_valid_mutants.assert_not_called()
+        tools.db.get_all_tests.assert_not_called()
+        tools.mutation_evaluator.build_kill_matrix.assert_not_called()
+        tools.java_executor.apply_mutation.assert_not_called()
+
+    def test_run_evaluation_uses_empty_status_when_enabled_but_no_mutants(self) -> None:
+        tools = self._build_tools(mutation_enabled=True)
+        tools.db.get_valid_mutants.return_value = []
+        tools.db.get_all_tests.return_value = []
+
+        result = tools.run_evaluation()
+
+        self.assertEqual(result["status"], "empty")
+        self.assertFalse(result["skipped"])
+        self.assertFalse(result["disabled"])
+        self.assertTrue(result["mutation_enabled"])
+        self.assertEqual(result["reason"], "no_mutants")
+        self.assertEqual(result["evaluated"], 0)
+        tools.mutation_evaluator.build_kill_matrix.assert_not_called()
+
+    def test_select_target_propagates_mutation_disabled_to_selector_fail_fast(self) -> None:
+        tools = self._build_tools(mutation_enabled=False)
+
+        with self.assertRaisesRegex(ValueError, "已禁用变异分析.*killrate"):
+            tools.select_target("killrate")
+
+        tools.db.get_method_mutant_stats.assert_not_called()
+        tools.db.get_low_coverage_methods.assert_not_called()
+
+
 class DatabaseMethodSignatureIsolationTests(unittest.TestCase):
     def test_get_tests_by_target_method_returns_only_matching_signature_methods(self) -> None:
         with TemporaryDirectory() as tmp_dir:

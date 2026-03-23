@@ -457,6 +457,14 @@ function buildParallelStatsSummary(
   }));
 }
 
+function isMutationDisabled(mutationEnabled: boolean | null | undefined): boolean {
+  return mutationEnabled === false;
+}
+
+function getMutationStatusText(mutationEnabled: boolean | null | undefined): string {
+  return isMutationDisabled(mutationEnabled) ? '未启用（测试生成消融模式）' : '已启用';
+}
+
 function HistoricalLogNotice(props: { runId: string }) {
   const { runId } = props;
 
@@ -484,6 +492,7 @@ function StandardRunView(props: {
   improvementSummary: Array<{ label: string; value: string }>;
 }) {
   const { runId, snapshot, connectionState, actionHistory, improvementSummary } = props;
+  const mutationDisabled = isMutationDisabled(snapshot.mutationEnabled);
 
   return (
     <>
@@ -512,7 +521,11 @@ function StandardRunView(props: {
         <div className="metric-grid metric-grid--hero">
           <article>
             <span>变异分数</span>
-            <strong>{formatPercent(snapshot.metrics.mutationScore)}</strong>
+            <strong>
+              {mutationDisabled
+                ? '未启用（测试生成消融模式）'
+                : formatPercent(snapshot.metrics.mutationScore)}
+            </strong>
           </article>
           <article>
             <span>行覆盖率</span>
@@ -524,6 +537,10 @@ function StandardRunView(props: {
           </article>
         </div>
         <dl className="detail-grid detail-grid--compact">
+          <div>
+            <dt>变异分析</dt>
+            <dd>{getMutationStatusText(snapshot.mutationEnabled)}</dd>
+          </div>
           <div>
             <dt>当前目标</dt>
             <dd>{formatTarget(snapshot.currentTarget)}</dd>
@@ -540,14 +557,18 @@ function StandardRunView(props: {
             <dt>当前方法覆盖率</dt>
             <dd>{formatPercent(snapshot.metrics.currentMethodCoverage)}</dd>
           </div>
-          <div>
-            <dt>已杀死变异体</dt>
-            <dd>{formatMetricValue(snapshot.metrics.killedMutants)}</dd>
-          </div>
-          <div>
-            <dt>存活变异体</dt>
-            <dd>{formatMetricValue(snapshot.metrics.survivedMutants)}</dd>
-          </div>
+          {mutationDisabled ? null : (
+            <>
+              <div>
+                <dt>已杀死变异体</dt>
+                <dd>{formatMetricValue(snapshot.metrics.killedMutants)}</dd>
+              </div>
+              <div>
+                <dt>存活变异体</dt>
+                <dd>{formatMetricValue(snapshot.metrics.survivedMutants)}</dd>
+              </div>
+            </>
+          )}
           <div>
             <dt>LLM 调用次数</dt>
             <dd>
@@ -620,6 +641,7 @@ function ParallelRunView(props: {
   const workerPageCount = Math.ceil(workerOutputRows.length / WORKER_OUTPUT_PAGE_SIZE);
   const [workerPage, setWorkerPage] = useState(0);
   const isPreprocessingPhase = snapshot.phase.key === 'preprocessing';
+  const mutationDisabled = isMutationDisabled(snapshot.mutationEnabled);
 
   useEffect(() => {
     setWorkerPage((current) => {
@@ -664,7 +686,11 @@ function ParallelRunView(props: {
         <div className="metric-grid metric-grid--hero">
           <article>
             <span>变异分数</span>
-            <strong>{formatPercent(snapshot.metrics.globalMutationScore)}</strong>
+            <strong>
+              {mutationDisabled
+                ? '未启用（测试生成消融模式）'
+                : formatPercent(snapshot.metrics.globalMutationScore)}
+            </strong>
           </article>
           <article>
             <span>行覆盖率</span>
@@ -676,6 +702,10 @@ function ParallelRunView(props: {
           </article>
         </div>
         <dl className="detail-grid detail-grid--compact">
+          <div>
+            <dt>变异分析</dt>
+            <dd>{getMutationStatusText(snapshot.mutationEnabled)}</dd>
+          </div>
           <div>
             <dt>当前批次</dt>
             <dd>{parallel.currentBatch}</dd>
@@ -696,14 +726,18 @@ function ParallelRunView(props: {
             <dt>测试总数</dt>
             <dd>{formatMetricValue(snapshot.metrics.totalTests)}</dd>
           </div>
-          <div>
-            <dt>变异体总数</dt>
-            <dd>{formatMetricValue(snapshot.metrics.globalTotalMutants)}</dd>
-          </div>
-          <div>
-            <dt>已杀死变异体</dt>
-            <dd>{formatMetricValue(snapshot.metrics.globalKilledMutants)}</dd>
-          </div>
+          {mutationDisabled ? null : (
+            <>
+              <div>
+                <dt>变异体总数</dt>
+                <dd>{formatMetricValue(snapshot.metrics.globalTotalMutants)}</dd>
+              </div>
+              <div>
+                <dt>已杀死变异体</dt>
+                <dd>{formatMetricValue(snapshot.metrics.globalKilledMutants)}</dd>
+              </div>
+            </>
+          )}
           <div>
             <dt>迭代次数</dt>
             <dd>{snapshot.iteration}</dd>
@@ -779,9 +813,17 @@ function ParallelRunView(props: {
                         </span>
                       </td>
                       <td>{worker.testsGenerated}</td>
-                      <td>{worker.mutantsGenerated}</td>
-                      <td>{worker.mutantsKilled}</td>
-                      <td>{formatPercent(worker.localMutationScore)}</td>
+                      <td>
+                        {mutationDisabled ? '未启用' : formatMetricValue(worker.mutantsGenerated)}
+                      </td>
+                      <td>
+                        {mutationDisabled ? '未启用' : formatMetricValue(worker.mutantsKilled)}
+                      </td>
+                      <td>
+                        {mutationDisabled
+                          ? '未启用（测试生成消融模式）'
+                          : formatPercent(worker.localMutationScore)}
+                      </td>
                       <td>
                         {formatPercent(
                           worker.methodCoverage ?? workerCoverageLookup.get(worker.targetId),

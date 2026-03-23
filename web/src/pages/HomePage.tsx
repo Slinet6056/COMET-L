@@ -84,6 +84,10 @@ function buildFieldErrors(error: ApiError): FieldErrors {
   }, {});
 }
 
+function getFieldHintId(path: string[]): string {
+  return `field-hint-${getFieldKey(path).replaceAll('.', '-')}`;
+}
+
 export function HomePage() {
   const navigate = useNavigate();
   const [config, setConfig] = useState<ConfigValue | null>(null);
@@ -341,6 +345,7 @@ export function HomePage() {
               {section.fields.map((field) => {
                 const fieldKey = getFieldKey(field.path);
                 const fieldId = `field-${fieldKey.replaceAll('.', '-')}`;
+                const hintId = getFieldHintId(field.path);
                 const value = getNestedValue(config, field.path);
                 const error = fieldErrors[fieldKey];
 
@@ -354,6 +359,7 @@ export function HomePage() {
                         <input
                           id={fieldId}
                           type="checkbox"
+                          aria-describedby={hintId}
                           checked={Boolean(value)}
                           onChange={(event) =>
                             handleFieldChange(field, event.target.value, event.target.checked)
@@ -364,6 +370,7 @@ export function HomePage() {
                     ) : field.kind === 'nullable-boolean' ? (
                       <select
                         id={fieldId}
+                        aria-describedby={hintId}
                         value={value === null || value === undefined ? '' : String(value)}
                         onChange={(event) => handleFieldChange(field, event.target.value, false)}
                       >
@@ -375,6 +382,7 @@ export function HomePage() {
                       <input
                         id={fieldId}
                         type={field.kind === 'number' ? 'number' : field.kind}
+                        aria-describedby={hintId}
                         value={valueToInputString(value)}
                         step={field.step}
                         placeholder={field.placeholder}
@@ -383,7 +391,9 @@ export function HomePage() {
                         }
                       />
                     )}
-                    <span className="field__hint">{field.description}</span>
+                    <span id={hintId} className="field__hint">
+                      {field.description}
+                    </span>
                     {error ? <span className="field__error">{error}</span> : null}
                   </div>
                 );

@@ -22,6 +22,7 @@ class PlannerAgent:
         tools: AgentTools,
         max_iterations: int = 10,
         budget: int = 1000,
+        mutation_enabled: bool = True,
         excellent_mutation_score: float = 0.95,
         excellent_line_coverage: float = 0.90,
         excellent_branch_coverage: float = 0.85,
@@ -34,6 +35,7 @@ class PlannerAgent:
             tools: 工具集
             max_iterations: 最大迭代次数
             budget: LLM 调用预算
+            mutation_enabled: 是否启用 mutation 流程
             excellent_mutation_score: 优秀变异分数阈值（默认 0.95）
             excellent_line_coverage: 优秀行覆盖率阈值（默认 0.90）
             excellent_branch_coverage: 优秀分支覆盖率阈值（默认 0.85）
@@ -43,6 +45,7 @@ class PlannerAgent:
         self.prompt_manager = PromptManager()
         self.max_iterations = max_iterations
         self.budget = budget
+        self.mutation_enabled = mutation_enabled
 
         # 优秀水平阈值（可配置）
         self.excellent_mutation_score = excellent_mutation_score
@@ -51,6 +54,10 @@ class PlannerAgent:
 
         self.state = AgentState()
         self.state.budget = budget
+        self.state.global_mutation_enabled = mutation_enabled
+
+    def _is_mutation_enabled(self) -> bool:
+        return getattr(self, "mutation_enabled", True)
 
     def run(
         self,
@@ -70,10 +77,12 @@ class PlannerAgent:
         logger.info("开始协同进化循环")
         logger.info(f"改进判定阈值（绝对增量）: {min_improvement_threshold:.2%}")
         no_improvement_count = 0
+        mutation_enabled = self._is_mutation_enabled()
 
         # 记录上一轮的关键指标
-        prev_mutation_score = 0.0
+        prev_mutation_score = 0.0 if mutation_enabled else None
         prev_line_coverage = 0.0
+        prev_total_tests = 0
 
         while not self._should_stop():
             logger.info(f"{'=' * 60}")
@@ -116,7 +125,7 @@ class PlannerAgent:
 
             # 只有在执行评估后才检查改进
             # 因为只有 run_evaluation 会更新变异分数和覆盖率等指标
-            if action == "run_evaluation":
+            if action == "run_evaluation" and mutation_enabled:
                 # 检查评估是否成功执行
                 evaluation_succeeded = (
                     result is not None
@@ -142,6 +151,9 @@ class PlannerAgent:
                     if has_improvement:
                         logger.info("检测到改进，重置无改进计数器")
                         no_improvement_count = 0
+                        prev_mutation_value = (
+                            prev_mutation_score if prev_mutation_score is not None else 0.0
+                        )
                         # 记录改进（使用全局指标）
                         self.state.add_improvement(
                             {
@@ -149,7 +161,7 @@ class PlannerAgent:
                                 "mutation_score": self.state.global_mutation_score,
                                 "line_coverage": self.state.line_coverage,
                                 "mutation_score_delta": self.state.global_mutation_score
-                                - prev_mutation_score,
+                                - prev_mutation_value,
                                 "coverage_delta": self.state.line_coverage - prev_line_coverage,
                             }
                         )
@@ -162,6 +174,37 @@ class PlannerAgent:
                     # 更新上一轮指标（只在评估后更新，使用全局指标）
                     prev_mutation_score = self.state.global_mutation_score
                     prev_line_coverage = self.state.line_coverage
+                    prev_total_tests = self.state.total_tests
+            elif not mutation_enabled:
+                self._sync_state_from_db()
+                has_improvement = self._check_improvement(
+                    prev_mutation_score,
+                    prev_line_coverage,
+                    min_improvement_threshold,
+                    prev_total_tests=prev_total_tests,
+                )
+
+                if has_improvement:
+                    logger.info("检测到改进，重置无改进计数器")
+                    no_improvement_count = 0
+                    self.state.add_improvement(
+                        {
+                            "iteration": self.state.iteration,
+                            "line_coverage": self.state.line_coverage,
+                            "coverage_delta": self.state.line_coverage - prev_line_coverage,
+                            "tests_delta": self.state.total_tests - prev_total_tests,
+                            "mutation_score": None,
+                            "mutation_score_delta": None,
+                        }
+                    )
+                else:
+                    no_improvement_count += 1
+                    logger.info(
+                        f"评估后无显著改进 (连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)"
+                    )
+
+                prev_line_coverage = self.state.line_coverage
+                prev_total_tests = self.state.total_tests
             else:
                 # 非评估操作，同步状态但不检查改进
                 self._sync_state_from_db()
@@ -236,39 +279,65 @@ class PlannerAgent:
 
     def _check_improvement(
         self,
-        prev_mutation_score: float,
+        prev_mutation_score: Optional[float],
         prev_line_coverage: float,
         threshold: float = 0.01,
+        prev_total_tests: Optional[int] = None,
     ) -> bool:
         """
         检查是否有显著改进（使用全局指标）
 
         Args:
-            prev_mutation_score: 上一轮的全局变异分数
+            prev_mutation_score: 上一轮的全局变异分数（test-only 模式可为 None）
             prev_line_coverage: 上一轮的全局行覆盖率
             threshold: 改进绝对阈值（比例值）
+            prev_total_tests: 上一轮测试总数（test-only 模式用于检测新增测试）
 
         Returns:
             是否有显著改进
         """
-        mutation_score_delta = self.state.global_mutation_score - prev_mutation_score
+        mutation_enabled = self._is_mutation_enabled()
+        mutation_score_delta: Optional[float] = None
+        if mutation_enabled and prev_mutation_score is not None:
+            mutation_score_delta = self.state.global_mutation_score - prev_mutation_score
         coverage_delta = self.state.line_coverage - prev_line_coverage
+        tests_delta = (
+            self.state.total_tests - prev_total_tests if prev_total_tests is not None else 0
+        )
 
-        has_improvement = mutation_score_delta >= threshold or coverage_delta >= threshold
+        if mutation_enabled and mutation_score_delta is not None:
+            has_improvement = mutation_score_delta >= threshold or coverage_delta >= threshold
+        else:
+            has_improvement = coverage_delta >= threshold or tests_delta > 0
 
         if has_improvement:
-            logger.info(
-                f"检测到改进（全局指标）: "
-                f"变异分数 {prev_mutation_score:.1%} -> {self.state.global_mutation_score:.1%} (Δ{mutation_score_delta:+.1%}), "
-                f"行覆盖率 {prev_line_coverage:.1%} -> {self.state.line_coverage:.1%} (Δ{coverage_delta:+.1%})"
-            )
+            if mutation_enabled and mutation_score_delta is not None:
+                logger.info(
+                    f"检测到改进（全局指标）: "
+                    f"变异分数 {prev_mutation_score:.1%} -> {self.state.global_mutation_score:.1%} (Δ{mutation_score_delta:+.1%}), "
+                    f"行覆盖率 {prev_line_coverage:.1%} -> {self.state.line_coverage:.1%} (Δ{coverage_delta:+.1%})"
+                )
+            else:
+                logger.info(
+                    f"检测到改进（test-only）: "
+                    f"行覆盖率 {prev_line_coverage:.1%} -> {self.state.line_coverage:.1%} (Δ{coverage_delta:+.1%}), "
+                    f"测试总数 Δ{tests_delta:+d}"
+                )
         else:
-            logger.debug(
-                f"未达到显著改进阈值（绝对增量）: "
-                f"变异分数Δ{mutation_score_delta:+.1%}, "
-                f"行覆盖率Δ{coverage_delta:+.1%}, "
-                f"阈值 {threshold:.1%}"
-            )
+            if mutation_enabled and mutation_score_delta is not None:
+                logger.debug(
+                    f"未达到显著改进阈值（绝对增量）: "
+                    f"变异分数Δ{mutation_score_delta:+.1%}, "
+                    f"行覆盖率Δ{coverage_delta:+.1%}, "
+                    f"阈值 {threshold:.1%}"
+                )
+            else:
+                logger.debug(
+                    f"未达到显著改进阈值（test-only）: "
+                    f"行覆盖率Δ{coverage_delta:+.1%}, "
+                    f"测试总数Δ{tests_delta:+d}, "
+                    f"阈值 {threshold:.1%}"
+                )
 
         return has_improvement
 
@@ -280,19 +349,33 @@ class PlannerAgent:
         Returns:
             是否达到优秀水平
         """
-        is_excellent = (
-            self.state.global_mutation_score >= self.excellent_mutation_score
-            and self.state.line_coverage >= self.excellent_line_coverage
-            and self.state.branch_coverage >= self.excellent_branch_coverage
-        )
+        mutation_enabled = self._is_mutation_enabled()
+        if mutation_enabled:
+            is_excellent = (
+                self.state.global_mutation_score >= self.excellent_mutation_score
+                and self.state.line_coverage >= self.excellent_line_coverage
+                and self.state.branch_coverage >= self.excellent_branch_coverage
+            )
+        else:
+            is_excellent = (
+                self.state.line_coverage >= self.excellent_line_coverage
+                and self.state.branch_coverage >= self.excellent_branch_coverage
+            )
 
         if is_excellent:
-            logger.info(
-                f"达到优秀质量水平（全局指标）: "
-                f"全局变异分数={self.state.global_mutation_score:.1%} (阈值≥{self.excellent_mutation_score:.1%}), "
-                f"全局行覆盖率={self.state.line_coverage:.1%} (阈值≥{self.excellent_line_coverage:.1%}), "
-                f"全局分支覆盖率={self.state.branch_coverage:.1%} (阈值≥{self.excellent_branch_coverage:.1%})"
-            )
+            if mutation_enabled:
+                logger.info(
+                    f"达到优秀质量水平（全局指标）: "
+                    f"全局变异分数={self.state.global_mutation_score:.1%} (阈值≥{self.excellent_mutation_score:.1%}), "
+                    f"全局行覆盖率={self.state.line_coverage:.1%} (阈值≥{self.excellent_line_coverage:.1%}), "
+                    f"全局分支覆盖率={self.state.branch_coverage:.1%} (阈值≥{self.excellent_branch_coverage:.1%})"
+                )
+            else:
+                logger.info(
+                    f"达到优秀质量水平（test-only）: "
+                    f"全局行覆盖率={self.state.line_coverage:.1%} (阈值≥{self.excellent_line_coverage:.1%}), "
+                    f"全局分支覆盖率={self.state.branch_coverage:.1%} (阈值≥{self.excellent_branch_coverage:.1%})"
+                )
 
         return is_excellent
 
@@ -557,6 +640,28 @@ class PlannerAgent:
             return None
 
         try:
+            if not self._is_mutation_enabled() and action in {
+                "generate_mutants",
+                "refine_mutants",
+                "run_evaluation",
+            }:
+                logger.info(f"mutation 已禁用，跳过工具调用: {action}")
+                skipped_result = {
+                    "action": action,
+                    "status": "disabled",
+                    "skipped": True,
+                    "disabled": True,
+                    "reason": "mutation_disabled",
+                    "mutation_enabled": False,
+                }
+                self.state.add_action(
+                    action=action,
+                    params=params,
+                    success=True,
+                    result=skipped_result,
+                )
+                return skipped_result
+
             result = self.tools.call(action, **params)
 
             # 检查工具是否返回了错误标志
@@ -644,7 +749,9 @@ class PlannerAgent:
             self._auto_workflow_for_new_target(result)
 
         # 自动化流程2: refine_tests 或 refine_mutants 后自动评估
-        elif action in ["refine_tests", "refine_mutants"]:
+        elif action == "refine_tests" and self._is_mutation_enabled():
+            self._auto_workflow_for_refine(action)
+        elif action == "refine_mutants" and self._is_mutation_enabled():
             self._auto_workflow_for_refine(action)
 
     def _auto_workflow_for_new_target(self, target_result: Dict[str, Any]) -> None:
@@ -671,6 +778,8 @@ class PlannerAgent:
         if not class_name or not method_name:
             logger.debug("目标信息不完整，跳过自动化流程")
             return
+
+        mutation_enabled = self._is_mutation_enabled()
 
         logger.info(f"{'=' * 60}")
         logger.info(f"开始新目标自动化流程: {class_name}.{method_name}")
@@ -716,6 +825,13 @@ class PlannerAgent:
                 return
         else:
             logger.info("→ 跳过 generate_tests（目标方法已有测试）")
+
+        if not mutation_enabled:
+            logger.info("→ mutation 已禁用，跳过 generate_mutants/run_evaluation 自动链")
+            logger.info(f"{'=' * 60}")
+            logger.info("新目标自动化流程完成（test-only）")
+            logger.info(f"{'=' * 60}")
+            return
 
         # 检查是否需要生成变异体
         existing_mutants = (

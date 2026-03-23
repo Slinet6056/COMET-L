@@ -98,10 +98,12 @@ class ParallelPlannerAgent:
         self.excellent_mutation_score = excellent_mutation_score
         self.excellent_line_coverage = excellent_line_coverage
         self.excellent_branch_coverage = excellent_branch_coverage
+        self.mutation_enabled = self._resolve_mutation_enabled()
 
         # 状态管理
         self.state: ParallelAgentState = ParallelAgentState()
         self.state.budget = budget
+        self.state.global_mutation_enabled = self.mutation_enabled
 
         # 覆盖率解析器
         self.coverage_parser = CoverageParser()
@@ -131,6 +133,7 @@ class ParallelPlannerAgent:
         logger.info(f"改进判定阈值（绝对增量）: {min_improvement_threshold:.2%}")
         logger.info(f"最大并行目标数: {self.max_parallel_targets}")
         logger.info(f"变异体评估并行度: {self.max_eval_workers}")
+        logger.info(f"变异分析开关: {'启用' if self.mutation_enabled else '禁用'}")
         logger.info("=" * 60)
 
         from datetime import datetime
@@ -204,13 +207,23 @@ class ParallelPlannerAgent:
                 if has_improvement:
                     logger.info("检测到改进，重置无改进计数器")
                     no_improvement_count = 0
+                    mutation_score = (
+                        self.state.global_mutation_score
+                        if self.state.global_mutation_enabled
+                        else None
+                    )
+                    mutation_score_delta = (
+                        self.state.global_mutation_score - prev_mutation_score
+                        if self.state.global_mutation_enabled
+                        and self.state.global_mutation_score is not None
+                        else None
+                    )
                     self.state.add_improvement(
                         {
                             "batch": batch_num,
-                            "mutation_score": self.state.global_mutation_score,
+                            "mutation_score": mutation_score,
                             "line_coverage": self.state.line_coverage,
-                            "mutation_score_delta": self.state.global_mutation_score
-                            - prev_mutation_score,
+                            "mutation_score_delta": mutation_score_delta,
                             "coverage_delta": self.state.line_coverage - prev_line_coverage,
                         }
                     )
@@ -220,7 +233,11 @@ class ParallelPlannerAgent:
                         f"无显著改进 (连续 {no_improvement_count}/{stop_on_no_improvement_rounds} 轮)"
                     )
 
-                prev_mutation_score = self.state.global_mutation_score
+                if (
+                    self.state.global_mutation_enabled
+                    and self.state.global_mutation_score is not None
+                ):
+                    prev_mutation_score = self.state.global_mutation_score
                 prev_line_coverage = self.state.line_coverage
 
                 # 10. 检查停止条件
@@ -381,6 +398,7 @@ class ParallelPlannerAgent:
     ) -> WorkerResult:
         """_process_single_target 的实际实现"""
         start_time = time.time()
+        mutation_enabled = self._is_mutation_enabled()
 
         logger.info(f"开始处理: {target_id}")
 
@@ -390,6 +408,7 @@ class ParallelPlannerAgent:
             method_name=method_name,
             method_signature=target.get("method_signature"),
             method_coverage=target.get("method_coverage"),
+            mutation_enabled=mutation_enabled,
         )
 
         # 为此目标创建独立沙箱
@@ -405,9 +424,9 @@ class ParallelPlannerAgent:
             sandbox_id = Path(sandbox_path).name
             logger.debug(f"创建沙箱: {sandbox_path} (id: {sandbox_id})")
 
-            # 1. 并行生成测试和变异体（两者都只读源代码，可并行）
             test_result = None
             mutant_result = None
+            mutant_future: Future[Any] | None = None
 
             gen_executor = ThreadPoolExecutor(max_workers=2)
             try:
@@ -419,14 +438,15 @@ class ParallelPlannerAgent:
                     method_name,
                     target.get("method_signature"),
                 )
-                mutant_future = submit_with_log_context(
-                    gen_executor,
-                    self._generate_mutants_in_sandbox,
-                    sandbox_path,
-                    class_name,
-                    method_name,
-                    target.get("method_signature"),
-                )
+                if mutation_enabled:
+                    mutant_future = submit_with_log_context(
+                        gen_executor,
+                        self._generate_mutants_in_sandbox,
+                        sandbox_path,
+                        class_name,
+                        method_name,
+                        target.get("method_signature"),
+                    )
 
                 # 获取结果
                 generation_failed = False
@@ -446,34 +466,43 @@ class ParallelPlannerAgent:
                     test_result,
                     generation_failed,
                 ):
-                    self._cancel_future_if_possible(mutant_future, target_id, "变异体生成")
+                    if mutant_future is not None:
+                        self._cancel_future_if_possible(mutant_future, target_id, "变异体生成")
                     cleanup_deferred = self._defer_sandbox_cleanup_if_needed(
                         sandbox_id,
-                        [test_future, mutant_future],
+                        [future for future in [test_future, mutant_future] if future is not None],
                         target_id,
                     )
                     gen_executor.shutdown(wait=False, cancel_futures=True)
                 else:
-                    mutant_generation_timed_out = False
-                    try:
-                        mutant_result = mutant_future.result(timeout=180)
-                    except FutureTimeoutError:
-                        logger.warning(f"变异体生成超时: {target_id} (timeout=180s)")
-                        mutant_generation_timed_out = True
-                    except Exception as e:
-                        logger.warning(
-                            f"变异体生成异常: {target_id} ({_format_exception_summary(e)})"
-                        )
-                    if mutant_generation_timed_out:
-                        self._cancel_future_if_possible(mutant_future, target_id, "变异体生成")
-                        cleanup_deferred = self._defer_sandbox_cleanup_if_needed(
-                            sandbox_id,
-                            [test_future, mutant_future],
-                            target_id,
-                        )
-                        gen_executor.shutdown(wait=False, cancel_futures=True)
-                    else:
+                    if not mutation_enabled:
                         gen_executor.shutdown(wait=True)
+                    else:
+                        mutant_generation_timed_out = False
+                        if mutant_future is not None:
+                            try:
+                                mutant_result = mutant_future.result(timeout=180)
+                            except FutureTimeoutError:
+                                logger.warning(f"变异体生成超时: {target_id} (timeout=180s)")
+                                mutant_generation_timed_out = True
+                            except Exception as e:
+                                logger.warning(
+                                    f"变异体生成异常: {target_id} ({_format_exception_summary(e)})"
+                                )
+                        if mutant_generation_timed_out and mutant_future is not None:
+                            self._cancel_future_if_possible(mutant_future, target_id, "变异体生成")
+                            cleanup_deferred = self._defer_sandbox_cleanup_if_needed(
+                                sandbox_id,
+                                [
+                                    future
+                                    for future in [test_future, mutant_future]
+                                    if future is not None
+                                ],
+                                target_id,
+                            )
+                            gen_executor.shutdown(wait=False, cancel_futures=True)
+                        else:
+                            gen_executor.shutdown(wait=True)
             except Exception:
                 gen_executor.shutdown(wait=False, cancel_futures=True)
                 raise
@@ -493,6 +522,28 @@ class ParallelPlannerAgent:
                     result.method_coverage = coverage.line_coverage_rate
                 result.error = "测试生成失败"
                 logger.warning("测试生成失败")
+                return result
+
+            if not mutation_enabled:
+                coverage = self.db.get_method_coverage(
+                    class_name,
+                    method_name,
+                    target.get("method_signature"),
+                )
+                if coverage is not None:
+                    result.method_coverage = coverage.line_coverage_rate
+                result.mutants_generated = None
+                result.mutants_evaluated = None
+                result.mutants_killed = None
+                result.local_mutation_score = None
+                result.success = True
+                result.processing_time = time.time() - start_time
+                logger.info(
+                    f"完成(test-only): "
+                    f"{result.tests_generated} 测试, "
+                    f"覆盖率 {result.method_coverage if result.method_coverage is not None else 'N/A'}, "
+                    f"耗时 {result.processing_time:.1f}s"
+                )
                 return result
 
             # 处理变异体生成结果
@@ -1023,16 +1074,21 @@ class ParallelPlannerAgent:
     def _sync_global_state(self) -> None:
         """同步全局状态"""
         try:
-            # 从数据库获取全局变异体统计
-            all_mutants = self.db.get_all_evaluated_mutants()
-            total = len(all_mutants)
-            killed = len([m for m in all_mutants if not m.survived])
+            mutation_enabled = self._is_mutation_enabled()
+            total = 0
+            killed = 0
+            if mutation_enabled:
+                # 从数据库获取全局变异体统计
+                all_mutants = self.db.get_all_evaluated_mutants()
+                total = len(all_mutants)
+                killed = len([m for m in all_mutants if not m.survived])
 
             self.state.update_global_stats_from_batch(
                 total_mutants=total,
                 killed_mutants=killed,
                 line_coverage=self.state.line_coverage,
                 branch_coverage=self.state.branch_coverage,
+                mutation_enabled=mutation_enabled,
             )
 
             # 同步测试数量
@@ -1041,8 +1097,8 @@ class ParallelPlannerAgent:
 
             logger.debug(
                 f"全局状态已同步: "
-                f"{total} 变异体, {killed} 被击杀, "
-                f"变异分数 {self.state.global_mutation_score:.1%}"
+                f"覆盖率(行/分支)=({self.state.line_coverage:.1%}/{self.state.branch_coverage:.1%}), "
+                f"变异分析={'启用' if self.state.global_mutation_enabled else '禁用'}"
             )
 
         except Exception as e:
@@ -1055,10 +1111,18 @@ class ParallelPlannerAgent:
         threshold: float,
     ) -> bool:
         """检查是否有显著改进（绝对增量阈值）"""
-        mutation_delta = self.state.global_mutation_score - prev_mutation_score
+        mutation_enabled = self._is_mutation_enabled()
+        current_mutation_score = self.state.global_mutation_score
+        mutation_delta = (
+            current_mutation_score - prev_mutation_score
+            if mutation_enabled and current_mutation_score is not None
+            else 0.0
+        )
         coverage_delta = self.state.line_coverage - prev_line_coverage
 
-        has_improvement = mutation_delta >= threshold or coverage_delta >= threshold
+        has_improvement = coverage_delta >= threshold
+        if mutation_enabled:
+            has_improvement = has_improvement or mutation_delta >= threshold
 
         if has_improvement:
             logger.info(
@@ -1076,19 +1140,35 @@ class ParallelPlannerAgent:
 
     def _check_excellent_quality(self) -> bool:
         """检查是否达到优秀质量水平"""
-        is_excellent = (
-            self.state.global_mutation_score >= self.excellent_mutation_score
-            and self.state.line_coverage >= self.excellent_line_coverage
-            and self.state.branch_coverage >= self.excellent_branch_coverage
-        )
+        mutation_enabled = self._is_mutation_enabled()
+        current_mutation_score = self.state.global_mutation_score
+        if mutation_enabled:
+            is_excellent = (
+                current_mutation_score is not None
+                and current_mutation_score >= self.excellent_mutation_score
+                and self.state.line_coverage >= self.excellent_line_coverage
+                and self.state.branch_coverage >= self.excellent_branch_coverage
+            )
+        else:
+            is_excellent = (
+                self.state.line_coverage >= self.excellent_line_coverage
+                and self.state.branch_coverage >= self.excellent_branch_coverage
+            )
 
         if is_excellent:
-            logger.info(
-                f"达到优秀质量: "
-                f"变异分数 {self.state.global_mutation_score:.1%}, "
-                f"行覆盖率 {self.state.line_coverage:.1%}, "
-                f"分支覆盖率 {self.state.branch_coverage:.1%}"
-            )
+            if mutation_enabled and self.state.global_mutation_score is not None:
+                logger.info(
+                    f"达到优秀质量: "
+                    f"变异分数 {self.state.global_mutation_score:.1%}, "
+                    f"行覆盖率 {self.state.line_coverage:.1%}, "
+                    f"分支覆盖率 {self.state.branch_coverage:.1%}"
+                )
+            else:
+                logger.info(
+                    f"达到优秀质量(test-only): "
+                    f"行覆盖率 {self.state.line_coverage:.1%}, "
+                    f"分支覆盖率 {self.state.branch_coverage:.1%}"
+                )
 
         return is_excellent
 
@@ -1120,12 +1200,15 @@ class ParallelPlannerAgent:
         logger.info(f"LLM 调用次数: {self.state.llm_calls}/{self.budget}")
         logger.info("")
         logger.info("全局统计:")
-        logger.info(f"  变异分数: {self.state.global_mutation_score:.1%}")
-        logger.info(f"  总变异体数: {self.state.global_total_mutants}")
-        logger.info(
-            f"  已击杀: {self.state.global_killed_mutants}, "
-            f"幸存: {self.state.global_survived_mutants}"
-        )
+        if self.state.global_mutation_enabled:
+            logger.info(f"  变异分数: {self.state.global_mutation_score:.1%}")
+            logger.info(f"  总变异体数: {self.state.global_total_mutants}")
+            logger.info(
+                f"  已击杀: {self.state.global_killed_mutants}, "
+                f"幸存: {self.state.global_survived_mutants}"
+            )
+        else:
+            logger.info("  变异分析: 未启用")
         logger.info("")
         logger.info("覆盖率:")
         logger.info(f"  行覆盖率: {self.state.line_coverage:.1%}")
@@ -1136,6 +1219,23 @@ class ParallelPlannerAgent:
         for key, value in self.state.parallel_stats.items():
             logger.info(f"  {key}: {value}")
         logger.info("=" * 60)
+
+    def _resolve_mutation_enabled(self) -> bool:
+        mutation_enabled = True
+        tools = getattr(self, "tools", None)
+        tools_config = getattr(tools, "config", None)
+        if tools_config is not None:
+            try:
+                mutation_enabled = bool(tools_config.evolution.mutation_enabled)
+            except AttributeError:
+                mutation_enabled = True
+        return mutation_enabled
+
+    def _is_mutation_enabled(self) -> bool:
+        if hasattr(self, "mutation_enabled"):
+            return bool(self.mutation_enabled)
+        self.mutation_enabled = self._resolve_mutation_enabled()
+        return bool(self.mutation_enabled)
 
     def save_state(self, file_path: str) -> None:
         """保存状态"""

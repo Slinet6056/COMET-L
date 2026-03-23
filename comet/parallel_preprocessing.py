@@ -102,6 +102,11 @@ class ParallelPreprocessor:
         except AttributeError:
             self.min_method_lines = 5
 
+        try:
+            self.mutation_enabled = config.evolution.mutation_enabled
+        except AttributeError:
+            self.mutation_enabled = True
+
         # 如果未指定max_workers，使用默认值
         if self.max_workers is None:
             import multiprocessing
@@ -785,6 +790,14 @@ class ParallelPreprocessor:
 
             # 记录测试数量（但不保存到数据库）
             result["tests"] = len(test_case.methods)
+
+            if not self.mutation_enabled:
+                logger.info(
+                    f"变异分析已禁用，跳过变异体生成与击杀矩阵构建: {class_name}.{method_name}"
+                )
+                self._stage_preprocessing_result(test_case, [])
+                result["success"] = True
+                return result
 
             # 2. 生成变异体
             mutants = self.mutant_generator.generate_mutants(

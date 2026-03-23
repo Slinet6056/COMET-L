@@ -13,6 +13,34 @@ from ..utils.method_keys import build_method_key
 logger = logging.getLogger(__name__)
 
 
+def _first_present(data: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in data:
+            return data[key]
+    return None
+
+
+def _mutation_enabled_from_payload(data: Dict[str, Any]) -> bool:
+    mutation_enabled = _first_present(data, "global_mutation_enabled", "globalMutationEnabled")
+    if isinstance(mutation_enabled, bool):
+        return mutation_enabled
+    return True
+
+
+def _mutation_metric_from_payload(
+    data: Dict[str, Any],
+    *keys: str,
+    default: Any,
+    mutation_enabled: bool,
+) -> Any:
+    value = _first_present(data, *keys)
+    if value is not None or any(key in data for key in keys):
+        return value
+    if not mutation_enabled:
+        return None
+    return default
+
+
 class AgentState:
     """Agent 状态 - 记录当前迭代的状态"""
 
@@ -25,6 +53,7 @@ class AgentState:
         self.global_killed_mutants = 0
         self.global_survived_mutants = 0
         self.global_mutation_score = 0.0
+        self.global_mutation_enabled = True
 
         # 当前目标统计（只统计当前目标方法的 valid 变异体）
         self.total_mutants = 0
@@ -220,6 +249,7 @@ class AgentState:
             "global_killed_mutants": self.global_killed_mutants,
             "global_survived_mutants": self.global_survived_mutants,
             "global_mutation_score": self.global_mutation_score,
+            "global_mutation_enabled": self.global_mutation_enabled,
             # 当前目标统计
             "total_mutants": self.total_mutants,
             "killed_mutants": self.killed_mutants,
@@ -248,23 +278,74 @@ class AgentState:
             "decisionReasoning": self.decision_reasoning,
             "recentImprovements": self.recent_improvements,
             "improvementSummary": self.improvement_summary,
+            "globalMutationEnabled": self.global_mutation_enabled,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AgentState":
         """从字典创建"""
         state = cls()
+        mutation_enabled = _mutation_enabled_from_payload(data)
         state.iteration = data.get("iteration", 0)
         # 全局统计
-        state.global_total_mutants = data.get("global_total_mutants", 0)
-        state.global_killed_mutants = data.get("global_killed_mutants", 0)
-        state.global_survived_mutants = data.get("global_survived_mutants", 0)
-        state.global_mutation_score = data.get("global_mutation_score", 0.0)
+        state.global_total_mutants = _mutation_metric_from_payload(
+            data,
+            "global_total_mutants",
+            "globalTotalMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.global_killed_mutants = _mutation_metric_from_payload(
+            data,
+            "global_killed_mutants",
+            "globalKilledMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.global_survived_mutants = _mutation_metric_from_payload(
+            data,
+            "global_survived_mutants",
+            "globalSurvivedMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.global_mutation_score = _mutation_metric_from_payload(
+            data,
+            "global_mutation_score",
+            "globalMutationScore",
+            default=0.0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.global_mutation_enabled = mutation_enabled
         # 当前目标统计
-        state.total_mutants = data.get("total_mutants", 0)
-        state.killed_mutants = data.get("killed_mutants", 0)
-        state.survived_mutants = data.get("survived_mutants", 0)
-        state.mutation_score = data.get("mutation_score", 0.0)
+        state.total_mutants = _mutation_metric_from_payload(
+            data,
+            "total_mutants",
+            "totalMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.killed_mutants = _mutation_metric_from_payload(
+            data,
+            "killed_mutants",
+            "killedMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.survived_mutants = _mutation_metric_from_payload(
+            data,
+            "survived_mutants",
+            "survivedMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.mutation_score = _mutation_metric_from_payload(
+            data,
+            "mutation_score",
+            "mutationScore",
+            default=0.0,
+            mutation_enabled=mutation_enabled,
+        )
         # 通用统计
         state.total_tests = data.get("total_tests", 0)
         state.line_coverage = data.get("line_coverage", 0.0)
@@ -327,12 +408,13 @@ class WorkerResult:
 
     # 生成结果
     tests_generated: int = 0
-    mutants_generated: int = 0
+    mutants_generated: int | None = 0
 
     # 评估结果
-    mutants_evaluated: int = 0
-    mutants_killed: int = 0
-    local_mutation_score: float = 0.0
+    mutants_evaluated: int | None = 0
+    mutants_killed: int | None = 0
+    local_mutation_score: float | None = 0.0
+    mutation_enabled: bool = True
 
     # 测试文件（路径 -> 内容）
     test_files: Dict[str, str] = field(default_factory=dict)
@@ -355,6 +437,7 @@ class WorkerResult:
             "mutants_evaluated": self.mutants_evaluated,
             "mutants_killed": self.mutants_killed,
             "local_mutation_score": self.local_mutation_score,
+            "mutation_enabled": self.mutation_enabled,
             "test_files": self.test_files,
             "processing_time": self.processing_time,
             "method_coverage": self.method_coverage,
@@ -367,6 +450,7 @@ class WorkerResult:
             "mutantsEvaluated": self.mutants_evaluated,
             "mutantsKilled": self.mutants_killed,
             "localMutationScore": self.local_mutation_score,
+            "mutationEnabled": self.mutation_enabled,
             "processingTime": self.processing_time,
             "methodCoverage": self.method_coverage,
         }
@@ -384,6 +468,7 @@ class WorkerResult:
             "mutantsEvaluated": self.mutants_evaluated,
             "mutantsKilled": self.mutants_killed,
             "localMutationScore": self.local_mutation_score,
+            "mutationEnabled": self.mutation_enabled,
             "processingTime": self.processing_time,
             "methodCoverage": self.method_coverage,
         }
@@ -404,6 +489,7 @@ class WorkerResult:
             local_mutation_score=data.get(
                 "local_mutation_score", data.get("localMutationScore", 0.0)
             ),
+            mutation_enabled=data.get("mutation_enabled", data.get("mutationEnabled", True)),
             test_files=data.get("test_files", {}),
             processing_time=data.get("processing_time", data.get("processingTime", 0.0)),
             method_coverage=data.get("method_coverage", data.get("methodCoverage")),
@@ -639,6 +725,7 @@ class ParallelAgentState(AgentState):
         killed_mutants: int,
         line_coverage: float,
         branch_coverage: float,
+        mutation_enabled: bool = True,
     ) -> None:
         """
         从批次结果更新全局统计（在同步阶段调用）
@@ -650,12 +737,19 @@ class ParallelAgentState(AgentState):
             branch_coverage: 全局分支覆盖率
         """
         with self._lock:
-            self.global_total_mutants = total_mutants
-            self.global_killed_mutants = killed_mutants
-            self.global_survived_mutants = total_mutants - killed_mutants
-            self.global_mutation_score = (
-                killed_mutants / total_mutants if total_mutants > 0 else 0.0
-            )
+            self.global_mutation_enabled = mutation_enabled
+            if mutation_enabled:
+                self.global_total_mutants = total_mutants
+                self.global_killed_mutants = killed_mutants
+                self.global_survived_mutants = total_mutants - killed_mutants
+                self.global_mutation_score = (
+                    killed_mutants / total_mutants if total_mutants > 0 else 0.0
+                )
+            else:
+                self.global_total_mutants = None
+                self.global_killed_mutants = None
+                self.global_survived_mutants = None
+                self.global_mutation_score = None
             self.line_coverage = line_coverage
             self.branch_coverage = branch_coverage
             self.last_update = datetime.now()
@@ -690,16 +784,66 @@ class ParallelAgentState(AgentState):
     def from_dict(cls, data: Dict[str, Any]) -> "ParallelAgentState":
         """从字典创建"""
         state = cls()
+        mutation_enabled = _mutation_enabled_from_payload(data)
         # 调用父类的 from_dict 逻辑
         state.iteration = data.get("iteration", 0)
-        state.global_total_mutants = data.get("global_total_mutants", 0)
-        state.global_killed_mutants = data.get("global_killed_mutants", 0)
-        state.global_survived_mutants = data.get("global_survived_mutants", 0)
-        state.global_mutation_score = data.get("global_mutation_score", 0.0)
-        state.total_mutants = data.get("total_mutants", 0)
-        state.killed_mutants = data.get("killed_mutants", 0)
-        state.survived_mutants = data.get("survived_mutants", 0)
-        state.mutation_score = data.get("mutation_score", 0.0)
+        state.global_total_mutants = _mutation_metric_from_payload(
+            data,
+            "global_total_mutants",
+            "globalTotalMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.global_killed_mutants = _mutation_metric_from_payload(
+            data,
+            "global_killed_mutants",
+            "globalKilledMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.global_survived_mutants = _mutation_metric_from_payload(
+            data,
+            "global_survived_mutants",
+            "globalSurvivedMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.global_mutation_score = _mutation_metric_from_payload(
+            data,
+            "global_mutation_score",
+            "globalMutationScore",
+            default=0.0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.global_mutation_enabled = mutation_enabled
+        state.total_mutants = _mutation_metric_from_payload(
+            data,
+            "total_mutants",
+            "totalMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.killed_mutants = _mutation_metric_from_payload(
+            data,
+            "killed_mutants",
+            "killedMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.survived_mutants = _mutation_metric_from_payload(
+            data,
+            "survived_mutants",
+            "survivedMutants",
+            default=0,
+            mutation_enabled=mutation_enabled,
+        )
+        state.mutation_score = _mutation_metric_from_payload(
+            data,
+            "mutation_score",
+            "mutationScore",
+            default=0.0,
+            mutation_enabled=mutation_enabled,
+        )
         state.total_tests = data.get("total_tests", 0)
         state.line_coverage = data.get("line_coverage", 0.0)
         state.branch_coverage = data.get("branch_coverage", 0.0)
