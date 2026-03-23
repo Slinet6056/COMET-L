@@ -1,10 +1,11 @@
 """LLM 客户端封装"""
 
 import logging
+import queue
 import threading
 import time
 from math import ceil
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import httpx
 import tiktoken
@@ -49,13 +50,9 @@ class LLMClient:
             reasoning_enabled: 是否启用推理，None 表示不下发该配置
             verbosity: 响应详细程度，可选值: 'low', 'medium', 'high'
         """
-        # 使用简单的超时配置
-        # OpenAI SDK 会自动处理超时，我们在每次请求时传入
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            max_retries=0,  # 禁用SDK自动重试，我们自己处理重试逻辑
-        )
+        self.api_key = api_key
+        self.base_url = base_url
+        self.client = self._build_client()
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -67,6 +64,7 @@ class LLMClient:
         self.verbosity = verbosity
 
         # 统计信息
+        self._client_lock = threading.Lock()
         self._stats_lock = threading.Lock()
         self.total_calls = 0
         self.total_tokens = 0
@@ -143,7 +141,7 @@ class LLMClient:
                 )
                 logger.debug(f"开始请求 LLM，超时设置: {self.timeout}s")
 
-                response: ChatCompletion = self.client.chat.completions.create(**kwargs)
+                response = self._create_with_hard_timeout(kwargs)
 
                 elapsed = time.time() - start_time
                 logger.debug(f"LLM 请求完成，耗时: {elapsed:.2f}s")
@@ -199,6 +197,61 @@ class LLMClient:
                 time.sleep(2**attempt)  # 指数退避
 
         raise RuntimeError("LLM 调用失败，已达最大重试次数")
+
+    def _build_client(self) -> OpenAI:
+        return OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            max_retries=0,
+        )
+
+    def _reset_client(self) -> None:
+        with self._client_lock:
+            old_client = self.client
+            self.client = self._build_client()
+
+        close = getattr(old_client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as exc:
+                logger.warning(f"关闭 LLM 客户端失败，将继续重建客户端: {exc}")
+
+    def _create_with_hard_timeout(self, kwargs: Dict[str, Any]) -> ChatCompletion:
+        result_queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+
+        with self._client_lock:
+            client = self.client
+
+        def _worker() -> None:
+            try:
+                response = client.chat.completions.create(**kwargs)
+                result_queue.put(("response", response))
+            except Exception as exc:
+                result_queue.put(("exception", exc))
+
+        worker = threading.Thread(target=_worker, daemon=True)
+        worker.start()
+        worker.join(timeout=self.timeout)
+
+        if worker.is_alive():
+            self._reset_client()
+            raise self._hard_timeout_error()
+
+        try:
+            result_type, payload = result_queue.get_nowait()
+        except queue.Empty as exc:
+            raise RuntimeError("LLM 请求线程已结束，但未返回结果") from exc
+
+        if result_type == "exception":
+            if isinstance(payload, Exception):
+                raise payload
+            raise RuntimeError("LLM 请求线程返回了非异常错误对象")
+
+        return cast(ChatCompletion, payload)
+
+    def _hard_timeout_error(self) -> httpx.ReadTimeout:
+        return httpx.ReadTimeout(f"LLM 请求超过硬超时限制 {self.timeout}s")
 
     def _estimate_prompt_tokens(self, messages: List[Dict[str, str]]) -> int:
         text_parts: List[str] = []

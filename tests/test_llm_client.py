@@ -1,10 +1,14 @@
+import time
 import unittest
+from typing import cast
 from unittest.mock import patch
 
 import httpx
 from openai import APITimeoutError
 
 from comet.llm.client import LLMClient
+
+_REAL_SLEEP = time.sleep
 
 
 class LLMClientReasoningEnabledTest(unittest.TestCase):
@@ -109,8 +113,10 @@ class LLMClientTimeoutTest(unittest.TestCase):
         with patch.object(client.client.chat.completions, "create", side_effect=_fake_create):
             result = client.chat([{"role": "user", "content": "hello"}])
 
+        timeout_value = cast(float, captured_kwargs["timeout"])
         self.assertEqual(result, "ok")
-        self.assertEqual(captured_kwargs["timeout"], 3.5)
+        self.assertGreater(timeout_value, 3.0)
+        self.assertLessEqual(timeout_value, 3.5)
 
     def test_chat_retries_on_openai_timeout(self) -> None:
         client = LLMClient(
@@ -136,6 +142,59 @@ class LLMClientTimeoutTest(unittest.TestCase):
                 client.chat([{"role": "user", "content": "hello"}])
 
         self.assertEqual(attempts, 2)
+        mock_sleep.assert_called_once()
+        self.assertGreater(mock_sleep.call_args.args[0], 0)
+        self.assertLessEqual(mock_sleep.call_args.args[0], 1)
+        self.assertIn("LLM 请求超时", str(ctx.exception))
+
+    def test_chat_enforces_hard_timeout(self) -> None:
+        client = LLMClient(
+            api_key="test-key",
+            base_url="https://example.com/v1",
+            model="test-model",
+            max_retries=1,
+            timeout=0.05,
+        )
+
+        def _slow_create(**_: object) -> object:
+            _REAL_SLEEP(0.2)
+            return object()
+
+        start = time.monotonic()
+        with patch.object(client.client.chat.completions, "create", side_effect=_slow_create):
+            with self.assertRaises(RuntimeError) as ctx:
+                client.chat([{"role": "user", "content": "hello"}])
+        elapsed = time.monotonic() - start
+
+        self.assertLess(elapsed, 0.15)
+        self.assertIn("LLM 请求超时", str(ctx.exception))
+
+    def test_chat_retries_on_hard_timeout(self) -> None:
+        client = LLMClient(
+            api_key="test-key",
+            base_url="https://example.com/v1",
+            model="test-model",
+            max_retries=2,
+            timeout=0.05,
+        )
+        attempts = 0
+
+        def _slow_create(**_: object) -> object:
+            nonlocal attempts
+            attempts += 1
+            _REAL_SLEEP(0.2)
+            return object()
+
+        with (
+            patch.object(client.client.chat.completions, "create", side_effect=_slow_create),
+            patch.object(client, "_reset_client") as mock_reset_client,
+            patch("comet.llm.client.time.sleep") as mock_sleep,
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                client.chat([{"role": "user", "content": "hello"}])
+
+        self.assertEqual(attempts, 2)
+        self.assertEqual(mock_reset_client.call_count, 2)
         mock_sleep.assert_called_once_with(1)
         self.assertIn("LLM 请求超时", str(ctx.exception))
 
