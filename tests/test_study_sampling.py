@@ -39,6 +39,52 @@ class _FakeDatabase:
 
 
 class StudySamplingTest(unittest.TestCase):
+    def test_discover_cold_start_methods_only_reads_src_main_java(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            source_dir = Path(tmp_dir) / "src" / "main" / "java" / "pkg"
+            evosuite_dir = Path(tmp_dir) / ".evosuite" / "best-tests" / "pkg"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            evosuite_dir.mkdir(parents=True, exist_ok=True)
+
+            main_file_path = source_dir / "Alpha.java"
+            ignored_file_path = evosuite_dir / "Alpha_ESTest.java"
+            _ = main_file_path.write_text("public class Alpha {}\n", encoding="utf-8")
+            _ = ignored_file_path.write_text("public class Alpha_ESTest {}\n", encoding="utf-8")
+
+            executor = _FakeJavaExecutor(
+                cast(
+                    dict[str, list[MethodRecord]],
+                    {
+                        str(main_file_path): [
+                            {
+                                "className": "Alpha",
+                                "name": "run",
+                                "signature": "public void run()",
+                                "range": {"begin": 1, "end": 3},
+                            }
+                        ],
+                        str(ignored_file_path): [
+                            {
+                                "className": "Alpha_ESTest",
+                                "name": "test00",
+                                "signature": "public void test00()",
+                                "range": {"begin": 1, "end": 3},
+                            }
+                        ],
+                    },
+                )
+            )
+
+            discovered = discover_cold_start_methods(
+                project_path=tmp_dir,
+                java_executor=executor,
+                db=None,
+                min_method_lines=1,
+            )
+
+            self.assertEqual([item.class_name for item in discovered], ["Alpha"])
+            self.assertEqual([item.method_name for item in discovered], ["run"])
+
     def test_discover_cold_start_methods_excludes_interface_methods(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             source_dir = f"{tmp_dir}/src/main/java/pkg"

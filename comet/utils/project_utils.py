@@ -23,15 +23,12 @@ def find_java_files(project_path: str, pattern: str = "**/*.java") -> List[Path]
         logger.warning(f"项目路径不存在: {project_path}")
         return []
 
-    # 排除测试文件
-    files = []
-    for file_path in project.glob(pattern):
-        # 跳过测试目录
-        if "/test/" in str(file_path) or "\\test\\" in str(file_path):
-            continue
-        files.append(file_path)
+    source_root = get_source_root(project_path)
+    if source_root is None:
+        logger.warning(f"未找到源码目录 src/main/java: {project_path}")
+        return []
 
-    return files
+    return [file_path for file_path in source_root.glob(pattern) if file_path.is_file()]
 
 
 def find_java_file(project_path: str, class_name: str, db=None) -> Optional[Path]:
@@ -75,15 +72,6 @@ def find_java_file(project_path: str, class_name: str, db=None) -> Optional[Path
             logger.info(f"找到文件: {file_path}")
             return file_path
 
-    # 如果没找到，尝试在整个项目中查找
-    project = Path(project_path)
-    for file_path in project.rglob(expected_filename):
-        # 跳过测试文件
-        if "/test/" in str(file_path) or "\\test\\" in str(file_path):
-            continue
-        logger.info(f"找到文件: {file_path}")
-        return file_path
-
     logger.warning(f"未找到类文件: {class_name}")
     return None
 
@@ -103,11 +91,6 @@ def get_source_root(project_path: str) -> Optional[Path]:
 
     if source_root.exists():
         return source_root
-
-    # 尝试其他常见结构
-    alt_root = project / "src"
-    if alt_root.exists():
-        return alt_root
 
     return None
 
