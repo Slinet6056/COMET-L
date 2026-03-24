@@ -876,6 +876,11 @@ class AgentTools:
         # 使用传入的 project_path 或默认的 self.project_path
         # 这样可以支持并发执行，每个线程使用独立的沙箱
         work_path = project_path or self.project_path
+        full_test_class_name = (
+            f"{test_case.package_name}.{test_case.class_name}"
+            if test_case.package_name
+            else test_case.class_name
+        )
 
         surefire_parser = SurefireParser()
         reports_dir = os.path.join(work_path, "target", "surefire-reports")
@@ -1041,19 +1046,34 @@ class AgentTools:
             test_case.compile_error = "测试运行失败且无法解析报告"
             return test_case
 
+        relevant_test_results = self._filter_surefire_results_for_test_case(
+            suite_results, test_case.class_name, full_test_class_name
+        )
+
+        if not relevant_test_results:
+            logger.warning(f"Surefire 报告中未找到当前测试类结果: {full_test_class_name}")
+            test_case.compile_success = False
+            test_case.compile_error = "测试运行失败且无法定位当前测试类报告"
+            return test_case
+
         # 收集失败的方法
         failed_methods = {}  # {method_name: error_message}
         passed_methods = set()
 
-        for suite in suite_results:
-            for test in suite.test_cases:
-                if test.passed:
-                    passed_methods.add(test.method_name)
-                else:
-                    error_msg = test.error_message or test.failure_message or "Unknown error"
-                    failed_methods[test.method_name] = error_msg
+        for test in relevant_test_results:
+            if test.passed:
+                passed_methods.add(test.method_name)
+            else:
+                error_msg = test.error_message or test.failure_message or "Unknown error"
+                failed_methods[test.method_name] = error_msg
 
         logger.info(f"测试结果: {len(passed_methods)} 个通过, {len(failed_methods)} 个失败")
+
+        if not failed_methods:
+            logger.info(f"当前测试类 {full_test_class_name} 的方法全部通过，忽略其他测试套件失败")
+            test_case.compile_success = True
+            test_case.compile_error = None
+            return test_case
 
         if failed_methods:
             for method_name, error in failed_methods.items():
@@ -1119,7 +1139,9 @@ class AgentTools:
 
                 compile_res = self.java_executor.compile_tests(work_path)
                 if compile_res.get("success"):
-                    test_res = self.java_executor.run_tests(work_path)
+                    test_res = self.java_executor.run_single_test_method(
+                        work_path, full_test_class_name, method_name
+                    )
                     if test_res.get("success"):
                         logger.info(f"✓ 方法 {method_name} 修复成功")
                         fixed_methods[method_name] = fixed_code
@@ -1191,6 +1213,22 @@ class AgentTools:
                 test_case.compile_success = True
                 test_case.compile_error = None
             else:
+                final_suite_results = surefire_parser.parse_surefire_reports(reports_dir)
+                relevant_final_results = self._filter_surefire_results_for_test_case(
+                    final_suite_results, test_case.class_name, full_test_class_name
+                )
+                if relevant_final_results and all(test.passed for test in relevant_final_results):
+                    logger.info(
+                        f"当前测试类 {full_test_class_name} 的方法全部通过，忽略其他测试套件失败"
+                    )
+                    test_case.compile_success = True
+                    test_case.compile_error = None
+                    logger.info(f"✓ 最终测试验证成功！保留 {len(final_methods)} 个方法")
+                    logger.info(
+                        f"测试验证完成: 丢弃了 {len(discarded_methods)} 个方法, 保留了 {len(final_methods)} 个方法"
+                    )
+                    return test_case
+
                 final_test_error = (
                     final_test.get("error")
                     or final_test.get("raw_output")
@@ -1225,6 +1263,42 @@ class AgentTools:
         )
 
         return test_case
+
+    def _filter_surefire_results_for_test_case(
+        self,
+        suite_results,
+        test_class_name: str,
+        full_test_class_name: str,
+    ):
+        exact_match_tests = []
+        fallback_tests = []
+
+        for suite in suite_results:
+            suite_name = getattr(suite, "name", "") or ""
+            exact_suite_match = suite_name == full_test_class_name
+            fallback_suite_match = suite_name == test_class_name or suite_name.endswith(
+                f".{test_class_name}"
+            )
+
+            exact_matching_tests = []
+            fallback_matching_tests = []
+            for test in getattr(suite, "test_cases", []):
+                class_name = getattr(test, "class_name", "") or ""
+                if class_name == full_test_class_name:
+                    exact_matching_tests.append(test)
+                elif class_name == test_class_name or class_name.endswith(f".{test_class_name}"):
+                    fallback_matching_tests.append(test)
+
+            if exact_matching_tests:
+                exact_match_tests.extend(exact_matching_tests)
+            elif fallback_matching_tests:
+                fallback_tests.extend(fallback_matching_tests)
+            elif exact_suite_match:
+                exact_match_tests.extend(getattr(suite, "test_cases", []))
+            elif fallback_suite_match:
+                fallback_tests.extend(getattr(suite, "test_cases", []))
+
+        return exact_match_tests if exact_match_tests else fallback_tests
 
     def _identify_timeout_methods(self, test_case, project_path: Optional[str] = None) -> set[str]:
         """

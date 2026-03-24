@@ -2,10 +2,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from comet.agent.state import AgentState
 from comet.agent.tools import AgentTools
+from comet.executor.surefire_parser import TestResult as SurefireTestResult
+from comet.executor.surefire_parser import TestSuiteResult as SurefireTestSuiteResult
 from comet.models import TestCase, TestMethod
 from comet.parallel_preprocessing import ParallelPreprocessor
 from comet.store.database import Database
@@ -103,7 +105,7 @@ class AgentToolsSignatureInheritanceTests(unittest.TestCase):
             java_file = Path(tmp_dir) / "Calculator.java"
             java_file.write_text("public class Calculator {}", encoding="utf-8")
             tools.project_path = tmp_dir
-            tools.db.find_class_file = Mock(return_value=str(java_file))
+            tools.db.get_class_file_path = Mock(return_value=str(java_file))
 
             tools.refine_mutants("Calculator", "add")
 
@@ -198,6 +200,281 @@ class AgentToolsMutationDisabledTests(unittest.TestCase):
 
         tools.db.get_method_mutant_stats.assert_not_called()
         tools.db.get_low_coverage_methods.assert_not_called()
+
+
+class AgentToolsVerifyAndFixTestsRegressionTests(unittest.TestCase):
+    def _build_tools(self) -> AgentTools:
+        tools = AgentTools()
+        tools.project_path = "/tmp/project"
+        tools.java_executor = Mock()
+        tools.test_generator = Mock()
+        tools._get_formatting_config = Mock(return_value=(False, "GOOGLE"))
+        return tools
+
+    def _build_test_case(self, method_code: str) -> TestCase:
+        return TestCase(
+            id="test-1",
+            class_name="GeneratedTest",
+            target_class="DefaultParser",
+            package_name="com.example",
+            imports=[],
+            methods=[
+                TestMethod(
+                    method_name="testSharedName",
+                    code=method_code,
+                    target_method="parse",
+                    target_method_signature="CommandLine parse(Options, String[])",
+                )
+            ],
+            full_code=build_test_class(
+                test_class_name="GeneratedTest",
+                target_class="DefaultParser",
+                package_name="com.example",
+                imports=[],
+                test_methods=[method_code],
+            ),
+        )
+
+    def test_verify_and_fix_tests_prefers_current_class_results_when_method_names_overlap(
+        self,
+    ) -> None:
+        tools = self._build_tools()
+        original_code = "@Test\nvoid testSharedName() { assertTrue(false); }"
+        fixed_code = "@Test\nvoid testSharedName() { assertTrue(true); }"
+        test_case = self._build_test_case(original_code)
+
+        tools.java_executor.compile_tests.side_effect = [
+            {"success": True},
+            {"success": True},
+            {"success": True},
+        ]
+        tools.java_executor.run_tests.side_effect = [
+            {"success": False, "error": "suite failed"},
+            {"success": True},
+        ]
+        tools.java_executor.run_single_test_method.return_value = {"success": True}
+        tools.test_generator.fix_single_method.return_value = fixed_code
+
+        suite_results = [
+            SurefireTestSuiteResult(
+                name="com.other.OtherGeneratedTest",
+                total_tests=1,
+                passed_tests=1,
+                failed_tests=0,
+                error_tests=0,
+                skipped_tests=0,
+                time=0.1,
+                test_cases=[
+                    SurefireTestResult(
+                        class_name="com.other.OtherGeneratedTest",
+                        method_name="testSharedName",
+                        time=0.1,
+                        passed=True,
+                    )
+                ],
+            ),
+            SurefireTestSuiteResult(
+                name="com.example.GeneratedTest",
+                total_tests=1,
+                passed_tests=0,
+                failed_tests=1,
+                error_tests=0,
+                skipped_tests=0,
+                time=0.1,
+                test_cases=[
+                    SurefireTestResult(
+                        class_name="com.example.GeneratedTest",
+                        method_name="testSharedName",
+                        time=0.1,
+                        passed=False,
+                        failure_message="boom",
+                    )
+                ],
+            ),
+        ]
+
+        with (
+            patch(
+                "comet.executor.surefire_parser.SurefireParser.parse_surefire_reports",
+                return_value=suite_results,
+            ),
+            patch(
+                "comet.utils.project_utils.write_test_file",
+                return_value=Path("/tmp/GeneratedTest.java"),
+            ),
+        ):
+            result = tools._verify_and_fix_tests(
+                test_case,
+                class_code="public class DefaultParser {}",
+                project_path="/tmp/project",
+            )
+
+        self.assertTrue(result.compile_success)
+        self.assertEqual(result.methods[0].code, fixed_code)
+        tools.test_generator.fix_single_method.assert_called_once()
+        tools.java_executor.run_single_test_method.assert_called_once_with(
+            "/tmp/project",
+            "com.example.GeneratedTest",
+            "testSharedName",
+        )
+        self.assertEqual(tools.java_executor.run_tests.call_count, 2)
+
+    def test_verify_and_fix_tests_ignores_unrelated_failures_for_other_test_classes(self) -> None:
+        tools = self._build_tools()
+        original_code = "@Test\nvoid testSharedName() { assertTrue(true); }"
+        test_case = self._build_test_case(original_code)
+
+        tools.java_executor.compile_tests.return_value = {"success": True}
+        tools.java_executor.run_tests.return_value = {"success": False, "error": "suite failed"}
+
+        suite_results = [
+            SurefireTestSuiteResult(
+                name="com.example.GeneratedTest",
+                total_tests=1,
+                passed_tests=1,
+                failed_tests=0,
+                error_tests=0,
+                skipped_tests=0,
+                time=0.1,
+                test_cases=[
+                    SurefireTestResult(
+                        class_name="com.example.GeneratedTest",
+                        method_name="testSharedName",
+                        time=0.1,
+                        passed=True,
+                    )
+                ],
+            ),
+            SurefireTestSuiteResult(
+                name="com.other.OtherGeneratedTest",
+                total_tests=1,
+                passed_tests=0,
+                failed_tests=1,
+                error_tests=0,
+                skipped_tests=0,
+                time=0.1,
+                test_cases=[
+                    SurefireTestResult(
+                        class_name="com.other.OtherGeneratedTest",
+                        method_name="testSharedName",
+                        time=0.1,
+                        passed=False,
+                        failure_message="boom",
+                    )
+                ],
+            ),
+        ]
+
+        with patch(
+            "comet.executor.surefire_parser.SurefireParser.parse_surefire_reports",
+            return_value=suite_results,
+        ):
+            result = tools._verify_and_fix_tests(
+                test_case,
+                class_code="public class DefaultParser {}",
+                project_path="/tmp/project",
+            )
+
+        self.assertTrue(result.compile_success)
+        self.assertIsNone(result.compile_error)
+        tools.test_generator.fix_single_method.assert_not_called()
+        tools.java_executor.run_single_test_method.assert_not_called()
+
+    def test_verify_and_fix_tests_accepts_final_success_when_only_other_suites_fail(self) -> None:
+        tools = self._build_tools()
+        original_code = "@Test\nvoid testSharedName() { assertTrue(false); }"
+        fixed_code = "@Test\nvoid testSharedName() { assertTrue(true); }"
+        test_case = self._build_test_case(original_code)
+
+        tools.java_executor.compile_tests.side_effect = [
+            {"success": True},
+            {"success": True},
+            {"success": True},
+        ]
+        tools.java_executor.run_tests.side_effect = [
+            {"success": False, "error": "suite failed"},
+            {"success": False, "error": "other suite failed"},
+        ]
+        tools.java_executor.run_single_test_method.return_value = {"success": True}
+        tools.test_generator.fix_single_method.return_value = fixed_code
+
+        initial_suite_results = [
+            SurefireTestSuiteResult(
+                name="com.example.GeneratedTest",
+                total_tests=1,
+                passed_tests=0,
+                failed_tests=1,
+                error_tests=0,
+                skipped_tests=0,
+                time=0.1,
+                test_cases=[
+                    SurefireTestResult(
+                        class_name="com.example.GeneratedTest",
+                        method_name="testSharedName",
+                        time=0.1,
+                        passed=False,
+                        failure_message="boom",
+                    )
+                ],
+            )
+        ]
+        final_suite_results = [
+            SurefireTestSuiteResult(
+                name="com.example.GeneratedTest",
+                total_tests=1,
+                passed_tests=1,
+                failed_tests=0,
+                error_tests=0,
+                skipped_tests=0,
+                time=0.1,
+                test_cases=[
+                    SurefireTestResult(
+                        class_name="com.example.GeneratedTest",
+                        method_name="testSharedName",
+                        time=0.1,
+                        passed=True,
+                    )
+                ],
+            ),
+            SurefireTestSuiteResult(
+                name="com.other.OtherGeneratedTest",
+                total_tests=1,
+                passed_tests=0,
+                failed_tests=1,
+                error_tests=0,
+                skipped_tests=0,
+                time=0.1,
+                test_cases=[
+                    SurefireTestResult(
+                        class_name="com.other.OtherGeneratedTest",
+                        method_name="testSharedName",
+                        time=0.1,
+                        passed=False,
+                        failure_message="boom",
+                    )
+                ],
+            ),
+        ]
+
+        with (
+            patch(
+                "comet.executor.surefire_parser.SurefireParser.parse_surefire_reports",
+                side_effect=[initial_suite_results, final_suite_results],
+            ),
+            patch(
+                "comet.utils.project_utils.write_test_file",
+                return_value=Path("/tmp/GeneratedTest.java"),
+            ),
+        ):
+            result = tools._verify_and_fix_tests(
+                test_case,
+                class_code="public class DefaultParser {}",
+                project_path="/tmp/project",
+            )
+
+        self.assertTrue(result.compile_success)
+        self.assertIsNone(result.compile_error)
+        self.assertEqual(result.methods[0].code, fixed_code)
 
 
 class DatabaseMethodSignatureIsolationTests(unittest.TestCase):
