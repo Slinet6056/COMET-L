@@ -269,7 +269,7 @@ class ParallelPlannerLoggingTest(unittest.TestCase):
         self.assertIsNone(result.local_mutation_score)
         self.assertFalse(result.mutation_enabled)
 
-    def test_process_single_target_skips_waiting_for_mutants_when_blacklisted_midflight(self):
+    def test_process_single_target_continues_waiting_for_mutants_when_blacklisted_midflight(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"
         planner.timeout_per_target = 75
@@ -301,7 +301,7 @@ class ParallelPlannerLoggingTest(unittest.TestCase):
         }
 
         test_future = FakeWorkerFuture(result_value={"generated": 1, "test_files": {}})
-        mutant_future = FakeWorkerFuture(fail_on_result=True)
+        mutant_future = FakeWorkerFuture(result_value={"generated": 0})
 
         with patch(
             "comet.agent.parallel_planner.submit_with_log_context",
@@ -316,7 +316,7 @@ class ParallelPlannerLoggingTest(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(result.mutants_generated, 0)
-        self.assertEqual(mutant_future.result_calls, 0)
+        self.assertEqual(mutant_future.result_calls, 1)
 
 
 class ParallelPlannerFrontierAwareStopTest(unittest.TestCase):

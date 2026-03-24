@@ -30,6 +30,28 @@ class FailedTargetSignatureTests(unittest.TestCase):
         )
         self.assertEqual(state.failed_targets[0]["method_signature"], "int add(int a, int b)")
 
+    def test_add_failed_target_deduplicates_same_target(self) -> None:
+        state = AgentState()
+
+        state.add_failed_target(
+            "Calculator",
+            "add",
+            "boom",
+            "int add(int a, int b)",
+        )
+        state.add_failed_target(
+            "Calculator",
+            "add",
+            "boom again",
+            "int add(int a, int b)",
+        )
+
+        self.assertEqual(len(state.failed_targets), 1)
+        self.assertEqual(
+            state.failed_targets[0]["target"],
+            build_method_key("Calculator", "add", "int add(int a, int b)"),
+        )
+
 
 class AgentToolsSignatureInheritanceTests(unittest.TestCase):
     def test_generate_tests_inherits_current_target_signature(self) -> None:

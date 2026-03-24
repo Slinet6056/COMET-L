@@ -677,7 +677,7 @@ class ParallelPlannerAgent:
             return True
         if not test_result or test_result.get("generated", 0) <= 0:
             return True
-        return self._is_target_blacklisted(class_name, method_name, method_signature)
+        return False
 
     def _is_target_blacklisted(
         self,

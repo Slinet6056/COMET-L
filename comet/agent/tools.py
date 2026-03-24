@@ -1530,37 +1530,12 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = build_method_key(class_name, method_name, method_signature)
-                if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
-                    self.state.failed_targets.append(
-                        {
-                            "target": target_key,
-                            "class_name": class_name,
-                            "method_name": method_name,
-                            "method_signature": method_signature,
-                            "reason": "测试生成/验证失败（已在沙箱中重试）",
-                            "error": result.get("error", "Unknown")[:500],
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                    logger.warning(f"已将 {target_key} 添加到失败黑名单")
-
-                    # 如果当前目标是被加入黑名单的目标，清除当前目标选中
-                    if self.state.current_target:
-                        current_class = self.state.current_target.get("class_name")
-                        current_method = self.state.current_target.get("method_name", "")
-                        current_target_key = (
-                            build_method_key(
-                                current_class,
-                                current_method,
-                                self.state.current_target.get("method_signature"),
-                            )
-                            if current_class
-                            else None
-                        )
-                        if current_target_key == target_key:
-                            logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
-                            self.state.update_target(None)
+                self.state.add_failed_target(
+                    class_name,
+                    method_name,
+                    "测试生成/验证失败（已在沙箱中重试）",
+                    method_signature,
+                )
 
             return {
                 "generated": 0,
@@ -1672,37 +1647,12 @@ class AgentTools:
 
             # 将这个目标添加到失败黑名单
             if self.state:
-                target_key = build_method_key(class_name, method_name, method_signature)
-                if not any(ft.get("target") == target_key for ft in self.state.failed_targets):
-                    self.state.failed_targets.append(
-                        {
-                            "target": target_key,
-                            "class_name": class_name,
-                            "method_name": method_name,
-                            "method_signature": method_signature,
-                            "reason": "测试完善/验证失败（已在沙箱中重试）",
-                            "error": result.get("error", "Unknown")[:500],
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                    logger.warning(f"已将 {target_key} 添加到失败黑名单")
-
-                    # 如果当前目标是被加入黑名单的目标，清除当前目标选中
-                    if self.state.current_target:
-                        current_class = self.state.current_target.get("class_name")
-                        current_method = self.state.current_target.get("method_name", "")
-                        current_target_key = (
-                            build_method_key(
-                                current_class,
-                                current_method,
-                                self.state.current_target.get("method_signature"),
-                            )
-                            if current_class
-                            else None
-                        )
-                        if current_target_key == target_key:
-                            logger.info(f"当前目标 {target_key} 已被加入黑名单，清除目标选中")
-                            self.state.update_target(None)
+                self.state.add_failed_target(
+                    class_name,
+                    method_name,
+                    "测试完善/验证失败（已在沙箱中重试）",
+                    method_signature,
+                )
 
             return {
                 "refined": 0,
