@@ -722,10 +722,11 @@ def run_study_command(
 def main():
     """主函数"""
     args = parse_args()
+    command = getattr(args, "command", "run")
 
     # 如果启用了debug模式，设置日志级别为DEBUG
     try:
-        if args.command == "study":
+        if command == "study":
             exit_code = run_study_command(args)
             if exit_code != 0:
                 sys.exit(exit_code)

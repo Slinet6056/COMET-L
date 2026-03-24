@@ -141,6 +141,58 @@ class _StudyCliFakeTools:
         )
         return {"generated": 1, "compile_success": True, "test_id": test_case.id}
 
+    def generate_mutants(
+        self,
+        class_name: str,
+        method_name: str | None = None,
+        method_signature: str | None = None,
+    ) -> dict[str, object]:
+        target_id = build_method_key(class_name, method_name, method_signature)
+        mutants = [
+            Mutant(
+                id=f"{target_id}-killed",
+                class_name=class_name,
+                method_name=method_name,
+                method_signature=method_signature,
+                patch=MutationPatch(
+                    file_path="src/main/java/com/example/Calculator.java",
+                    line_start=17,
+                    line_end=17,
+                    original_code="return a + b;",
+                    mutated_code="return a - b;",
+                    mutator="MathMutator",
+                    operator="MathMutator",
+                ),
+                status="valid",
+                survived=False,
+            ),
+            Mutant(
+                id=f"{target_id}-survived",
+                class_name=class_name,
+                method_name=method_name,
+                method_signature=method_signature,
+                patch=MutationPatch(
+                    file_path="src/main/java/com/example/Calculator.java",
+                    line_start=18,
+                    line_end=18,
+                    original_code="return a + b;",
+                    mutated_code="return a + 1;",
+                    mutator="NegateConditionalsMutator",
+                    operator="NegateConditionalsMutator",
+                ),
+                status="valid",
+                survived=True,
+            ),
+        ]
+        for mutant in mutants:
+            self.db.save_mutant(mutant)
+
+        return {
+            "generated": len(mutants),
+            "mutant_ids": [mutant.id for mutant in mutants],
+            "status": "completed",
+        }
+
     def refine_tests(
         self,
         class_name: str,
