@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import patch
 
 from comet.config.settings import LLMConfig, Settings
 from comet.knowledge.knowledge_base import RAGKnowledgeBase
@@ -564,6 +565,60 @@ class StudyRunnerTest(unittest.TestCase):
                 artifacts.sampled_methods_path.read_text(encoding="utf-8")
             )
             self.assertEqual(exported_manifest, methods)
+
+    def test_run_pit_mutation_coverage_uses_target_java_environment(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+
+            runtime_home = root / "runtime-java"
+            runtime_bin = runtime_home / "bin"
+            runtime_bin.mkdir(parents=True)
+            (runtime_bin / "java").write_text("", encoding="utf-8")
+
+            target_home = root / "target-java"
+            target_bin = target_home / "bin"
+            target_bin.mkdir(parents=True)
+            (target_bin / "java").write_text("", encoding="utf-8")
+            (target_bin / "javac").write_text("", encoding="utf-8")
+
+            maven_home = root / "maven-home"
+            maven_bin = maven_home / "bin"
+            maven_bin.mkdir(parents=True)
+            (maven_bin / "mvn").write_text("", encoding="utf-8")
+
+            settings.execution.runtime_java_home = str(runtime_home)
+            settings.execution.target_java_home = str(target_home)
+            settings.execution.maven_home = str(maven_home)
+
+            project_path = _create_isolated_project(root)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(root / "artifacts"),
+                settings=settings,
+            )
+
+            with patch("comet.web.study_runner.subprocess.run") as mock_run:
+                mock_run.return_value.returncode = 0
+                mock_run.return_value.stdout = "pit ok"
+                mock_run.return_value.stderr = ""
+
+                result = runner._run_pit_mutation_coverage(str(project_path))
+
+            self.assertTrue(result["success"])
+            mock_run.assert_called_once()
+            call_args = mock_run.call_args
+            self.assertEqual(
+                call_args.args[0][0],
+                str((maven_bin / "mvn").resolve()),
+            )
+            self.assertEqual(
+                call_args.kwargs["env"]["JAVA_HOME"],
+                str(target_home.resolve()),
+            )
+            self.assertTrue(
+                call_args.kwargs["env"]["PATH"].startswith(str(target_bin.resolve())),
+            )
 
     def test_runner_exports_partial_results_with_failures(self) -> None:
         with TemporaryDirectory() as tmp_dir:

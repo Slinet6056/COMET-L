@@ -633,9 +633,10 @@ class StudyRunner:
         if self.pit_runner is not None:
             return dict(self.pit_runner(project_path))
 
+        settings = self._require_settings()
         pom_path = Path(project_path) / "pom.xml"
         cmd = [
-            "mvn",
+            settings.execution.resolve_mvn_cmd(),
             "-q",
             "-f",
             str(pom_path),
@@ -643,7 +644,12 @@ class StudyRunner:
             _PIT_MUTATION_GOAL,
             "-DskipTests=false",
         ]
-        process = subprocess.run(cmd, capture_output=True, text=True)
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=settings.execution.build_target_subprocess_env(),
+        )
         stdout = process.stdout or ""
         stderr = process.stderr or ""
         if process.returncode == 0:
