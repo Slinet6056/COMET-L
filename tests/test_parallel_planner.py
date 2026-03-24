@@ -186,9 +186,11 @@ class FakeWorkerFuture:
         self.result_calls = 0
         self.cancel_calls = 0
         self.callbacks = []
+        self.timeouts = []
 
     def result(self, timeout: int | None = None):
         self.result_calls += 1
+        self.timeouts.append(timeout)
         if self.fail_on_result:
             raise AssertionError("unexpected result() call")
         if self.error is not None:
@@ -222,6 +224,7 @@ class ParallelPlannerLoggingTest(unittest.TestCase):
     def test_process_single_target_does_not_create_mutant_future_when_mutation_disabled(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"
+        planner.timeout_per_target = 75
         planner.mutation_enabled = False
         planner.sandbox_manager = cast(
             SandboxManager,
@@ -269,6 +272,7 @@ class ParallelPlannerLoggingTest(unittest.TestCase):
     def test_process_single_target_skips_waiting_for_mutants_when_blacklisted_midflight(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"
+        planner.timeout_per_target = 75
         planner.sandbox_manager = cast(
             SandboxManager,
             cast(object, FakeSandboxManager("/tmp/sandboxes/target-1")),
@@ -399,6 +403,7 @@ class ParallelPlannerExplorationSlotsTest(unittest.TestCase):
     def test_process_single_target_defers_cleanup_until_running_mutant_future_finishes(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"
+        planner.timeout_per_target = 75
         fake_sandbox_manager = FakeSandboxManager("/tmp/sandboxes/target-1")
         planner.sandbox_manager = cast(SandboxManager, cast(object, fake_sandbox_manager))
         planner.db = FakeTargetDatabase()
@@ -436,6 +441,7 @@ class ParallelPlannerExplorationSlotsTest(unittest.TestCase):
     def test_process_single_target_skips_waiting_for_mutants_after_test_failure(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"
+        planner.timeout_per_target = 75
         planner.sandbox_manager = cast(
             SandboxManager,
             cast(object, FakeSandboxManager("/tmp/sandboxes/target-1")),
@@ -471,6 +477,7 @@ class ParallelPlannerExplorationSlotsTest(unittest.TestCase):
     def test_process_single_target_logs_explicit_timeout_for_test_generation(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"
+        planner.timeout_per_target = 75
         fake_sandbox_manager = FakeSandboxManager("/tmp/sandboxes/target-1")
         planner.sandbox_manager = cast(SandboxManager, cast(object, fake_sandbox_manager))
         planner.db = FakeTargetDatabase()
@@ -482,12 +489,9 @@ class ParallelPlannerExplorationSlotsTest(unittest.TestCase):
             "method_coverage": 0.5,
         }
 
-        futures = iter(
-            [
-                FakeWorkerFuture(error=TimeoutError()),
-                FakeWorkerFuture(result_value={"generated": 1}),
-            ]
-        )
+        test_future = FakeWorkerFuture(error=TimeoutError())
+        mutant_future = FakeWorkerFuture(result_value={"generated": 1})
+        futures = iter([test_future, mutant_future])
 
         with patch(
             "comet.agent.parallel_planner.submit_with_log_context",
@@ -506,13 +510,15 @@ class ParallelPlannerExplorationSlotsTest(unittest.TestCase):
         self.assertIn("target-1", fake_sandbox_manager.cleaned)
         warning_output = "\n".join(captured_logs.output)
         self.assertIn(
-            "测试生成超时: org.example.Example#doWork:void doWork() (timeout=180s)", warning_output
+            "测试生成超时: org.example.Example#doWork:void doWork() (timeout=75s)", warning_output
         )
         self.assertNotIn("测试生成异常:", warning_output)
+        self.assertEqual(test_future.timeouts, [75])
 
     def test_process_single_target_does_not_block_after_mutant_generation_timeout(self):
         planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
         planner.project_path = "/tmp/project"
+        planner.timeout_per_target = 75
         fake_sandbox_manager = FakeSandboxManager("/tmp/sandboxes/target-1")
         planner.sandbox_manager = cast(SandboxManager, cast(object, fake_sandbox_manager))
         planner.db = FakeTargetDatabase()
@@ -555,9 +561,11 @@ class ParallelPlannerExplorationSlotsTest(unittest.TestCase):
 
         warning_output = "\n".join(captured_logs.output)
         self.assertIn(
-            "变异体生成超时: org.example.Example#doWork:void doWork() (timeout=180s)",
+            "变异体生成超时: org.example.Example#doWork:void doWork() (timeout=75s)",
             warning_output,
         )
+        self.assertEqual(test_future.timeouts, [75])
+        self.assertEqual(mutant_future.timeouts, [75])
 
         mutant_future.finish()
 

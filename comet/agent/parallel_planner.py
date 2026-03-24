@@ -452,6 +452,7 @@ class ParallelPlannerAgent:
         """_process_single_target 的实际实现"""
         start_time = time.time()
         mutation_enabled = self._is_mutation_enabled()
+        generation_timeout = self._get_generation_timeout()
 
         logger.info(f"开始处理: {target_id}")
 
@@ -504,9 +505,9 @@ class ParallelPlannerAgent:
                 # 获取结果
                 generation_failed = False
                 try:
-                    test_result = test_future.result(timeout=180)
+                    test_result = test_future.result(timeout=generation_timeout)
                 except FutureTimeoutError:
-                    logger.warning(f"测试生成超时: {target_id} (timeout=180s)")
+                    logger.warning(f"测试生成超时: {target_id} (timeout={generation_timeout}s)")
                     generation_failed = True
                 except Exception as e:
                     logger.warning(f"测试生成异常: {target_id} ({_format_exception_summary(e)})")
@@ -534,9 +535,11 @@ class ParallelPlannerAgent:
                         mutant_generation_timed_out = False
                         if mutant_future is not None:
                             try:
-                                mutant_result = mutant_future.result(timeout=180)
+                                mutant_result = mutant_future.result(timeout=generation_timeout)
                             except FutureTimeoutError:
-                                logger.warning(f"变异体生成超时: {target_id} (timeout=180s)")
+                                logger.warning(
+                                    f"变异体生成超时: {target_id} (timeout={generation_timeout}s)"
+                                )
                                 mutant_generation_timed_out = True
                             except Exception as e:
                                 logger.warning(
@@ -731,6 +734,9 @@ class ParallelPlannerAgent:
 
         logger.info(f"检测到后台生成任务仍在运行，延迟清理沙箱: {target_id}")
         return True
+
+    def _get_generation_timeout(self) -> int:
+        return getattr(self, "timeout_per_target", 300)
 
     def _generate_tests_in_sandbox(
         self,
