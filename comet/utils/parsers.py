@@ -27,7 +27,8 @@ def parse_mutation_response(response: str) -> List[Dict[str, Any]]:
         response: LLM 返回的原始文本
 
     Returns:
-        变异体数据列表，每个元素包含 line_start, line_end, original, mutated
+        变异体数据列表，每个元素包含 line_start, line_end, original, mutated，
+        以及可选的 mutator/operator 元数据
     """
     mutants = []
 
@@ -60,6 +61,14 @@ def parse_mutation_response(response: str) -> List[Dict[str, Any]]:
             line_start = int(lines_match.group(1))
             line_end = int(lines_match.group(2))
 
+            mutator_match = re.search(r"MUTATOR:\s*(.+)", part)
+            operator_match = re.search(r"OPERATOR:\s*(.+)", part)
+
+            mutator = mutator_match.group(1).strip() if mutator_match else ""
+            operator = operator_match.group(1).strip() if operator_match else ""
+            if not operator and mutator:
+                operator = mutator.split(".")[-1]
+
             # 提取 ORIGINAL 和 MUTATED 代码
             # 查找 ORIGINAL: 和 MUTATED: 标记的位置
             original_match = re.search(r"ORIGINAL:\s*\n(.*?)\n(?:MUTATED:|$)", part, re.DOTALL)
@@ -84,6 +93,8 @@ def parse_mutation_response(response: str) -> List[Dict[str, Any]]:
                     "line_end": line_end,
                     "original": original_code,
                     "mutated": mutated_code,
+                    "mutator": mutator,
+                    "operator": operator,
                 }
             )
 

@@ -66,6 +66,8 @@ class MutantGenerator:
             line_end=int(mut_data["line_end"]),
             original_code=str(mut_data["original"]),
             mutated_code=str(mut_data["mutated"]),
+            mutator=(str(mut_data.get("mutator") or "") or None),
+            operator=(str(mut_data.get("operator") or "") or None),
         )
 
         mutant_key_prefix = f"{class_name}_refined" if refined else class_name

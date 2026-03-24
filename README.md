@@ -109,6 +109,29 @@ just run-budget examples/calculator-demo 500
 just run-parallel examples/calculator-demo 8
 ```
 
+### 研究命令（study）
+
+`study` 是终端专用的稳定入口，用于一次性跑完冷启动抽样、共享 baseline 与 `M0/M2/M3` 三臂研究，不会进入默认 `PlannerAgent` 主循环。
+
+```bash
+uv run python main.py study --project-path examples/calculator-demo --sample-size 12 --seed 42 --output-dir .artifacts/study-demo --bug-reports-dir /path/to/bug-reports
+```
+
+- 冷启动：即使目标项目一开始没有测试用例，`study` 也会先为每个抽样方法建立共享 baseline，再继续三臂对比。
+- 抽样：默认固定抽样 `12` 个 public method，默认 `seed=42`；若候选方法少于 `12` 个，则按实际数量运行。
+- 输出：`--output-dir` 会生成 `summary.json`、`per_method.csv`、`per_mutant.jsonl`、`sampled_methods.json`，并在 `artifacts/<target-method>/{baseline,M0,M2,M3}/` 下归档测试文件。
+- Bug reports：可通过 `--bug-reports-dir` 指定缺陷报告目录，`M3` 会在研究执行时读取并索引这些报告用于 RAG 检索；未提供时保持原有无 bug reports 输入行为。
+- 运行目录：日志写入 `--output-dir/study.log`，隔离运行状态和沙箱分别写入 `--output-dir/.study-state/` 与 `--output-dir/.study-sandbox/`，不会回写目标项目。
+
+退出码约定：`0` 表示研究执行完成；`1` 表示运行期失败（如配置、构建、PIT 或 LLM 调用失败）；`2` 表示命令行参数错误（例如缺少 `--project-path` 或 `--output-dir`）。
+
+常见失败原因：
+
+- 目标路径不存在、不是 Maven 项目，或缺少 `pom.xml`。
+- 未提供可用的 `config.yaml` / `OPENAI_API_KEY`，导致 LLM 配置无法初始化。
+- `java-runtime` 未构建、Java/Maven 环境不完整，或目标项目自身无法完成 `test-compile` / PIT 执行。
+- LLM 接口不可达、超时，或返回内容无法生成可验证测试。
+
 ## Web 控制台
 
 ### 本地启动方式

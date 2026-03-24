@@ -47,6 +47,8 @@ class MutationPatch(BaseModel):
     line_end: int = Field(ge=1, description="结束行号")
     original_code: str = Field(description="原始代码")
     mutated_code: str = Field(description="变异后代码")
+    mutator: Optional[str] = Field(default=None, description="变异算子全名")
+    operator: Optional[str] = Field(default=None, description="变异算子短名")
 
     model_config = ConfigDict(validate_assignment=True)
 

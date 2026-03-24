@@ -71,3 +71,36 @@ MUTATED:
         self.assertEqual(len(mutants), 1)
         self.assertEqual(mutants[0].patch.line_start, 2)
         self.assertIn("@Override", mutants[0].patch.mutated_code)
+
+    def test_generate_mutants_preserves_mutator_metadata(self) -> None:
+        generator = self._make_generator(
+            """===MUTANT===
+MUTATOR: semantic-null-guard-removed
+OPERATOR: semantic-null-guard-removed
+LINES: 2-4
+ORIGINAL:
+    public String normalize(String value) {
+        if (value == null) {
+            return "";
+MUTATED:
+    public String normalize(String value) {
+        if (value == null) {
+            return null;
+"""
+        )
+        class_code = (
+            "public class Fraction {\n"
+            "    public String normalize(String value) {\n"
+            "        if (value == null) {\n"
+            '            return "";\n'
+            "        }\n"
+            "        return value.trim();\n"
+            "    }\n"
+            "}\n"
+        )
+
+        mutants = generator.generate_mutants("Fraction", class_code, max_retries=1)
+
+        self.assertEqual(len(mutants), 1)
+        self.assertEqual(mutants[0].patch.mutator, "semantic-null-guard-removed")
+        self.assertEqual(mutants[0].patch.operator, "semantic-null-guard-removed")

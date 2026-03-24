@@ -20,7 +20,9 @@ from comet.knowledge import create_knowledge_base
 from comet.llm import LLMClient
 from comet.store import Database, KnowledgeStore
 from comet.utils import ProjectScanner, SandboxManager
-from comet.web import run_cli
+from comet.web import configure_logging, run_cli
+from comet.web.study_protocol import DEFAULT_STUDY_SAMPLE_SIZE, DEFAULT_STUDY_SEED
+from comet.web.study_runner import run_default_study
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +38,7 @@ def configure_runtime_environment(config: Settings) -> dict[str, str]:
     return env
 
 
-def parse_args():
-    """解析命令行参数"""
-    parser = argparse.ArgumentParser(description="COMET-L: 基于 LLM 的测试变异协同进化系统")
-
+def _add_default_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-path", type=str, required=True, help="目标 Java Maven 项目路径")
 
     parser.add_argument(
@@ -79,7 +78,57 @@ def parse_args():
         help="并行目标数（覆盖配置文件）",
     )
 
-    return parser.parse_args()
+
+def parse_args(argv: Optional[list[str]] = None):
+    """解析命令行参数"""
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    normalized_args = list(raw_args)
+    if not normalized_args or normalized_args[0] not in {"run", "study"}:
+        normalized_args = ["run", *normalized_args]
+
+    parser = argparse.ArgumentParser(description="COMET-L: 基于 LLM 的测试变异协同进化系统")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_parser = subparsers.add_parser("run", help="运行默认协同进化流程")
+    _add_default_run_arguments(run_parser)
+
+    study_parser = subparsers.add_parser("study", help="运行冷启动研究流程")
+    study_parser.add_argument(
+        "--project-path", type=str, required=True, help="目标 Java Maven 项目路径"
+    )
+    study_parser.add_argument(
+        "--config",
+        type=str,
+        default="config.yaml",
+        help="配置文件路径（默认: config.yaml）",
+    )
+    study_parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=DEFAULT_STUDY_SAMPLE_SIZE,
+        help=f"固定抽样方法数（默认: {DEFAULT_STUDY_SAMPLE_SIZE}）",
+    )
+    study_parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_STUDY_SEED,
+        help=f"固定抽样随机种子（默认: {DEFAULT_STUDY_SEED}）",
+    )
+    study_parser.add_argument(
+        "--output-dir",
+        type=str,
+        required=True,
+        help="研究产物输出目录（写入 summary.json、per_method.csv 等文件）",
+    )
+    study_parser.add_argument(
+        "--bug-reports-dir",
+        type=str,
+        default=None,
+        help="Bug 报告目录（用于 M3 RAG 知识库）",
+    )
+    study_parser.add_argument("--debug", action="store_true", help="启用调试日志（DEBUG级别）")
+
+    return parser.parse_args(normalized_args)
 
 
 def initialize_system(
@@ -599,12 +648,89 @@ def run_evolution(
             snapshot_thread.join(timeout=1)
 
 
+def run_study_command(
+    args: Any,
+    *,
+    settings_loader: Any = Settings.from_yaml_or_default,
+    system_initializer: Any = initialize_system,
+    study_runner: Any = run_default_study,
+) -> int:
+    project_path = Path(args.project_path).expanduser().resolve()
+    if not project_path.exists():
+        raise FileNotFoundError(f"目标项目不存在: {project_path}")
+    if not project_path.is_dir():
+        raise NotADirectoryError(f"目标项目不是目录: {project_path}")
+    if not (project_path / "pom.xml").exists():
+        raise FileNotFoundError(f"目标项目缺少 pom.xml: {project_path}")
+
+    output_root = Path(args.output_dir).expanduser().resolve()
+    bug_reports_dir = None
+    if getattr(args, "bug_reports_dir", None):
+        bug_reports_dir = str(Path(args.bug_reports_dir).expanduser().resolve())
+
+    config_path = args.config
+    if config_path == "config.yaml" and not Path(config_path).exists():
+        config_path = None
+    config = settings_loader(config_path)
+    config.set_bug_reports_dir(bug_reports_dir)
+    config.set_runtime_roots(
+        state=output_root / ".study-state",
+        output=output_root,
+        sandbox=output_root / ".study-sandbox",
+    )
+    config.ensure_directories()
+
+    log_level = "DEBUG" if getattr(args, "debug", False) else "INFO"
+    log_file = output_root / "study.log"
+    _ = configure_logging(str(log_file), level=log_level)
+
+    logger.info("开始运行研究模式")
+    logger.info(f"研究目标项目: {project_path}")
+    logger.info(
+        "研究抽样配置: sample_size=%s, seed=%s",
+        args.sample_size,
+        args.seed,
+    )
+    logger.info(f"研究输出目录: {output_root}")
+    if bug_reports_dir:
+        logger.info(f"研究 Bug 报告目录: {bug_reports_dir}")
+
+    def study_system_initializer(study_config: Settings, parallel_mode: bool = False):
+        return system_initializer(
+            study_config,
+            bug_reports_dir=bug_reports_dir,
+            parallel_mode=parallel_mode,
+        )
+
+    components = study_system_initializer(config, parallel_mode=False)
+    artifacts = study_runner(
+        project_path=str(project_path),
+        output_dir=output_root,
+        sample_size=args.sample_size,
+        seed=args.seed,
+        components=components,
+        settings=config,
+        system_initializer=study_system_initializer,
+    )
+    logger.info(f"研究完成，汇总文件: {artifacts.summary_path}")
+    logger.info(f"研究方法明细: {artifacts.per_method_path}")
+    logger.info(f"研究变异体明细: {artifacts.per_mutant_path}")
+    logger.info(f"冻结抽样清单: {artifacts.sampled_methods_path}")
+    return 0
+
+
 def main():
     """主函数"""
     args = parse_args()
 
     # 如果启用了debug模式，设置日志级别为DEBUG
     try:
+        if args.command == "study":
+            exit_code = run_study_command(args)
+            if exit_code != 0:
+                sys.exit(exit_code)
+            return
+
         exit_code = run_cli(
             args,
             system_initializer=initialize_system,

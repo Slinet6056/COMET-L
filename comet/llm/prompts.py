@@ -111,6 +111,8 @@ Bug 描述：
 **输出格式**：使用以下格式输出每个变异体，用 `===MUTANT===` 分隔：
 
 ===MUTANT===
+MUTATOR: boundary-check-removed
+OPERATOR: boundary-check-removed
 LINES: 18-20
 ORIGINAL:
     if (value == null) {
@@ -122,6 +124,8 @@ MUTATED:
     }
 
 ===MUTANT===
+MUTATOR: arithmetic-off-by-one
+OPERATOR: arithmetic-off-by-one
 LINES: 25-25
 ORIGINAL:
     return result + 1;
@@ -130,12 +134,14 @@ MUTATED:
 
 **格式说明**：
 1. 每个变异体以 `===MUTANT===` 开始
-2. `LINES: start-end` 指定行号范围（如果只修改一行，start 和 end 相同）
-3. `ORIGINAL:` 后面是原始代码（保持原有缩进）
-4. `MUTATED:` 后面是变异后的代码（保持原有缩进）
-5. ORIGINAL 和 MUTATED 必须是完整的代码块，包含所有必要的花括号
-6. 不要在代码中包含行号标记（如 "1 |"）
-7. 确保代码缩进与原代码完全一致
+2. `MUTATOR:` 提供该语义变异的全名或稳定标识符
+3. `OPERATOR:` 提供简短算子名；如果没有更短名字，可与 `MUTATOR` 相同
+4. `LINES: start-end` 指定行号范围（如果只修改一行，start 和 end 相同）
+5. `ORIGINAL:` 后面是原始代码（保持原有缩进）
+6. `MUTATED:` 后面是变异后的代码（保持原有缩进）
+7. ORIGINAL 和 MUTATED 必须是完整的代码块，包含所有必要的花括号
+8. 不要在代码中包含行号标记（如 "1 |"）
+9. 确保代码缩进与原代码完全一致
 
 **重要**：只返回变异体列表，不要返回任何说明文字或其他额外内容。"""
 
@@ -173,14 +179,15 @@ MUTATED:
 
 **变异要求**：
 1. 根据代码复杂度和可用的缺陷模式，自主决定生成多少个变异体（简单方法 3-5 个，复杂方法 8-15 个）
-2. LINES 中的行号必须是源代码中实际存在的行号
-3. ORIGINAL 必须是这些行的完整代码（可以跨多行）
-4. MUTATED 必须是完整的替换代码（保持缩进和格式一致）
-5. 不要改变类名、方法签名、访问修饰符
-6. 如果 MUTATED 包含注解、方法签名或修饰符，LINES 和 ORIGINAL 必须完整覆盖这些行
-7. 不要重复输出替换范围之外已经存在的注解（例如已有 `@Override` 时不要再次补一个 `@Override`）
-8. 确保变异后的代码语法正确、能够编译
-9. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
+2. 每个变异体都必须提供 `MUTATOR:` 和 `OPERATOR:` 两行元数据
+3. LINES 中的行号必须是源代码中实际存在的行号
+4. ORIGINAL 必须是这些行的完整代码（可以跨多行）
+5. MUTATED 必须是完整的替换代码（保持缩进和格式一致）
+6. 不要改变类名、方法签名、访问修饰符
+7. 如果 MUTATED 包含注解、方法签名或修饰符，LINES 和 ORIGINAL 必须完整覆盖这些行
+8. 不要重复输出替换范围之外已经存在的注解（例如已有 `@Override` 时不要再次补一个 `@Override`）
+9. 确保变异后的代码语法正确、能够编译
+10. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
 {% if target_method %}
 10. **只针对 `{{ target_method }}` 方法生成变异体**
 {% endif %}
@@ -221,6 +228,8 @@ MUTATED:
 **输出格式**：使用以下格式输出每个变异体，用 `===MUTANT===` 分隔：
 
 ===MUTANT===
+MUTATOR: branch-guard-weakened
+OPERATOR: branch-guard-weakened
 LINES: 18-20
 ORIGINAL:
     if (value == null) {
@@ -232,6 +241,8 @@ MUTATED:
     }
 
 ===MUTANT===
+MUTATOR: arithmetic-off-by-one
+OPERATOR: arithmetic-off-by-one
 LINES: 25-25
 ORIGINAL:
     return result + 1;
@@ -240,12 +251,14 @@ MUTATED:
 
 **格式说明**：
 1. 每个变异体以 `===MUTANT===` 开始
-2. `LINES: start-end` 指定行号范围
-3. `ORIGINAL:` 后面是原始代码（保持原有缩进）
-4. `MUTATED:` 后面是变异后的代码（保持原有缩进）
-5. ORIGINAL 和 MUTATED 必须是完整的代码块，包含所有必要的花括号
-6. 不要在代码中包含行号标记
-7. 确保代码缩进与原代码完全一致
+2. `MUTATOR:` 提供该语义变异的全名或稳定标识符
+3. `OPERATOR:` 提供简短算子名；如果没有更短名字，可与 `MUTATOR` 相同
+4. `LINES: start-end` 指定行号范围
+5. `ORIGINAL:` 后面是原始代码（保持原有缩进）
+6. `MUTATED:` 后面是变异后的代码（保持原有缩进）
+7. ORIGINAL 和 MUTATED 必须是完整的代码块，包含所有必要的花括号
+8. 不要在代码中包含行号标记
+9. 确保代码缩进与原代码完全一致
 
 **重要**：只返回变异体列表，不要返回任何说明文字或其他额外内容。"""
 
@@ -310,14 +323,15 @@ MUTATED:
 4. 生成的变异体应该针对测试的弱点，更难被现有测试检测
 
 **变异要求**：
-1. LINES 中的行号必须是源代码中实际存在的行号
-2. ORIGINAL 必须是这些行的完整代码
-3. MUTATED 必须是完整的替换代码（保持缩进和格式一致）
-4. 不要改变类名、方法签名、访问修饰符
-5. 如果 MUTATED 包含注解、方法签名或修饰符，LINES 和 ORIGINAL 必须完整覆盖这些行
-6. 不要重复输出替换范围之外已经存在的注解（例如已有 `@Override` 时不要再次补一个 `@Override`）
-7. 确保变异后的代码语法正确、能够编译
-8. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
+1. 每个变异体都必须提供 `MUTATOR:` 和 `OPERATOR:` 两行元数据
+2. LINES 中的行号必须是源代码中实际存在的行号
+3. ORIGINAL 必须是这些行的完整代码
+4. MUTATED 必须是完整的替换代码（保持缩进和格式一致）
+5. 不要改变类名、方法签名、访问修饰符
+6. 如果 MUTATED 包含注解、方法签名或修饰符，LINES 和 ORIGINAL 必须完整覆盖这些行
+7. 不要重复输出替换范围之外已经存在的注解（例如已有 `@Override` 时不要再次补一个 `@Override`）
+8. 确保变异后的代码语法正确、能够编译
+9. **严格遵守 Java 8 语法规范，不使用更高版本的特性**
 {% if target_method %}
 9. **只针对 `{{ target_method }}` 方法生成变异体**
 {% endif %}

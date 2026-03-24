@@ -6,20 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .jvm_descriptors import build_method_signature, parse_descriptor_type, parse_method_descriptor
+
 logger = logging.getLogger(__name__)
-
-
-_JVM_PRIMITIVE_TYPES = {
-    "B": "byte",
-    "C": "char",
-    "D": "double",
-    "F": "float",
-    "I": "int",
-    "J": "long",
-    "S": "short",
-    "Z": "boolean",
-    "V": "void",
-}
 
 
 @dataclass
@@ -239,61 +228,13 @@ class CoverageParser:
             return []
 
     def _build_method_signature(self, method_name: str, descriptor: Optional[str]) -> Optional[str]:
-        if not descriptor:
-            return None
-
-        parameter_types, return_type = self._parse_method_descriptor(descriptor)
-        if return_type is None:
-            return None
-        return f"{return_type} {method_name}({', '.join(parameter_types)})"
+        return build_method_signature(method_name, descriptor)
 
     def _parse_method_descriptor(self, descriptor: str) -> tuple[List[str], Optional[str]]:
-        if not descriptor.startswith("("):
-            return [], None
-
-        index = 1
-        parameter_types: List[str] = []
-        while index < len(descriptor) and descriptor[index] != ")":
-            parameter_type, index = self._parse_descriptor_type(descriptor, index)
-            if parameter_type is None:
-                return [], None
-            parameter_types.append(parameter_type)
-
-        if index >= len(descriptor) or descriptor[index] != ")":
-            return [], None
-
-        return_type, index = self._parse_descriptor_type(descriptor, index + 1)
-        if return_type is None or index != len(descriptor):
-            return [], None
-
-        return parameter_types, return_type
+        return parse_method_descriptor(descriptor)
 
     def _parse_descriptor_type(self, descriptor: str, index: int) -> tuple[Optional[str], int]:
-        if index >= len(descriptor):
-            return None, index
-
-        array_depth = 0
-        while index < len(descriptor) and descriptor[index] == "[":
-            array_depth += 1
-            index += 1
-
-        if index >= len(descriptor):
-            return None, index
-
-        descriptor_type = descriptor[index]
-        if descriptor_type == "L":
-            end_index = descriptor.find(";", index)
-            if end_index == -1:
-                return None, len(descriptor)
-            base_type = descriptor[index + 1 : end_index].split("/")[-1].replace("$", ".")
-            next_index = end_index + 1
-        else:
-            base_type = _JVM_PRIMITIVE_TYPES.get(descriptor_type)
-            if base_type is None:
-                return None, index + 1
-            next_index = index + 1
-
-        return f"{base_type}{'[]' * array_depth}", next_index
+        return parse_descriptor_type(descriptor, index)
 
     def aggregate_coverage_by_sourcefile(
         self, method_coverages: List[MethodCoverage]

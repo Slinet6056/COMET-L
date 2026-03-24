@@ -269,6 +269,7 @@ class Settings(BaseModel):
     _state_root: Path = PrivateAttr(default=STATE_ROOT)
     _output_root: Path = PrivateAttr(default=OUTPUT_ROOT)
     _sandbox_root: Path = PrivateAttr(default=SANDBOX_ROOT)
+    _bug_reports_dir: Optional[Path] = PrivateAttr(default=None)
 
     @classmethod
     def from_yaml(cls, config_path: str) -> "Settings":
@@ -347,6 +348,16 @@ class Settings(BaseModel):
         self._state_root = state
         self._output_root = output
         self._sandbox_root = sandbox
+
+    def set_bug_reports_dir(self, bug_reports_dir: Optional[str | Path]) -> None:
+        if bug_reports_dir is None:
+            self._bug_reports_dir = None
+            return
+
+        self._bug_reports_dir = Path(bug_reports_dir).expanduser().resolve()
+
+    def resolve_bug_reports_dir(self) -> Optional[Path]:
+        return self._bug_reports_dir
 
     def resolve_database_path(self) -> Path:
         return self.resolve_state_root() / "comet.db"
