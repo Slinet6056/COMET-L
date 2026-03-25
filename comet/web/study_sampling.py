@@ -170,25 +170,48 @@ def sample_cold_start_methods(
     if sample_count >= len(ordered_methods):
         selected_methods = ordered_methods
     else:
-        rng = random.Random(seed)
-        preferred_ids = preferred_target_ids or set()
-
-        if preferred_ids:
-            preferred_methods = [
-                method for method in ordered_methods if method.target_id in preferred_ids
-            ]
-            fallback_methods = [
-                method for method in ordered_methods if method.target_id not in preferred_ids
-            ]
-            selected_methods = _sample_methods(preferred_methods, sample_count, rng)
-            remaining_count = sample_count - len(selected_methods)
-            if remaining_count > 0:
-                selected_methods.extend(_sample_methods(fallback_methods, remaining_count, rng))
-        else:
-            selected_methods = _sample_methods(ordered_methods, sample_count, rng)
+        candidate_queue = build_cold_start_candidate_queue(
+            ordered_methods,
+            seed=seed,
+            preferred_target_ids=preferred_target_ids,
+        )
+        selected_methods = candidate_queue[:sample_count]
 
     return [
         method.model_copy(update={"order": order}) for order, method in enumerate(selected_methods)
+    ]
+
+
+def build_cold_start_candidate_queue(
+    discovered_methods: list[StudySampledMethodSchema],
+    seed: int = DEFAULT_STUDY_SEED,
+    preferred_target_ids: set[str] | None = None,
+) -> list[StudySampledMethodSchema]:
+    ordered_methods = list(discovered_methods)
+    if len(ordered_methods) <= 1:
+        return [
+            method.model_copy(update={"order": order})
+            for order, method in enumerate(ordered_methods)
+        ]
+
+    rng = random.Random(seed)
+    preferred_ids = preferred_target_ids or set()
+
+    if preferred_ids:
+        preferred_methods = [
+            method for method in ordered_methods if method.target_id in preferred_ids
+        ]
+        fallback_methods = [
+            method for method in ordered_methods if method.target_id not in preferred_ids
+        ]
+        queued_methods = _build_partition_candidate_queue(
+            preferred_methods, rng
+        ) + _build_partition_candidate_queue(fallback_methods, rng)
+    else:
+        queued_methods = _build_partition_candidate_queue(ordered_methods, rng)
+
+    return [
+        method.model_copy(update={"order": order}) for order, method in enumerate(queued_methods)
     ]
 
 
@@ -224,13 +247,36 @@ def _sample_methods(
     return [ordered_methods[index] for index in selected_indexes]
 
 
+def _build_partition_candidate_queue(
+    ordered_methods: list[StudySampledMethodSchema],
+    rng: random.Random,
+) -> list[StudySampledMethodSchema]:
+    if not ordered_methods:
+        return []
+
+    remaining_methods = list(ordered_methods)
+    queued_methods: list[StudySampledMethodSchema] = []
+
+    while remaining_methods:
+        next_method = _sample_methods(remaining_methods, 1, rng)[0]
+        queued_methods.append(next_method)
+        remaining_methods = [
+            method for method in remaining_methods if method.target_id != next_method.target_id
+        ]
+
+    return queued_methods
+
+
 def freeze_sampled_methods(
     output_dir: str | Path,
     sampled_methods: list[StudySampledMethodSchema],
 ) -> Path:
     output_path = Path(output_dir) / STUDY_OUTPUT_FILENAMES["sampled_methods"]
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = [method.model_dump(mode="json") for method in sampled_methods]
+    payload = [
+        method.model_copy(update={"order": order}).model_dump(mode="json")
+        for order, method in enumerate(sampled_methods)
+    ]
     _ = output_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",

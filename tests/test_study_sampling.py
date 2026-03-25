@@ -8,10 +8,16 @@ from unittest.mock import patch
 from comet.config.settings import LLMConfig, Settings
 from comet.executor.coverage_parser import MethodCoverage
 from comet.utils.method_keys import build_method_key
-from comet.web.study_runner import StudyRunArtifacts, run_default_study
+from comet.web.study_runner import (
+    StudyBaselineResult,
+    StudyRunArtifacts,
+    StudyRunner,
+    run_default_study,
+)
 from comet.web.study_sampling import (
     ClassMappingRecord,
     MethodRecord,
+    build_cold_start_candidate_queue,
     collect_partially_covered_target_ids,
     discover_cold_start_methods,
     freeze_sampled_methods,
@@ -322,6 +328,85 @@ class StudySamplingTest(unittest.TestCase):
         self.assertEqual(len(sampled), 3)
         self.assertEqual([item.order for item in sampled], [0, 1, 2])
 
+    def test_candidate_queue_is_deterministic_with_seed(self) -> None:
+        discovered = [
+            _build_sampled_method("Alpha", f"method{index:02d}", f"public void method{index:02d}()")
+            for index in range(6)
+        ]
+
+        first_queue = build_cold_start_candidate_queue(discovered, seed=42)
+        second_queue = build_cold_start_candidate_queue(discovered, seed=42)
+        other_queue = build_cold_start_candidate_queue(discovered, seed=7)
+
+        self.assertEqual(
+            [item.target_id for item in first_queue],
+            [item.target_id for item in second_queue],
+        )
+        self.assertEqual([item.order for item in first_queue], list(range(6)))
+        self.assertNotEqual(
+            [item.target_id for item in first_queue],
+            [item.target_id for item in other_queue],
+        )
+
+    def test_candidate_queue_places_preferred_prefix_before_fallback_remainder(self) -> None:
+        discovered = [
+            _build_sampled_method("Alpha", "method00", "public void method00()"),
+            _build_sampled_method("Alpha", "method01", "public void method01()"),
+            _build_sampled_method("Alpha", "method02", "public void method02()"),
+            _build_sampled_method("Alpha", "method03", "public void method03()"),
+            _build_sampled_method("Alpha", "method04", "public void method04()"),
+        ]
+        preferred_target_ids = {
+            discovered[1].target_id,
+            discovered[3].target_id,
+        }
+
+        queued = build_cold_start_candidate_queue(
+            discovered,
+            seed=42,
+            preferred_target_ids=preferred_target_ids,
+        )
+
+        self.assertEqual({item.target_id for item in queued[:2]}, preferred_target_ids)
+        self.assertTrue(all(item.target_id in preferred_target_ids for item in queued[:2]))
+        self.assertTrue(all(item.target_id not in preferred_target_ids for item in queued[2:]))
+        self.assertEqual([item.order for item in queued], list(range(5)))
+        self.assertCountEqual(
+            [item.target_id for item in queued],
+            [item.target_id for item in discovered],
+        )
+
+    def test_candidate_queue_prefix_matches_sampling_for_each_requested_size(self) -> None:
+        discovered = [
+            _build_sampled_method("Alpha", "method00", "public void method00()"),
+            _build_sampled_method("Alpha", "method01", "public void method01()"),
+            _build_sampled_method("Alpha", "method02", "public void method02()"),
+            _build_sampled_method("Alpha", "method03", "public void method03()"),
+            _build_sampled_method("Alpha", "method04", "public void method04()"),
+            _build_sampled_method("Alpha", "method05", "public void method05()"),
+        ]
+        preferred_target_ids = {
+            discovered[1].target_id,
+            discovered[4].target_id,
+        }
+        queued = build_cold_start_candidate_queue(
+            discovered,
+            seed=42,
+            preferred_target_ids=preferred_target_ids,
+        )
+
+        for sample_size in range(1, len(discovered)):
+            sampled = sample_cold_start_methods(
+                discovered,
+                sample_size=sample_size,
+                seed=42,
+                preferred_target_ids=preferred_target_ids,
+            )
+            self.assertEqual(
+                [item.target_id for item in queued[:sample_size]],
+                [item.target_id for item in sampled],
+            )
+
     def test_run_default_study_ignores_shared_db_coverage_without_explicit_sampling_store(
         self,
     ) -> None:
@@ -345,6 +430,7 @@ class StudySamplingTest(unittest.TestCase):
                 _build_sampled_method("Alpha", "other", "public void other()"),
             ]
             captured_preferred_ids: list[set[str]] = []
+            captured_run_study_call: dict[str, object] = {}
 
             class _CoverageStore:
                 def get_method_coverage(
@@ -361,6 +447,8 @@ class StudySamplingTest(unittest.TestCase):
                 raise AssertionError("默认抽样阶段不应读取共享 coverage store")
 
             def fake_run_study(self, *args, **kwargs):
+                captured_run_study_call["methods"] = args[0]
+                captured_run_study_call.update(kwargs)
                 return StudyRunArtifacts(
                     output_root=output_dir,
                     summary_path=output_dir / "summary.json",
@@ -374,9 +462,9 @@ class StudySamplingTest(unittest.TestCase):
                     "comet.web.study_runner.discover_cold_start_methods", return_value=discovered
                 ),
                 patch(
-                    "comet.web.study_runner.sample_cold_start_methods",
-                    side_effect=lambda methods, sample_size, seed, preferred_target_ids: (
-                        captured_preferred_ids.append(set(preferred_target_ids)) or methods[:1]
+                    "comet.web.study_runner.build_cold_start_candidate_queue",
+                    side_effect=lambda methods, seed, preferred_target_ids: (
+                        captured_preferred_ids.append(set(preferred_target_ids)) or list(methods)
                     ),
                 ),
                 patch("comet.web.study_runner.StudyRunner.run_study", new=fake_run_study),
@@ -396,6 +484,58 @@ class StudySamplingTest(unittest.TestCase):
 
             self.assertEqual(artifacts.output_root, output_dir)
             self.assertEqual(captured_preferred_ids, [set()])
+            self.assertEqual(captured_run_study_call["methods"], discovered)
+            self.assertEqual(captured_run_study_call["requested_success_quota"], 1)
+
+    def test_run_study_defaults_requested_success_quota_to_candidate_list_length(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            output_dir = root / "output"
+            settings = Settings(llm=LLMConfig(api_key="test-key"))
+            settings.set_runtime_roots(
+                state=output_dir / ".study-state",
+                output=output_dir,
+                sandbox=output_dir / ".study-sandbox",
+            )
+            settings.ensure_directories()
+
+            methods = [
+                _build_sampled_method("Alpha", "first", "public void first()"),
+                _build_sampled_method("Alpha", "second", "public void second()"),
+            ]
+            runner = StudyRunner(
+                workspace_project_path=str(root),
+                artifacts_root=str(output_dir / "artifacts"),
+                output_root=str(output_dir),
+                settings=settings,
+            )
+
+            def fake_failed_baseline(method):
+                return StudyBaselineResult(
+                    target_id=method.target_id,
+                    class_name=method.class_name,
+                    method_name=method.method_name,
+                    method_signature=method.method_signature,
+                    archive_root="",
+                    baseline_dir="",
+                    archive_dirs={},
+                    status="failed",
+                    error="baseline failed",
+                )
+
+            with patch.object(
+                StudyRunner, "ensure_shared_baseline", side_effect=fake_failed_baseline
+            ):
+                artifacts = runner.run_study(
+                    methods,
+                    arm_executor=lambda *_args: None,
+                    config=settings,
+                    seed=7,
+                )
+
+            summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["requested_sample_size"], len(methods))
+            self.assertEqual(summary["attempted_method_count"], len(methods))
 
 
 def _build_sampled_method(
