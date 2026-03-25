@@ -8,6 +8,7 @@ from comet.agent.state import AgentState
 from comet.agent.tools import AgentTools
 from comet.executor.surefire_parser import TestResult as SurefireTestResult
 from comet.executor.surefire_parser import TestSuiteResult as SurefireTestSuiteResult
+from comet.generators.test_generator import TestGenerator
 from comet.models import TestCase, TestMethod
 from comet.parallel_preprocessing import ParallelPreprocessor
 from comet.store.database import Database
@@ -475,6 +476,165 @@ class AgentToolsVerifyAndFixTestsRegressionTests(unittest.TestCase):
         self.assertTrue(result.compile_success)
         self.assertIsNone(result.compile_error)
         self.assertEqual(result.methods[0].code, fixed_code)
+
+    def test_verify_and_fix_tests_repairs_final_assembly_compile_failure(self) -> None:
+        tools = self._build_tools()
+        original_code = "@Test\nvoid testSharedName() { assertTrue(false); }"
+        fixed_code = (
+            "@Test\nvoid testSharedName() { "
+            "assertThrows(NoSuchElementException.class, () -> { throw new NoSuchElementException(); }); }"
+        )
+        test_case = self._build_test_case(original_code)
+
+        repaired_test_case = TestCase(
+            id=test_case.id,
+            class_name=test_case.class_name,
+            target_class=test_case.target_class,
+            package_name="com.example",
+            imports=["import java.util.NoSuchElementException;"],
+            methods=[
+                TestMethod(
+                    method_name="testSharedName",
+                    code=(
+                        "@Test\nvoid testSharedName() {\n"
+                        "    assertThrows(NoSuchElementException.class, () -> {\n"
+                        "        throw new NoSuchElementException();\n"
+                        "    });\n"
+                        "}"
+                    ),
+                    target_method="parse",
+                    target_method_signature="CommandLine parse(Options, String[])",
+                )
+            ],
+            full_code="\n".join(
+                [
+                    "package com.example;",
+                    "",
+                    "import java.util.NoSuchElementException;",
+                    "import org.junit.jupiter.api.*;",
+                    "import static org.junit.jupiter.api.Assertions.*;",
+                    "",
+                    "public class GeneratedTest {",
+                    "    @Test",
+                    "    void testSharedName() {",
+                    "        assertThrows(NoSuchElementException.class, () -> {",
+                    "            throw new NoSuchElementException();",
+                    "        });",
+                    "    }",
+                    "}",
+                ]
+            ),
+        )
+
+        tools.java_executor.compile_tests.side_effect = [
+            {"success": True},
+            {"success": True},
+            {"success": False, "error": "cannot find symbol NoSuchElementException"},
+            {"success": True},
+        ]
+        tools.java_executor.run_tests.side_effect = [
+            {"success": False, "error": "suite failed"},
+            {"success": True},
+        ]
+        tools.java_executor.run_single_test_method.return_value = {"success": True}
+        tools.test_generator.fix_single_method.return_value = fixed_code
+        tools.test_generator.regenerate_with_feedback.return_value = repaired_test_case
+
+        suite_results = [
+            SurefireTestSuiteResult(
+                name="com.example.GeneratedTest",
+                total_tests=1,
+                passed_tests=0,
+                failed_tests=1,
+                error_tests=0,
+                skipped_tests=0,
+                time=0.1,
+                test_cases=[
+                    SurefireTestResult(
+                        class_name="com.example.GeneratedTest",
+                        method_name="testSharedName",
+                        time=0.1,
+                        passed=False,
+                        failure_message="boom",
+                    )
+                ],
+            )
+        ]
+
+        with (
+            patch(
+                "comet.executor.surefire_parser.SurefireParser.parse_surefire_reports",
+                return_value=suite_results,
+            ),
+            patch(
+                "comet.utils.project_utils.write_test_file",
+                return_value=Path("/tmp/GeneratedTest.java"),
+            ),
+        ):
+            result = tools._verify_and_fix_tests(
+                test_case,
+                class_code="public class DefaultParser {}",
+                project_path="/tmp/project",
+            )
+
+        self.assertTrue(result.compile_success)
+        self.assertIsNone(result.compile_error)
+        self.assertIn("import java.util.NoSuchElementException;", result.imports)
+        tools.test_generator.regenerate_with_feedback.assert_called_once()
+
+
+class TestGeneratorRegressionTests(unittest.TestCase):
+    def test_regenerate_with_feedback_syncs_imports_and_methods_from_full_class(self) -> None:
+        generator = TestGenerator.__new__(TestGenerator)
+        generator.llm = Mock()
+        generator.llm.chat_with_system.return_value = "\n".join(
+            [
+                "package com.example;",
+                "",
+                "import java.util.NoSuchElementException;",
+                "",
+                "public class GeneratedTest {",
+                "    @Test",
+                "    void testUpdatedName() {",
+                "        throw new NoSuchElementException();",
+                "    }",
+                "}",
+            ]
+        )
+        generator.prompt_manager = Mock()
+        generator.prompt_manager.render_fix_test.return_value = ("system", "user")
+
+        test_case = TestCase(
+            id="test-1",
+            class_name="GeneratedTest",
+            target_class="DefaultParser",
+            package_name="com.example",
+            imports=[],
+            methods=[
+                TestMethod(
+                    method_name="testOriginalName",
+                    code="@Test\nvoid testOriginalName() {}",
+                    target_method="parse",
+                    target_method_signature="CommandLine parse(Options, String[])",
+                )
+            ],
+            full_code="package com.example;\npublic class GeneratedTest {}",
+        )
+
+        repaired = generator.regenerate_with_feedback(
+            test_case=test_case,
+            compile_error="missing import",
+            class_code="public class DefaultParser {}",
+            max_retries=1,
+        )
+
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        self.assertEqual(repaired.package_name, "com.example")
+        self.assertEqual(repaired.imports, ["import java.util.NoSuchElementException;"])
+        self.assertEqual(len(repaired.methods), 1)
+        self.assertEqual(repaired.methods[0].method_name, "testUpdatedName")
+        self.assertIn("NoSuchElementException", repaired.methods[0].code)
 
 
 class DatabaseMethodSignatureIsolationTests(unittest.TestCase):

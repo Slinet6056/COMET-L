@@ -885,6 +885,35 @@ class AgentTools:
         surefire_parser = SurefireParser()
         reports_dir = os.path.join(work_path, "target", "surefire-reports")
 
+        def _write_current_test_case() -> bool:
+            formatting_enabled, formatting_style = self._get_formatting_config()
+            test_file = write_test_file(
+                project_path=work_path,
+                package_name=test_case.package_name,
+                test_code=test_case.full_code,
+                test_class_name=test_case.class_name,
+                formatting_enabled=formatting_enabled,
+                formatting_style=formatting_style,
+            )
+            return test_file is not None
+
+        def _repair_final_compilation(final_compile_error: str) -> bool:
+            repaired_test_case = self.test_generator.regenerate_with_feedback(
+                test_case=test_case,
+                compile_error=final_compile_error,
+                class_code=class_code,
+                max_retries=1,
+            )
+            if repaired_test_case is None:
+                return False
+
+            test_case.package_name = repaired_test_case.package_name
+            test_case.imports = repaired_test_case.imports
+            test_case.methods = repaired_test_case.methods
+            test_case.full_code = repaired_test_case.full_code
+            test_case.updated_at = repaired_test_case.updated_at
+            return _write_current_test_case()
+
         # ===== 步骤1: 编译测试，最多重试max_compile_retries次 =====
         compile_retry_count = 0
         while compile_retry_count < max_compile_retries:
@@ -928,16 +957,8 @@ class AgentTools:
                 return test_case
 
             # 写入修复后的测试文件（直接覆盖）
-            formatting_enabled, formatting_style = self._get_formatting_config()
-            test_file = write_test_file(
-                project_path=work_path,
-                package_name=fixed_test_case.package_name,
-                test_code=fixed_test_case.full_code,
-                test_class_name=fixed_test_case.class_name,
-                formatting_enabled=formatting_enabled,
-                formatting_style=formatting_style,
-            )
             test_case = fixed_test_case
+            test_file = _write_current_test_case()
 
             if not test_file:
                 logger.warning("写入修复后的测试文件失败")
@@ -1194,19 +1215,34 @@ class AgentTools:
         )
 
         # 最后写入并验证
-        formatting_enabled, formatting_style = self._get_formatting_config()
-        write_test_file(
-            project_path=work_path,
-            package_name=test_case.package_name,
-            test_code=test_case.full_code,
-            test_class_name=test_case.class_name,
-            formatting_enabled=formatting_enabled,
-            formatting_style=formatting_style,
-        )
+        _write_current_test_case()
 
-        final_compile = self.java_executor.compile_tests(work_path)
+        final_compile = None
+        final_compile_error = "Unknown error"
+        final_compile_retries = 0
+        while final_compile_retries <= max_compile_retries:
+            final_compile = self.java_executor.compile_tests(work_path)
+            if final_compile.get("success"):
+                break
 
-        if final_compile.get("success"):
+            final_compile_error = (
+                final_compile.get("error")
+                or final_compile.get("output")
+                or final_compile.get("stderr")
+                or final_compile.get("stdout")
+                or "Unknown error"
+            )
+            if final_compile_retries >= max_compile_retries:
+                break
+
+            logger.warning(
+                f"最终整类编译失败（第 {final_compile_retries + 1} 次），尝试修复完整测试类..."
+            )
+            if not _repair_final_compilation(final_compile_error):
+                break
+            final_compile_retries += 1
+
+        if final_compile is not None and final_compile.get("success"):
             final_test = self.java_executor.run_tests(work_path)
             if final_test.get("success"):
                 logger.info(f"✓ 最终测试验证成功！保留 {len(final_methods)} 个方法")
@@ -1244,13 +1280,6 @@ class AgentTools:
                 test_case.compile_success = False
                 test_case.compile_error = "Final test run failed"
         else:
-            final_compile_error = (
-                final_compile.get("error")
-                or final_compile.get("output")
-                or final_compile.get("stderr")
-                or final_compile.get("stdout")
-                or "Unknown error"
-            )
             logger.warning(
                 f"最终编译失败（但这不应该发生）: class={test_case.class_name}, "
                 f"methods={len(final_methods)}, error={final_compile_error}"

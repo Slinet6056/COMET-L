@@ -8,7 +8,12 @@ from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase
 from ..llm.client import LLMClient
 from ..llm.prompts import PromptManager
 from ..models import Mutant, TestCase, TestMethod
-from ..utils.code_utils import build_test_class, extract_imports, parse_java_class
+from ..utils.code_utils import (
+    build_test_class,
+    extract_imports,
+    extract_test_methods_from_class,
+    parse_java_class,
+)
 from ..utils.hash_utils import generate_id
 from ..utils.method_keys import build_test_class_name, normalize_method_signature
 from ..utils.parsers import (
@@ -327,6 +332,60 @@ class TestGenerator:
             logger.warning(f"完善测试失败: {e}")
             return None
 
+    def _sync_test_case_from_full_code(self, test_case: TestCase, full_code: str) -> TestCase:
+        class_info = parse_java_class(full_code)
+        extracted_imports = extract_imports(full_code)
+        extracted_methods = extract_test_methods_from_class(full_code)
+        existing_methods = {method.method_name: method for method in test_case.methods}
+
+        target_method = test_case.methods[0].target_method if test_case.methods else ""
+        target_method_signature = (
+            test_case.methods[0].target_method_signature if test_case.methods else None
+        )
+
+        refreshed_methods: List[TestMethod] = []
+        for index, method_code in enumerate(extracted_methods):
+            method_name = extract_test_method_name(method_code)
+            if not method_name:
+                method_name = f"test_{target_method or 'method'}_{index + 1}"
+                logger.warning(f"无法提取测试方法名，使用默认名称: {method_name}")
+
+            existing_method = existing_methods.get(method_name)
+            refreshed_methods.append(
+                TestMethod(
+                    method_name=method_name,
+                    code=method_code,
+                    target_method=(
+                        existing_method.target_method
+                        if existing_method is not None
+                        else target_method
+                    ),
+                    target_method_signature=(
+                        existing_method.target_method_signature
+                        if existing_method is not None
+                        else target_method_signature
+                    ),
+                    created_at=(
+                        existing_method.created_at
+                        if existing_method is not None
+                        else datetime.now()
+                    ),
+                    updated_at=datetime.now(),
+                )
+            )
+
+        if refreshed_methods:
+            test_case.methods = refreshed_methods
+        else:
+            logger.warning("无法从完整测试类中提取测试方法，保留现有方法元数据")
+
+        package_name = class_info.get("package")
+        test_case.package_name = package_name
+        test_case.imports = extracted_imports
+        test_case.full_code = full_code
+        test_case.updated_at = datetime.now()
+        return test_case
+
     def regenerate_with_feedback(
         self,
         test_case: TestCase,
@@ -377,11 +436,7 @@ class TestGenerator:
 
                 logger.info(f"修复尝试 {attempt + 1} 成功")
 
-                # 更新测试用例
-                test_case.full_code = fixed_code
-                test_case.updated_at = datetime.now()
-
-                return test_case
+                return self._sync_test_case_from_full_code(test_case, fixed_code)
 
             except Exception as e:
                 logger.warning(f"修复尝试 {attempt + 1} 失败: {e}")

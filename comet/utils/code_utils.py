@@ -171,6 +171,57 @@ def build_test_class(
     return "\n".join(lines)
 
 
+def extract_test_methods_from_class(java_code: str) -> List[str]:
+    annotation_pattern = re.compile(
+        r"(?m)^\s*@(?:Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b"
+    )
+    methods: List[str] = []
+    matches = list(annotation_pattern.finditer(java_code))
+
+    for match in matches:
+        start = match.start()
+
+        line_start = java_code.rfind("\n", 0, start)
+        start = 0 if line_start == -1 else line_start + 1
+
+        while start > 0:
+            previous_line_end = start - 1
+            previous_line_start = java_code.rfind("\n", 0, previous_line_end)
+            previous_line_start = 0 if previous_line_start == -1 else previous_line_start + 1
+            previous_line = java_code[previous_line_start:previous_line_end].strip()
+            if previous_line.startswith("@"):
+                start = previous_line_start
+                continue
+            break
+
+        brace_start = java_code.find("{", match.end())
+        if brace_start == -1:
+            logger.debug("未找到测试方法起始花括号，跳过一个方法")
+            continue
+
+        depth = 0
+        end = None
+        for index in range(brace_start, len(java_code)):
+            char = java_code[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+
+        if end is None:
+            logger.debug("未找到测试方法结束花括号，跳过一个方法")
+            continue
+
+        method_code = java_code[start:end].strip()
+        if method_code:
+            methods.append(method_code)
+
+    return methods
+
+
 def validate_test_methods(methods: list[SupportsGeneratedTestMethod], class_code: str) -> Set[str]:
     """
     验证测试方法代码，检查是否包含明显的错误模式
