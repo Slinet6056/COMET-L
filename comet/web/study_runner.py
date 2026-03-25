@@ -4,6 +4,7 @@ import copy
 import csv
 import json
 import logging
+import shutil
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -14,9 +15,11 @@ from typing import Generic, Protocol, TypeVar, cast
 from ..config.settings import Settings
 from ..executor.pit_xml_parser import PitMutantRecord, parse_pit_mutations_xml
 from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase, create_knowledge_base
-from ..models import Mutant, MutationPatch
+from ..models import Mutant, MutationPatch, TestCase, TestMethod
 from ..store.knowledge_store import KnowledgeStore
+from ..utils.code_utils import extract_imports, extract_test_methods_from_class, parse_java_class
 from ..utils.method_keys import build_method_key, normalize_method_signature
+from ..utils.parsers import extract_test_method_name
 from ..utils.sandbox import SandboxManager
 from .study_protocol import (
     BASELINE_ARCHIVE_DIR,
@@ -1208,14 +1211,20 @@ class StudyRunner:
                 tools, db, sandbox_manager, method, workspace_path
             )
 
-            generation_result = scoped_tools.generate_tests(
-                method.class_name,
-                method.method_name,
-                method.method_signature,
-            )
+            reused_test_files = self._import_existing_baseline_tests(db, method, workspace_path)
+
+            generation_result: Mapping[str, object] | None = None
+            if not reused_test_files:
+                generation_result = scoped_tools.generate_tests(
+                    method.class_name,
+                    method.method_name,
+                    method.method_signature,
+                )
             test_cases = self._get_test_cases(db, method)
             if not test_cases:
-                message = str(generation_result.get("error") or "baseline 没有生成任何测试")
+                message = "baseline 没有生成任何测试"
+                if generation_result is not None:
+                    message = str(generation_result.get("error") or message)
                 raise RuntimeError(message)
 
             mutant_generation_result = scoped_tools.generate_mutants(
@@ -1228,9 +1237,14 @@ class StudyRunner:
             evaluation_result = scoped_tools.run_evaluation()
             self._raise_for_failed_evaluation(evaluation_result)
 
-            exported_files = sandbox_manager.export_test_files_to_directory(
-                sandbox_id, baseline_dir
-            )
+            if reused_test_files:
+                exported_files = self._archive_existing_test_files(
+                    reused_test_files, workspace_path, baseline_dir
+                )
+            else:
+                exported_files = sandbox_manager.export_test_files_to_directory(
+                    sandbox_id, baseline_dir
+                )
             if not exported_files:
                 raise RuntimeError("baseline 测试工件导出为空")
 
@@ -1285,6 +1299,69 @@ class StudyRunner:
             method.method_name,
             method.method_signature,
         )
+
+    def _import_existing_baseline_tests(
+        self,
+        db: StudyDatabaseProtocol,
+        method: FrozenStudyMethod,
+        workspace_path: str,
+    ) -> list[Path]:
+        test_root = Path(workspace_path) / "src" / "test" / "java"
+        if not test_root.exists():
+            return []
+
+        imported_files: list[Path] = []
+        for file_path in sorted(path for path in test_root.rglob("*.java") if path.is_file()):
+            code = file_path.read_text(encoding="utf-8")
+            method_codes = extract_test_methods_from_class(code)
+            if not method_codes:
+                continue
+
+            class_info = parse_java_class(code)
+            test_class_name = class_info["class_name"] or file_path.stem
+            package_name = class_info["package"]
+            test_methods: list[TestMethod] = []
+            for index, method_code in enumerate(method_codes, start=1):
+                extracted_name = extract_test_method_name(method_code) or f"existingTest{index}"
+                test_methods.append(
+                    TestMethod(
+                        method_name=extracted_name,
+                        code=method_code,
+                        target_method=method.method_name,
+                        target_method_signature=method.method_signature,
+                    )
+                )
+
+            test_case = TestCase(
+                id=f"existing::{method.target_id}::{file_path.relative_to(test_root).as_posix()}",
+                class_name=test_class_name,
+                target_class=method.class_name,
+                package_name=package_name,
+                imports=extract_imports(code),
+                methods=test_methods,
+                full_code=code,
+                compile_success=True,
+            )
+            db.save_test_case(test_case)
+            imported_files.append(file_path)
+
+        return imported_files
+
+    def _archive_existing_test_files(
+        self,
+        test_files: Sequence[Path],
+        workspace_path: str,
+        baseline_dir: Path,
+    ) -> list[Path]:
+        test_root = Path(workspace_path) / "src" / "test" / "java"
+        archived_files: list[Path] = []
+        for test_file in test_files:
+            rel_path = test_file.relative_to(test_root)
+            target_file = baseline_dir / rel_path
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(test_file, target_file)
+            archived_files.append(target_file)
+        return archived_files
 
     def _get_method_coverage(
         self,

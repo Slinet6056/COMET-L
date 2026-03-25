@@ -1051,6 +1051,63 @@ class StudyRunnerTest(unittest.TestCase):
 
             runner.cleanup_shared_baselines()
 
+    def test_existing_project_tests_are_used_as_baseline(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            artifacts_root = root / "artifacts"
+            test_root = project_path / "src" / "test" / "java" / "pkg"
+            test_root.mkdir(parents=True, exist_ok=True)
+            _ = (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+            _ = (test_root / "ExistingBaselineTest.java").write_text(
+                "package pkg;\n"
+                "import org.junit.jupiter.api.Test;\n"
+                "class ExistingBaselineTest {\n"
+                "    @Test\n"
+                "    void usesProjectSeed() {}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(artifacts_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+            )
+
+            method_signature = "public int run()"
+            target_id = build_method_key("Alpha", "run", method_signature)
+            result = runner.ensure_shared_baseline(
+                {
+                    "target_id": target_id,
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": method_signature,
+                }
+            )
+
+            self.assertTrue(result.success)
+            self.assertEqual(tools.generate_calls.get(target_id, 0), 0)
+            self.assertEqual(tools.generate_mutant_calls[target_id], 1)
+            self.assertEqual(tools.evaluate_calls[target_id], 1)
+            self.assertEqual(result.metrics.pre_test_count, 1)
+
+            baseline_files = [Path(path) for path in result.metrics.archived_test_files]
+            self.assertEqual(len(baseline_files), 1)
+            self.assertTrue(baseline_files[0].is_file())
+            self.assertEqual(baseline_files[0].name, "ExistingBaselineTest.java")
+
+            imported_tests = db.get_tests_by_target_method("Alpha", "run", method_signature)
+            self.assertEqual(len(imported_tests), 1)
+            self.assertEqual(imported_tests[0].class_name, "ExistingBaselineTest")
+
+            runner.cleanup_shared_baselines()
+
     def test_baseline_failure_is_scoped_to_method(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
