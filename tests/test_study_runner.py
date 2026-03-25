@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 from comet.config.settings import LLMConfig, Settings
+from comet.executor.coverage_parser import MethodCoverage
 from comet.knowledge.knowledge_base import RAGKnowledgeBase
 from comet.models import Mutant, MutationPatch, TestCase, TestMethod
+from comet.store.database import Database
 from comet.utils.method_keys import build_method_key
 from comet.utils.sandbox import SandboxManager
 from comet.web.study_protocol import BASELINE_ARCHIVE_DIR
@@ -1050,6 +1052,48 @@ class StudyRunnerTest(unittest.TestCase):
             )
 
             runner.cleanup_shared_baselines()
+
+    def test_get_method_coverage_matches_erased_signature_for_study_method(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            database = Database(str(root / "comet.db"))
+            try:
+                database.save_method_coverage(
+                    MethodCoverage(
+                        class_name="Alpha",
+                        method_name="run",
+                        method_signature="Object run(Supplier)",
+                        covered_lines=[10, 11, 12],
+                        missed_lines=[13],
+                        total_lines=4,
+                        covered_branches=0,
+                        missed_branches=0,
+                        total_branches=0,
+                        line_coverage_rate=0.75,
+                        branch_coverage_rate=0.0,
+                    ),
+                    iteration=0,
+                )
+
+                runner = StudyRunner(
+                    workspace_project_path=str(root),
+                    artifacts_root=str(root / "artifacts"),
+                    database=database,
+                )
+                method = FrozenStudyMethod(
+                    target_id="Alpha.run#generic",
+                    class_name="com.example.Alpha",
+                    method_name="run",
+                    method_signature="T run(Supplier<T>)",
+                )
+
+                coverage = runner._get_method_coverage(cast(Any, database), method)
+
+                self.assertIsNotNone(coverage)
+                assert coverage is not None
+                self.assertAlmostEqual(coverage.line_coverage_rate, 0.75)
+            finally:
+                database.close()
 
     def test_existing_project_tests_are_used_as_baseline(self) -> None:
         with TemporaryDirectory() as tmp_dir:
