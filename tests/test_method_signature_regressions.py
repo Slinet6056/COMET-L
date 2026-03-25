@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from comet.agent.state import AgentState
 from comet.agent.tools import AgentTools
+from comet.executor.coverage_parser import MethodCoverage
 from comet.executor.surefire_parser import TestResult as SurefireTestResult
 from comet.executor.surefire_parser import TestSuiteResult as SurefireTestSuiteResult
 from comet.generators.test_generator import TestGenerator
@@ -686,6 +687,77 @@ class DatabaseMethodSignatureIsolationTests(unittest.TestCase):
                 self.assertEqual(results[0].methods[0].method_name, "testAddInt")
                 self.assertIn("testAddInt", results[0].full_code or "")
                 self.assertNotIn("testAddDouble", results[0].full_code or "")
+            finally:
+                database.close()
+
+    def test_get_method_coverage_matches_source_signature_with_parameter_names(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database = Database(str(Path(tmp_dir) / "comet.db"))
+            try:
+                database.save_method_coverage(
+                    MethodCoverage(
+                        class_name="Calculator",
+                        method_name="add",
+                        method_signature="int add(int, int)",
+                        covered_lines=[10, 11],
+                        missed_lines=[],
+                        total_lines=2,
+                        covered_branches=0,
+                        missed_branches=0,
+                        total_branches=0,
+                        line_coverage_rate=1.0,
+                        branch_coverage_rate=0.0,
+                    ),
+                    iteration=0,
+                )
+
+                coverage = database.get_method_coverage(
+                    "Calculator",
+                    "add",
+                    "int add(int left, int right)",
+                )
+
+                self.assertIsNotNone(coverage)
+                assert coverage is not None
+                self.assertEqual(coverage.method_signature, "int add(int, int)")
+                self.assertEqual(coverage.line_coverage_rate, 1.0)
+            finally:
+                database.close()
+
+    def test_get_method_coverage_matches_source_signature_with_generics(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database = Database(str(Path(tmp_dir) / "comet.db"))
+            try:
+                database.save_method_coverage(
+                    MethodCoverage(
+                        class_name="CommandLine",
+                        method_name="getParsedOptionValue",
+                        method_signature="Object getParsedOptionValue(String, Supplier)",
+                        covered_lines=[244, 247, 250],
+                        missed_lines=[],
+                        total_lines=3,
+                        covered_branches=0,
+                        missed_branches=0,
+                        total_branches=0,
+                        line_coverage_rate=1.0,
+                        branch_coverage_rate=0.0,
+                    ),
+                    iteration=0,
+                )
+
+                coverage = database.get_method_coverage(
+                    "CommandLine",
+                    "getParsedOptionValue",
+                    "T getParsedOptionValue(String, Supplier<T>)",
+                )
+
+                self.assertIsNotNone(coverage)
+                assert coverage is not None
+                self.assertEqual(
+                    coverage.method_signature,
+                    "Object getParsedOptionValue(String, Supplier)",
+                )
+                self.assertEqual(coverage.line_coverage_rate, 1.0)
             finally:
                 database.close()
 

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from ..executor.coverage_parser import MethodCoverage
 from ..models import EvaluationResult, Mutant, TestCase, TestMethod
 from ..utils.code_utils import build_test_class
-from ..utils.method_keys import build_method_key
+from ..utils.method_keys import build_method_key, canonicalize_coverage_method_signature
 
 logger = logging.getLogger(__name__)
 
@@ -1023,17 +1023,35 @@ class Database:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            query = "SELECT * FROM method_coverage WHERE class_name = ? AND method_name = ?"
-            params: list[Any] = [class_name, method_name]
-            if method_signature is not None:
-                query += " AND method_signature = ?"
-                params.append(method_signature)
-            query += " ORDER BY iteration DESC, id DESC LIMIT 1"
-            cursor.execute(query, tuple(params))
+            base_query = "SELECT * FROM method_coverage WHERE class_name = ? AND method_name = ?"
+            ordered_suffix = " ORDER BY iteration DESC, id DESC"
+
+            if method_signature is None:
+                cursor.execute(f"{base_query}{ordered_suffix} LIMIT 1", (class_name, method_name))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return self._row_to_method_coverage(row)
+
+            cursor.execute(
+                f"{base_query} AND method_signature = ?{ordered_suffix} LIMIT 1",
+                (class_name, method_name, method_signature),
+            )
             row = cursor.fetchone()
-            if not row:
+            if row is not None:
+                return self._row_to_method_coverage(row)
+
+            canonical_signature = canonicalize_coverage_method_signature(method_signature)
+            if canonical_signature is None or canonical_signature == method_signature:
                 return None
-            return self._row_to_method_coverage(row)
+
+            cursor.execute(f"{base_query}{ordered_suffix}", (class_name, method_name))
+            rows = cursor.fetchall()
+            for candidate_row in rows:
+                stored_signature = candidate_row["method_signature"]
+                if canonicalize_coverage_method_signature(stored_signature) == canonical_signature:
+                    return self._row_to_method_coverage(candidate_row)
+            return None
 
     def get_latest_coverage_for_class(self, class_name: str) -> List[MethodCoverage]:
         """
