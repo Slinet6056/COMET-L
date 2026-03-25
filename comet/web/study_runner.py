@@ -49,7 +49,9 @@ from .study_protocol import (
 )
 from .study_sampling import (
     ClassMappingStore,
+    MethodCoverageStore,
     PublicMethodExecutor,
+    collect_partially_covered_target_ids,
     discover_cold_start_methods,
     freeze_sampled_methods,
     sample_cold_start_methods,
@@ -1913,10 +1915,15 @@ def run_default_study(
         db=cast(ClassMappingStore, cast(object, db)),
         min_method_lines=settings.evolution.min_method_lines,
     )
+    preferred_target_ids = collect_partially_covered_target_ids(
+        discovered_methods,
+        coverage_store=cast(MethodCoverageStore, cast(object, db)),
+    )
     sampled_methods = sample_cold_start_methods(
         discovered_methods,
         sample_size=sample_size,
         seed=seed,
+        preferred_target_ids=preferred_target_ids,
     )
     if not sampled_methods:
         raise RuntimeError("未找到可用于研究的公共方法，请检查项目源码与最小方法行数配置")

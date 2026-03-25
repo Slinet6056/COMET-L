@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Protocol, TypedDict
 
+from ..executor.coverage_parser import MethodCoverage
 from ..utils.method_keys import build_method_key
 from ..utils.project_utils import find_java_file, get_all_java_classes
 from .study_protocol import (
@@ -50,6 +51,15 @@ class ClassMappingStore(Protocol):
     def get_all_class_mappings(self) -> list[ClassMappingRecord]: ...
 
     def get_class_file_path(self, class_name: str) -> str | None: ...
+
+
+class MethodCoverageStore(Protocol):
+    def get_method_coverage(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: str | None = None,
+    ) -> MethodCoverage | None: ...
 
 
 def _method_line_count(method_info: MethodRecord) -> int | None:
@@ -152,6 +162,7 @@ def sample_cold_start_methods(
     discovered_methods: list[StudySampledMethodSchema],
     sample_size: int = DEFAULT_STUDY_SAMPLE_SIZE,
     seed: int = DEFAULT_STUDY_SEED,
+    preferred_target_ids: set[str] | None = None,
 ) -> list[StudySampledMethodSchema]:
     sample_count = choose_study_sample_size(len(discovered_methods), sample_size)
     ordered_methods = list(discovered_methods)
@@ -160,12 +171,57 @@ def sample_cold_start_methods(
         selected_methods = ordered_methods
     else:
         rng = random.Random(seed)
-        selected_indexes = sorted(rng.sample(range(len(ordered_methods)), sample_count))
-        selected_methods = [ordered_methods[index] for index in selected_indexes]
+        preferred_ids = preferred_target_ids or set()
+
+        if preferred_ids:
+            preferred_methods = [
+                method for method in ordered_methods if method.target_id in preferred_ids
+            ]
+            fallback_methods = [
+                method for method in ordered_methods if method.target_id not in preferred_ids
+            ]
+            selected_methods = _sample_methods(preferred_methods, sample_count, rng)
+            remaining_count = sample_count - len(selected_methods)
+            if remaining_count > 0:
+                selected_methods.extend(_sample_methods(fallback_methods, remaining_count, rng))
+        else:
+            selected_methods = _sample_methods(ordered_methods, sample_count, rng)
 
     return [
         method.model_copy(update={"order": order}) for order, method in enumerate(selected_methods)
     ]
+
+
+def collect_partially_covered_target_ids(
+    discovered_methods: list[StudySampledMethodSchema],
+    coverage_store: MethodCoverageStore,
+) -> set[str]:
+    preferred_target_ids: set[str] = set()
+    for method in discovered_methods:
+        coverage = coverage_store.get_method_coverage(
+            method.class_name,
+            method.method_name,
+            method.method_signature,
+        )
+        if coverage is None:
+            continue
+        if 0.0 < coverage.line_coverage_rate < 1.0:
+            preferred_target_ids.add(method.target_id)
+    return preferred_target_ids
+
+
+def _sample_methods(
+    ordered_methods: list[StudySampledMethodSchema],
+    sample_count: int,
+    rng: random.Random,
+) -> list[StudySampledMethodSchema]:
+    if sample_count <= 0 or not ordered_methods:
+        return []
+    if sample_count >= len(ordered_methods):
+        return list(ordered_methods)
+
+    selected_indexes = sorted(rng.sample(range(len(ordered_methods)), sample_count))
+    return [ordered_methods[index] for index in selected_indexes]
 
 
 def freeze_sampled_methods(

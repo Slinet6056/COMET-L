@@ -4,9 +4,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
 
+from comet.executor.coverage_parser import MethodCoverage
+from comet.utils.method_keys import build_method_key
 from comet.web.study_sampling import (
     ClassMappingRecord,
     MethodRecord,
+    collect_partially_covered_target_ids,
     discover_cold_start_methods,
     freeze_sampled_methods,
     sample_cold_start_methods,
@@ -26,16 +29,30 @@ class _FakeJavaExecutor:
 class _FakeDatabase:
     mappings: list[ClassMappingRecord]
     file_map: dict[str, str]
+    coverage_map: dict[tuple[str, str, str | None], MethodCoverage]
 
-    def __init__(self, mappings: list[ClassMappingRecord]) -> None:
+    def __init__(
+        self,
+        mappings: list[ClassMappingRecord],
+        coverage_map: dict[tuple[str, str, str | None], MethodCoverage] | None = None,
+    ) -> None:
         self.mappings = mappings
         self.file_map = {mapping["simple_name"]: mapping["file_path"] for mapping in mappings}
+        self.coverage_map = coverage_map or {}
 
     def get_all_class_mappings(self) -> list[ClassMappingRecord]:
         return self.mappings
 
     def get_class_file_path(self, class_name: str) -> str | None:
         return self.file_map.get(class_name)
+
+    def get_method_coverage(
+        self,
+        class_name: str,
+        method_name: str,
+        method_signature: str | None = None,
+    ) -> MethodCoverage | None:
+        return self.coverage_map.get((class_name, method_name, method_signature))
 
 
 class StudySamplingTest(unittest.TestCase):
@@ -243,6 +260,101 @@ class StudySamplingTest(unittest.TestCase):
             self.assertEqual(output_path.name, "sampled_methods.json")
             self.assertEqual(payload[0]["class_name"], "Beta")
             self.assertEqual(payload[1]["order"], 1)
+
+    def test_collect_partially_covered_target_ids_only_returns_open_interval_coverage(self) -> None:
+        partial_method = build_method_key("Alpha", "partial", "public void partial()")
+        zero_method = build_method_key("Alpha", "zero", "public void zero()")
+        full_method = build_method_key("Alpha", "full", "public void full()")
+        discovered = [
+            _build_sampled_method("Alpha", "partial", "public void partial()"),
+            _build_sampled_method("Alpha", "zero", "public void zero()"),
+            _build_sampled_method("Alpha", "full", "public void full()"),
+            _build_sampled_method("Alpha", "missing", "public void missing()"),
+        ]
+        db = _FakeDatabase(
+            mappings=[],
+            coverage_map={
+                ("Alpha", "partial", "public void partial()"): _build_coverage(
+                    "Alpha", "partial", "public void partial()", 0.4
+                ),
+                ("Alpha", "zero", "public void zero()"): _build_coverage(
+                    "Alpha", "zero", "public void zero()", 0.0
+                ),
+                ("Alpha", "full", "public void full()"): _build_coverage(
+                    "Alpha", "full", "public void full()", 1.0
+                ),
+            },
+        )
+
+        preferred_target_ids = collect_partially_covered_target_ids(discovered, db)
+
+        self.assertEqual(preferred_target_ids, {partial_method})
+        self.assertNotIn(zero_method, preferred_target_ids)
+        self.assertNotIn(full_method, preferred_target_ids)
+
+    def test_sampling_prioritizes_partially_covered_methods_before_fallback(self) -> None:
+        discovered = [
+            _build_sampled_method("Alpha", "method00", "public void method00()"),
+            _build_sampled_method("Alpha", "method01", "public void method01()"),
+            _build_sampled_method("Alpha", "method02", "public void method02()"),
+            _build_sampled_method("Alpha", "method03", "public void method03()"),
+            _build_sampled_method("Alpha", "method04", "public void method04()"),
+        ]
+        preferred_target_ids = {
+            discovered[1].target_id,
+            discovered[3].target_id,
+        }
+
+        sampled = sample_cold_start_methods(
+            discovered,
+            sample_size=3,
+            seed=42,
+            preferred_target_ids=preferred_target_ids,
+        )
+
+        self.assertEqual(
+            [item.target_id for item in sampled[:2]],
+            [discovered[1].target_id, discovered[3].target_id],
+        )
+        self.assertEqual(len(sampled), 3)
+        self.assertEqual([item.order for item in sampled], [0, 1, 2])
+
+
+def _build_sampled_method(
+    class_name: str,
+    method_name: str,
+    method_signature: str,
+):
+    from comet.web.study_protocol import StudySampledMethodSchema
+
+    return StudySampledMethodSchema(
+        target_id=build_method_key(class_name, method_name, method_signature),
+        class_name=class_name,
+        method_name=method_name,
+        method_signature=method_signature,
+        order=0,
+    )
+
+
+def _build_coverage(
+    class_name: str,
+    method_name: str,
+    method_signature: str,
+    line_coverage_rate: float,
+) -> MethodCoverage:
+    return MethodCoverage(
+        class_name=class_name,
+        method_name=method_name,
+        method_signature=method_signature,
+        covered_lines=[1] if line_coverage_rate > 0 else [],
+        missed_lines=[] if line_coverage_rate >= 1.0 else [2],
+        total_lines=2,
+        covered_branches=0,
+        missed_branches=0,
+        total_branches=0,
+        line_coverage_rate=line_coverage_rate,
+        branch_coverage_rate=0.0,
+    )
 
 
 if __name__ == "__main__":
