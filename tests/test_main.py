@@ -1,3 +1,4 @@
+import csv
 import io
 import json
 import tempfile
@@ -13,7 +14,16 @@ from comet.models import Mutant, MutationPatch, TestCase, TestMethod
 from comet.utils.method_keys import build_method_key
 from comet.utils.sandbox import SandboxManager
 from comet.web.study_runner import StudyArmContext, StudyArmPaths, StudyRunner
-from tests.test_study_runner import _build_pit_mutations_xml, _FakeCoverage, _FakeDatabase
+from tests.test_study_runner import (
+    _build_pit_mutations_xml,
+    _build_post_mutant,
+    _build_settings,
+    _create_isolated_project,
+    _FakeCoverage,
+    _FakeDatabase,
+    _FakeTools,
+    _write_final_arm_test,
+)
 
 
 class _NoopThread:
@@ -394,6 +404,16 @@ class StudyCliTests(unittest.TestCase):
         self.assertEqual(args.seed, 42)
         self.assertEqual(args.output_dir, ".artifacts/study-demo")
         self.assertIsNone(args.bug_reports_dir)
+
+    def test_study_help_describes_sample_size_as_success_quota(self) -> None:
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout), self.assertRaises(SystemExit) as exc_info:
+            main.parse_args(["study", "--help"])
+
+        self.assertEqual(exc_info.exception.code, 0)
+        help_text = stdout.getvalue()
+        self.assertIn("目标成功方法数配额", help_text)
+        self.assertNotIn("固定抽样方法数", help_text)
 
     def test_parse_args_supports_study_bug_reports_dir(self) -> None:
         args = main.parse_args(
@@ -821,7 +841,7 @@ class StudyCliTests(unittest.TestCase):
         self.assertEqual(init_calls, [(str(bug_reports_dir.resolve()), True)])
         run_cli_mock.assert_not_called()
 
-    def test_main_runs_study_e2e_on_calculator_demo(self) -> None:
+    def test_main_runs_study_sampled_methods_e2e_on_calculator_demo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_dir = Path(tmp_dir) / "study-output"
             calculator_demo = Path("examples/calculator-demo")
@@ -894,7 +914,7 @@ class StudyCliTests(unittest.TestCase):
                 main.main()
 
             run_cli_mock.assert_not_called()
-            self.assertEqual(len(initializer_output_roots), 6)
+            self.assertEqual(len(initializer_output_roots), 5)
             self.assertEqual(
                 java_executor.public_method_files,
                 [calculator_source],
@@ -909,13 +929,250 @@ class StudyCliTests(unittest.TestCase):
             self.assertTrue(per_mutant_path.exists())
             self.assertTrue(sampled_methods_path.exists())
 
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertGreaterEqual(summary["sample_size"], 1)
+            self.assertEqual(summary["requested_sample_size"], 1)
+            self.assertEqual(summary["method_count"], summary["sample_size"])
+            self.assertEqual(summary["attempted_method_count"], summary["sample_size"])
+            self.assertEqual(summary["successful_method_count"], summary["sample_size"])
+            self.assertEqual(summary["successful_sample_shortfall"], 0)
+
             sampled_methods = json.loads(sampled_methods_path.read_text(encoding="utf-8"))
-            self.assertEqual(len(sampled_methods), 1)
+            self.assertEqual(len(sampled_methods), summary["attempted_method_count"])
+            self.assertEqual(
+                [item["order"] for item in sampled_methods],
+                list(range(len(sampled_methods))),
+            )
+            for arm_summary in summary["project_averages"].values():
+                self.assertEqual(arm_summary["sample_size"], summary["sample_size"])
+                self.assertEqual(arm_summary["method_count"], summary["sample_size"])
             self.assertEqual(sampled_methods[0]["method_name"], "add")
             target_id = sampled_methods[0]["target_id"]
             for arm in ("baseline", "M0", "M2", "M3"):
                 archived_files = list((output_dir / "artifacts" / target_id / arm).rglob("*.java"))
                 self.assertTrue(archived_files, msg=f"{arm} 应导出测试工件")
+
+    def test_study_summary_backfills_failed_targets_and_tracks_all_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 1
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+
+            methods = [
+                {
+                    "target_id": build_method_key("Alpha", "run", "public int run()"),
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 0,
+                },
+                {
+                    "target_id": build_method_key("Beta", "run", "public int run()"),
+                    "class_name": "Beta",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 1,
+                },
+                {
+                    "target_id": build_method_key("Gamma", "run", "public int run()"),
+                    "class_name": "Gamma",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 2,
+                },
+            ]
+            attempted_target_ids = [str(method["target_id"]) for method in methods]
+            failed_target_id = attempted_target_ids[0]
+            completed_target_ids = set(attempted_target_ids[1:])
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager, failing_targets={failed_target_id})
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            def execute_arm(
+                context: StudyArmContext,
+                _method: object,
+                _guidance: object,
+                _knowledge_base: object,
+            ) -> None:
+                _ = _write_final_arm_test(context, "BackfillContract")
+
+            def post_evaluator(context: StudyArmContext, method: object) -> dict[str, object]:
+                method_payload = next(
+                    item for item in methods if item["target_id"] == getattr(method, "target_id")
+                )
+                return {
+                    "post_line_coverage": 0.8,
+                    "mutants": [
+                        _build_post_mutant(method_payload, "killed", "MathMutator", "KILLED"),
+                        _build_post_mutant(
+                            method_payload,
+                            "survived",
+                            "NegateConditionalsMutator",
+                            "KILLED",
+                        ),
+                    ],
+                }
+
+            with patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()):
+                artifacts = runner.run_study(
+                    methods,
+                    arm_executor=execute_arm,
+                    post_evaluator=post_evaluator,
+                    config=settings,
+                    seed=17,
+                    requested_success_quota=2,
+                )
+
+            summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["requested_sample_size"], 2)
+            self.assertEqual(summary["sample_size"], 2)
+            self.assertEqual(summary["method_count"], 2)
+            self.assertEqual(summary["attempted_method_count"], 3)
+            self.assertEqual(summary["successful_method_count"], 2)
+            self.assertEqual(summary["failed_method_count"], 1)
+            self.assertEqual(summary["partial_failure_method_count"], 0)
+            self.assertEqual(summary["successful_sample_shortfall"], 0)
+            self.assertEqual(
+                [item["target_id"] for item in summary["methods"]],
+                attempted_target_ids,
+            )
+            self.assertEqual(summary["methods"][0]["status"], "failed")
+            self.assertEqual(summary["methods"][1]["status"], "completed")
+            self.assertEqual(summary["methods"][2]["status"], "completed")
+            for arm_summary in summary["project_averages"].values():
+                self.assertEqual(arm_summary["sample_size"], 2)
+                self.assertEqual(arm_summary["method_count"], 2)
+                self.assertEqual(arm_summary["baseline_total_mutants"], 4)
+
+            sampled_methods = json.loads(artifacts.sampled_methods_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["target_id"] for item in sampled_methods],
+                attempted_target_ids,
+            )
+            self.assertEqual([item["order"] for item in sampled_methods], [0, 1, 2])
+
+            with artifacts.per_method_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual({row["target_id"] for row in rows}, completed_target_ids)
+            self.assertEqual(len(rows), 6)
+
+    def test_study_summary_reports_shortfall_when_candidates_are_exhausted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 1
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+
+            methods = [
+                {
+                    "target_id": build_method_key("Alpha", "run", "public int run()"),
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 0,
+                },
+                {
+                    "target_id": build_method_key("Beta", "run", "public int run()"),
+                    "class_name": "Beta",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 1,
+                },
+            ]
+            attempted_target_ids = [str(method["target_id"]) for method in methods]
+            flaky_target_id = attempted_target_ids[1]
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager, failing_targets={attempted_target_ids[0]})
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            def execute_arm(
+                context: StudyArmContext,
+                method: object,
+                _guidance: object,
+                _knowledge_base: object,
+            ) -> None:
+                _ = _write_final_arm_test(context, "ShortfallContract")
+                if getattr(method, "target_id") == flaky_target_id and context.arm == "M3":
+                    raise RuntimeError("Beta M3 failed")
+
+            def post_evaluator(context: StudyArmContext, method: object) -> dict[str, object]:
+                method_payload = next(
+                    item for item in methods if item["target_id"] == getattr(method, "target_id")
+                )
+                return {
+                    "post_line_coverage": 0.7,
+                    "mutants": [
+                        _build_post_mutant(method_payload, "killed", "MathMutator", "KILLED"),
+                        _build_post_mutant(
+                            method_payload,
+                            "survived",
+                            "NegateConditionalsMutator",
+                            "SURVIVED",
+                        ),
+                    ],
+                }
+
+            with patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()):
+                artifacts = runner.run_study(
+                    methods,
+                    arm_executor=execute_arm,
+                    post_evaluator=post_evaluator,
+                    config=settings,
+                    seed=19,
+                    requested_success_quota=2,
+                )
+
+            summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["requested_sample_size"], 2)
+            self.assertEqual(summary["sample_size"], 0)
+            self.assertEqual(summary["method_count"], 0)
+            self.assertEqual(summary["attempted_method_count"], 2)
+            self.assertEqual(summary["successful_method_count"], 0)
+            self.assertEqual(summary["failed_method_count"], 1)
+            self.assertEqual(summary["partial_failure_method_count"], 1)
+            self.assertEqual(summary["successful_sample_shortfall"], 2)
+            self.assertEqual(
+                [item["target_id"] for item in summary["methods"]],
+                attempted_target_ids,
+            )
+            self.assertEqual(summary["methods"][0]["status"], "failed")
+            self.assertEqual(summary["methods"][1]["status"], "partial_failed")
+            for arm_summary in summary["project_averages"].values():
+                self.assertEqual(arm_summary["sample_size"], 0)
+                self.assertEqual(arm_summary["method_count"], 0)
+                self.assertEqual(arm_summary["baseline_total_mutants"], 0)
+
+            sampled_methods = json.loads(artifacts.sampled_methods_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["target_id"] for item in sampled_methods],
+                attempted_target_ids,
+            )
+            self.assertEqual([item["order"] for item in sampled_methods], [0, 1])
+
+            with artifacts.per_method_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows, [])
 
     def test_study_runner_indexes_bug_reports_for_m3_arm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

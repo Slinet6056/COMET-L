@@ -117,9 +117,10 @@ just run-parallel examples/calculator-demo 8
 uv run python main.py study --project-path examples/calculator-demo --sample-size 12 --seed 42 --output-dir .artifacts/study-demo --bug-reports-dir /path/to/bug-reports
 ```
 
-- 冷启动：即使目标项目一开始没有测试用例，`study` 也会先为每个抽样方法建立共享 baseline，再继续三臂对比。
-- 抽样：默认固定抽样 `12` 个 public method，默认 `seed=42`；若候选方法少于 `12` 个，则按实际数量运行。
-- 输出：`--output-dir` 会生成 `summary.json`、`per_method.csv`、`per_mutant.jsonl`、`sampled_methods.json`，并在 `artifacts/<target-method>/{baseline,M0,M2,M3}/` 下归档测试文件。
+- 冷启动：即使目标项目一开始没有测试用例，`study` 也会先为每个候选方法建立共享 baseline，再继续三臂对比。
+- 抽样：`--sample-size` 表示目标成功数，不再表示预先截断的固定样本数；运行会按冻结候选顺序持续补位，前面失败或部分失败的方法会由后续候选补位，直到攒够该成功数，或候选耗尽。
+- 输出：`--output-dir` 会生成 `summary.json`、`per_method.csv`、`per_mutant.jsonl`、`sampled_methods.json`，并在 `artifacts/<target-method>/{baseline,M0,M2,M3}/` 下归档测试文件；其中 `sampled_methods.json` 记录全部已尝试目标，`summary.json` 的 `sample_size`、`method_count` 与 `project_averages` 统计只基于 `M0/M2/M3` 三臂全部成功的方法。
+- 配额缺口：若候选方法耗尽后仍未达到目标成功数，`summary.json` 会保留 `requested_sample_size`、`attempted_method_count` 与 `successful_sample_shortfall`，显式展示本次研究还差多少个成功方法。
 - Bug reports：可通过 `--bug-reports-dir` 指定缺陷报告目录，`M3` 会在研究执行时读取并索引这些报告用于 RAG 检索；未提供时保持原有无 bug reports 输入行为。
 - 运行目录：日志写入 `--output-dir/study.log`，隔离运行状态和沙箱分别写入 `--output-dir/.study-state/` 与 `--output-dir/.study-sandbox/`，不会回写目标项目。
 

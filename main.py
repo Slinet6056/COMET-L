@@ -229,7 +229,7 @@ def parse_args(argv: Optional[list[str]] = None):
         "--sample-size",
         type=int,
         default=DEFAULT_STUDY_SAMPLE_SIZE,
-        help=f"固定抽样方法数（默认: {DEFAULT_STUDY_SAMPLE_SIZE}）",
+        help=f"目标成功方法数配额（默认: {DEFAULT_STUDY_SAMPLE_SIZE}）",
     )
     study_parser.add_argument(
         "--seed",

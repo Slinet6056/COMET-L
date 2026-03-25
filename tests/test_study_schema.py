@@ -99,6 +99,30 @@ class StudySchemaTest(unittest.TestCase):
             ),
         )
 
+    def test_project_average_summary_schema_stays_arm_level(self) -> None:
+        self.assertEqual(
+            tuple(StudyOutputSummarySchema.model_fields.keys()),
+            (
+                "arm",
+                "baseline_arm",
+                "sample_size",
+                "seed",
+                "method_count",
+                "baseline_total_mutants",
+                "pre_killed",
+                "post_killed",
+                "final_kill_rate",
+                "delta_mutation_score",
+                "pre_line_coverage",
+                "post_line_coverage",
+                "delta_coverage",
+                "effective_operator_ratio",
+            ),
+        )
+        self.assertNotIn("requested_sample_size", StudyOutputSummarySchema.model_fields)
+        self.assertNotIn("attempted_method_count", StudyOutputSummarySchema.model_fields)
+        self.assertNotIn("successful_sample_shortfall", StudyOutputSummarySchema.model_fields)
+
 
 if __name__ == "__main__":
     _ = unittest.main()
