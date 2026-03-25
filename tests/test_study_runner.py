@@ -20,7 +20,11 @@ from comet.store.database import Database
 from comet.store.knowledge_store import KnowledgeStore
 from comet.utils.method_keys import build_method_key
 from comet.utils.sandbox import SandboxManager
-from comet.web.study_protocol import BASELINE_ARCHIVE_DIR
+from comet.web.study_protocol import (
+    BASELINE_ARCHIVE_DIR,
+    StudyPerMethodRowSchema,
+    StudyPerMutantRecordSchema,
+)
 from comet.web.study_runner import (
     FrozenStudyMethod,
     StudyArmContext,
@@ -567,9 +571,16 @@ class StudyRunnerTest(unittest.TestCase):
 
             summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
             self.assertEqual(summary["arms"], ["M0", "M2", "M3"])
+            self.assertEqual(summary["sample_size"], 2)
+            self.assertEqual(summary["requested_sample_size"], 2)
             self.assertEqual(summary["method_count"], 2)
+            self.assertEqual(summary["attempted_method_count"], 2)
             self.assertEqual(summary["successful_method_count"], 2)
+            self.assertEqual(summary["successful_sample_shortfall"], 0)
             self.assertEqual(set(summary["project_averages"].keys()), {"M0", "M2", "M3"})
+            for arm_summary in summary["project_averages"].values():
+                self.assertEqual(arm_summary["sample_size"], 2)
+                self.assertEqual(arm_summary["method_count"], 2)
 
             with artifacts.per_method_path.open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
@@ -944,7 +955,11 @@ class StudyRunnerTest(unittest.TestCase):
             self.assertEqual(execution_trace, expected_trace)
 
             summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["sample_size"], 2)
+            self.assertEqual(summary["requested_sample_size"], 2)
+            self.assertEqual(summary["attempted_method_count"], 2)
             self.assertEqual(summary["successful_method_count"], 2)
+            self.assertEqual(summary["successful_sample_shortfall"], 0)
             self.assertEqual(summary["successful_arm_count"], 6)
             self.assertEqual(summary["failed_arm_count"], 0)
 
@@ -1164,8 +1179,13 @@ class StudyRunnerTest(unittest.TestCase):
             artifacts = cast(StudyRunArtifacts, run_result["artifacts"])
             summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
             method_summary = summary["methods"][0]
+            self.assertEqual(summary["sample_size"], 0)
+            self.assertEqual(summary["requested_sample_size"], 1)
+            self.assertEqual(summary["method_count"], 0)
+            self.assertEqual(summary["attempted_method_count"], 1)
             self.assertEqual(summary["failed_arm_count"], 1)
             self.assertEqual(summary["successful_arm_count"], 2)
+            self.assertEqual(summary["successful_sample_shortfall"], 1)
             self.assertEqual(method_summary["status"], "partial_failed")
             self.assertEqual(method_summary["arm_statuses"]["M2"], "failed")
 
@@ -1365,6 +1385,107 @@ class StudyRunnerTest(unittest.TestCase):
                 mutant_ids = [item["mutant_id"] for item in per_mutant_lines[index : index + 4]]
                 self.assertEqual(mutant_ids, sorted(mutant_ids))
 
+    def test_ordering_helpers_follow_attempted_ledger_order(self) -> None:
+        runner = StudyRunner(workspace_project_path=".", artifacts_root=".")
+        attempted_target_ids = ["target-b", "target-a"]
+
+        method_rows = [
+            StudyPerMethodRowSchema(
+                target_id="target-a",
+                arm="M3",
+                class_name="Alpha",
+                method_name="run",
+                method_signature="void run()",
+                archive_root="artifacts/target-a",
+                baseline_dir="artifacts/target-a/baseline",
+                m0_dir="artifacts/target-a/M0",
+                m2_dir="artifacts/target-a/M2",
+                m3_dir="artifacts/target-a/M3",
+            ),
+            StudyPerMethodRowSchema(
+                target_id="target-b",
+                arm="M0",
+                class_name="Beta",
+                method_name="run",
+                method_signature="void run()",
+                archive_root="artifacts/target-b",
+                baseline_dir="artifacts/target-b/baseline",
+                m0_dir="artifacts/target-b/M0",
+                m2_dir="artifacts/target-b/M2",
+                m3_dir="artifacts/target-b/M3",
+            ),
+            StudyPerMethodRowSchema(
+                target_id="target-a",
+                arm="M0",
+                class_name="Alpha",
+                method_name="run",
+                method_signature="void run()",
+                archive_root="artifacts/target-a",
+                baseline_dir="artifacts/target-a/baseline",
+                m0_dir="artifacts/target-a/M0",
+                m2_dir="artifacts/target-a/M2",
+                m3_dir="artifacts/target-a/M3",
+            ),
+        ]
+        ordered_rows = runner._order_per_method_rows(method_rows, attempted_target_ids)
+        self.assertEqual(
+            [(row.target_id, row.arm) for row in ordered_rows],
+            [("target-b", "M0"), ("target-a", "M0"), ("target-a", "M3")],
+        )
+
+        mutant_rows = [
+            StudyPerMutantRecordSchema(
+                target_id="target-a",
+                arm="M0",
+                mutant_id="b",
+                mutator="MathMutator",
+                pre_status="SURVIVED",
+                post_status="KILLED",
+                counts_as_killed=True,
+                counts_as_survived=False,
+                counts_in_fixed_denominator=True,
+            ),
+            StudyPerMutantRecordSchema(
+                target_id="target-b",
+                arm="M2",
+                mutant_id="a",
+                mutator="MathMutator",
+                pre_status="SURVIVED",
+                post_status="KILLED",
+                counts_as_killed=True,
+                counts_as_survived=False,
+                counts_in_fixed_denominator=True,
+            ),
+            StudyPerMutantRecordSchema(
+                target_id="target-a",
+                arm="M0",
+                mutant_id="a",
+                mutator="MathMutator",
+                pre_status="SURVIVED",
+                post_status="KILLED",
+                counts_as_killed=True,
+                counts_as_survived=False,
+                counts_in_fixed_denominator=True,
+            ),
+        ]
+        ordered_mutants = runner._order_per_mutant_records(mutant_rows, attempted_target_ids)
+        self.assertEqual(
+            [(row.target_id, row.arm, row.mutant_id) for row in ordered_mutants],
+            [("target-b", "M2", "a"), ("target-a", "M0", "a"), ("target-a", "M0", "b")],
+        )
+
+        ordered_summaries = runner._order_method_summaries(
+            [
+                {"target_id": "target-a", "status": "completed"},
+                {"target_id": "target-b", "status": "partial_failed"},
+            ],
+            attempted_target_ids,
+        )
+        self.assertEqual(
+            [item["target_id"] for item in ordered_summaries],
+            ["target-b", "target-a"],
+        )
+
     def test_run_pit_mutation_coverage_uses_target_java_environment(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -1419,7 +1540,9 @@ class StudyRunnerTest(unittest.TestCase):
                 call_args.kwargs["env"]["PATH"].startswith(str(target_bin.resolve())),
             )
 
-    def test_runner_exports_partial_results_with_failures(self) -> None:
+    def test_runner_exports_sampled_methods_and_filters_per_method_per_mutant_and_project_averages_to_completed_methods(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             settings = _build_settings(tmp_dir)
@@ -1516,35 +1639,366 @@ class StudyRunnerTest(unittest.TestCase):
 
             summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
             self.assertEqual(summary["arms"], ["M0", "M2", "M3"])
+            self.assertEqual(summary["sample_size"], 0)
+            self.assertEqual(summary["requested_sample_size"], 2)
+            self.assertEqual(summary["method_count"], 0)
+            self.assertEqual(summary["attempted_method_count"], 2)
             self.assertEqual(summary["failed_method_count"], 1)
             self.assertEqual(summary["partial_failure_method_count"], 1)
             self.assertEqual(summary["successful_method_count"], 0)
+            self.assertEqual(summary["successful_sample_shortfall"], 2)
             self.assertEqual(summary["failed_arm_count"], 1)
             self.assertEqual(summary["skipped_arm_count"], 3)
             self.assertEqual(summary["successful_arm_count"], 2)
+            for arm_summary in summary["project_averages"].values():
+                self.assertEqual(arm_summary["sample_size"], 0)
+                self.assertEqual(arm_summary["method_count"], 0)
+                self.assertEqual(arm_summary["baseline_total_mutants"], 0)
+                self.assertEqual(arm_summary["pre_killed"], 0)
+                self.assertEqual(arm_summary["post_killed"], 0)
 
             method_map = {item["target_id"]: item for item in summary["methods"]}
             self.assertEqual(method_map[failing_target]["baseline_status"], "failed")
             self.assertEqual(method_map[failing_target]["status"], "failed")
+            self.assertEqual(method_map[failing_target]["successful_arm_count"], 0)
             self.assertEqual(method_map[passing_target]["status"], "partial_failed")
+            self.assertEqual(method_map[passing_target]["successful_arm_count"], 2)
             self.assertEqual(method_map[passing_target]["arm_statuses"]["M2"], "failed")
             self.assertEqual(method_map[passing_target]["arm_errors"]["M2"], "M2 arm failed")
+            self.assertTrue(all(item["status"] != "completed" for item in summary["methods"]))
 
             with artifacts.per_method_path.open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual(len(rows), 2)
-            self.assertEqual({row["arm"] for row in rows}, {"M0", "M3"})
-            self.assertTrue(all(row["target_id"] == passing_target for row in rows))
+            self.assertEqual(rows, [])
 
             per_mutant_lines = [
                 json.loads(line)
                 for line in artifacts.per_mutant_path.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-            self.assertTrue(per_mutant_lines)
-            self.assertTrue(all(line["target_id"] == passing_target for line in per_mutant_lines))
+            self.assertEqual(per_mutant_lines, [])
 
             self.assertTrue(artifacts.sampled_methods_path.exists())
+            sampled_methods = json.loads(artifacts.sampled_methods_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["target_id"] for item in sampled_methods],
+                [failing_target, passing_target],
+            )
+            self.assertEqual([item["order"] for item in sampled_methods], [0, 1])
+
+    def test_run_study_sampled_methods_backfill_keeps_per_method_per_mutant_and_project_averages_completed_only(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 1
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+
+            methods = [
+                {
+                    "target_id": build_method_key("Alpha", "run", "public int run()"),
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 0,
+                },
+                {
+                    "target_id": build_method_key("Beta", "run", "public int run()"),
+                    "class_name": "Beta",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 1,
+                },
+                {
+                    "target_id": build_method_key("Gamma", "run", "public int run()"),
+                    "class_name": "Gamma",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 2,
+                },
+                {
+                    "target_id": build_method_key("Delta", "run", "public int run()"),
+                    "class_name": "Delta",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 3,
+                },
+            ]
+
+            method_by_target = {str(method["target_id"]): method for method in methods}
+            flaky_target = str(methods[0]["target_id"])
+            skipped_target = str(methods[3]["target_id"])
+            expected_attempted_targets = [
+                str(methods[0]["target_id"]),
+                str(methods[1]["target_id"]),
+                str(methods[2]["target_id"]),
+            ]
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            execution_trace: list[str] = []
+            original_ensure_shared_baseline = runner.ensure_shared_baseline
+
+            def tracked_ensure_shared_baseline(
+                method: FrozenStudyMethod | Mapping[str, object],
+            ) -> object:
+                frozen_method = runner._freeze_method(method)
+                execution_trace.append(f"baseline:{frozen_method.target_id}")
+                return original_ensure_shared_baseline(method)
+
+            def execute_arm(
+                context: StudyArmContext,
+                method: FrozenStudyMethod,
+                _guidance: Sequence[object],
+                _knowledge_base: object,
+            ) -> None:
+                execution_trace.append(f"arm:{method.target_id}:{context.arm}")
+                _ = _write_final_arm_test(context, "Backfill")
+                if method.target_id == flaky_target and context.arm == "M2":
+                    raise RuntimeError("Alpha M2 failed")
+
+            def post_evaluator(
+                context: StudyArmContext, method: FrozenStudyMethod
+            ) -> dict[str, object]:
+                method_payload = method_by_target[method.target_id]
+                return {
+                    "post_line_coverage": 0.8,
+                    "mutants": [
+                        _build_post_mutant(method_payload, "killed", "MathMutator", "KILLED"),
+                        _build_post_mutant(
+                            method_payload,
+                            "survived",
+                            "NegateConditionalsMutator",
+                            "KILLED",
+                        ),
+                    ],
+                }
+
+            with (
+                patch.object(
+                    runner,
+                    "ensure_shared_baseline",
+                    side_effect=tracked_ensure_shared_baseline,
+                ),
+                patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()),
+            ):
+                artifacts = runner.run_study(
+                    methods,
+                    arm_executor=execute_arm,
+                    post_evaluator=post_evaluator,
+                    config=settings,
+                    seed=41,
+                    requested_success_quota=2,
+                )
+
+            self.assertEqual(
+                execution_trace,
+                [
+                    f"baseline:{methods[0]['target_id']}",
+                    f"arm:{methods[0]['target_id']}:M0",
+                    f"arm:{methods[0]['target_id']}:M2",
+                    f"arm:{methods[0]['target_id']}:M3",
+                    f"baseline:{methods[1]['target_id']}",
+                    f"arm:{methods[1]['target_id']}:M0",
+                    f"arm:{methods[1]['target_id']}:M2",
+                    f"arm:{methods[1]['target_id']}:M3",
+                    f"baseline:{methods[2]['target_id']}",
+                    f"arm:{methods[2]['target_id']}:M0",
+                    f"arm:{methods[2]['target_id']}:M2",
+                    f"arm:{methods[2]['target_id']}:M3",
+                ],
+            )
+            self.assertTrue(
+                all(skipped_target not in item for item in execution_trace),
+                msg="成功 quota 达标后不应再启动后续候选的 baseline 或 arm",
+            )
+
+            summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["sample_size"], 2)
+            self.assertEqual(summary["requested_sample_size"], 2)
+            self.assertEqual(summary["method_count"], 2)
+            self.assertEqual(summary["attempted_method_count"], 3)
+            self.assertEqual(summary["successful_method_count"], 2)
+            self.assertEqual(summary["partial_failure_method_count"], 1)
+            self.assertEqual(summary["failed_method_count"], 0)
+            self.assertEqual(summary["successful_sample_shortfall"], 0)
+            self.assertEqual(
+                [item["target_id"] for item in summary["methods"]],
+                expected_attempted_targets,
+            )
+            self.assertEqual(summary["methods"][0]["status"], "partial_failed")
+            self.assertEqual(summary["methods"][1]["status"], "completed")
+            self.assertEqual(summary["methods"][2]["status"], "completed")
+            completed_targets = {str(methods[1]["target_id"]), str(methods[2]["target_id"])}
+            for arm_summary in summary["project_averages"].values():
+                self.assertEqual(arm_summary["sample_size"], 2)
+                self.assertEqual(arm_summary["method_count"], 2)
+                self.assertEqual(arm_summary["baseline_total_mutants"], 4)
+                self.assertEqual(arm_summary["pre_killed"], 2)
+                self.assertEqual(arm_summary["post_killed"], 4)
+
+            with artifacts.per_method_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 6)
+            self.assertEqual({row["target_id"] for row in rows}, completed_targets)
+            self.assertEqual(
+                [(row["target_id"], row["arm"]) for row in rows],
+                [
+                    (str(methods[1]["target_id"]), "M0"),
+                    (str(methods[1]["target_id"]), "M2"),
+                    (str(methods[1]["target_id"]), "M3"),
+                    (str(methods[2]["target_id"]), "M0"),
+                    (str(methods[2]["target_id"]), "M2"),
+                    (str(methods[2]["target_id"]), "M3"),
+                ],
+            )
+
+            per_mutant_lines = [
+                json.loads(line)
+                for line in artifacts.per_mutant_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(len(per_mutant_lines), 12)
+            self.assertEqual({item["target_id"] for item in per_mutant_lines}, completed_targets)
+            self.assertTrue(all(item["target_id"] != flaky_target for item in per_mutant_lines))
+
+            sampled_methods = json.loads(artifacts.sampled_methods_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["target_id"] for item in sampled_methods],
+                expected_attempted_targets,
+            )
+            self.assertEqual([item["order"] for item in sampled_methods], [0, 1, 2])
+            self.assertNotIn(skipped_target, {item["target_id"] for item in sampled_methods})
+
+    def test_run_study_exits_when_candidates_are_exhausted_before_quota(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 2
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+
+            methods = [
+                {
+                    "target_id": build_method_key("Alpha", "run", "public int run()"),
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 0,
+                },
+                {
+                    "target_id": build_method_key("Beta", "run", "public int run()"),
+                    "class_name": "Beta",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 1,
+                },
+            ]
+
+            beta_target = str(methods[1]["target_id"])
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager, failing_targets={str(methods[0]["target_id"])})
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            execution_trace: list[str] = []
+            original_ensure_shared_baseline = runner.ensure_shared_baseline
+
+            def tracked_ensure_shared_baseline(
+                method: FrozenStudyMethod | Mapping[str, object],
+            ) -> object:
+                frozen_method = runner._freeze_method(method)
+                execution_trace.append(f"baseline:{frozen_method.target_id}")
+                return original_ensure_shared_baseline(method)
+
+            def execute_arm(
+                context: StudyArmContext,
+                method: FrozenStudyMethod,
+                _guidance: Sequence[object],
+                _knowledge_base: object,
+            ) -> None:
+                execution_trace.append(f"arm:{method.target_id}:{context.arm}")
+                _ = _write_final_arm_test(context, "Exhausted")
+                if method.target_id == beta_target and context.arm == "M3":
+                    raise RuntimeError("Beta M3 failed")
+
+            def post_evaluator(
+                _context: StudyArmContext, method: FrozenStudyMethod
+            ) -> dict[str, object]:
+                method_payload = next(
+                    item for item in methods if item["target_id"] == method.target_id
+                )
+                return {
+                    "post_line_coverage": 0.7,
+                    "mutants": [
+                        _build_post_mutant(method_payload, "killed", "MathMutator", "KILLED"),
+                        _build_post_mutant(
+                            method_payload,
+                            "survived",
+                            "NegateConditionalsMutator",
+                            "SURVIVED",
+                        ),
+                    ],
+                }
+
+            with (
+                patch.object(
+                    runner,
+                    "ensure_shared_baseline",
+                    side_effect=tracked_ensure_shared_baseline,
+                ),
+                patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()),
+            ):
+                artifacts = runner.run_study(
+                    methods,
+                    arm_executor=execute_arm,
+                    post_evaluator=post_evaluator,
+                    config=settings,
+                    seed=43,
+                    requested_success_quota=3,
+                )
+
+            self.assertEqual(
+                execution_trace[:2],
+                [
+                    f"baseline:{methods[0]['target_id']}",
+                    f"baseline:{methods[1]['target_id']}",
+                ],
+            )
+            summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["sample_size"], 0)
+            self.assertEqual(summary["requested_sample_size"], 3)
+            self.assertEqual(summary["method_count"], 0)
+            self.assertEqual(summary["attempted_method_count"], 2)
+            self.assertEqual(summary["successful_method_count"], 0)
+            self.assertEqual(summary["partial_failure_method_count"], 1)
+            self.assertEqual(summary["failed_method_count"], 1)
+            self.assertEqual(summary["successful_sample_shortfall"], 3)
+            self.assertEqual(
+                [item["target_id"] for item in summary["methods"]],
+                [str(methods[0]["target_id"]), str(methods[1]["target_id"])],
+            )
+            self.assertEqual(summary["methods"][0]["status"], "failed")
+            self.assertEqual(summary["methods"][1]["status"], "partial_failed")
 
     def test_m0_uses_surviving_pit_mutants_as_guidance(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -2407,6 +2861,10 @@ class StudyRunnerTest(unittest.TestCase):
             summary_payload = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
             self.assertEqual(summary_payload["arms"], ["M0", "M2", "M3"])
             self.assertEqual(summary_payload["sample_size"], 2)
+            self.assertEqual(summary_payload["requested_sample_size"], 2)
+            self.assertEqual(summary_payload["method_count"], 2)
+            self.assertEqual(summary_payload["attempted_method_count"], 2)
+            self.assertEqual(summary_payload["successful_sample_shortfall"], 0)
             self.assertEqual(summary_payload["successful_arm_count"], 6)
             self.assertEqual(lifecycle_events[0], ("build", str(shared_asset.asset_root)))
             self.assertEqual(

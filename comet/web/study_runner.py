@@ -53,10 +53,10 @@ from .study_sampling import (
     ClassMappingStore,
     MethodCoverageStore,
     PublicMethodExecutor,
+    build_cold_start_candidate_queue,
     collect_partially_covered_target_ids,
     discover_cold_start_methods,
     freeze_sampled_methods,
-    sample_cold_start_methods,
 )
 
 logger = logging.getLogger(__name__)
@@ -399,6 +399,7 @@ class StudyRunner:
         | None = None,
         config: Settings | None = None,
         seed: int = DEFAULT_STUDY_SEED,
+        requested_success_quota: int | None = None,
     ) -> StudyRunArtifacts:
         protocol = build_study_protocol()
         output_root = self.output_root
@@ -409,11 +410,23 @@ class StudyRunner:
             self._freeze_method(sampled_method.model_dump(mode="json"))
             for sampled_method in sampled_methods
         ]
-        sampled_methods_path = freeze_sampled_methods(output_root, sampled_methods)
+        resolved_requested_success_quota = (
+            len(frozen_sampled_methods)
+            if requested_success_quota is None
+            else max(requested_success_quota, 0)
+        )
         self._shared_bug_report_asset = self.prepare_bug_report_shared_asset(resolved_config)
 
         per_method_rows: list[StudyPerMethodRowSchema] = []
         per_mutant_records: list[StudyPerMutantRecordSchema] = []
+        candidate_methods_by_target = {
+            method.target_id: method for method in frozen_sampled_methods
+        }
+        attempted_target_ids: list[str] = []
+        attempted_target_id_set: set[str] = set()
+        completed_target_ids: set[str] = set()
+        live_target_ids: set[str] = set()
+        remaining_target_ids = set(candidate_methods_by_target)
         method_summaries_by_target: dict[str, dict[str, object]] = {}
         method_pending_arms: dict[str, int] = {}
 
@@ -424,10 +437,19 @@ class StudyRunner:
 
             with ThreadPoolExecutor(max_workers=max_parallel_targets) as executor:
 
+                def has_reached_success_quota() -> bool:
+                    return len(completed_target_ids) >= resolved_requested_success_quota
+
+                def can_launch_next_baseline() -> bool:
+                    return (
+                        bool(pending_baselines)
+                        and not has_reached_success_quota()
+                        and len(completed_target_ids) + len(live_target_ids)
+                        < resolved_requested_success_quota
+                    )
+
                 def submit_ready_tasks() -> None:
-                    while len(active_futures) < max_parallel_targets and (
-                        ready_arm_tasks or pending_baselines
-                    ):
+                    while len(active_futures) < max_parallel_targets:
                         if ready_arm_tasks:
                             arm_task = ready_arm_tasks.popleft()
                             future = cast(
@@ -446,7 +468,17 @@ class StudyRunner:
                             active_futures[future] = ("arm", arm_task.method, arm_task.arm)
                             continue
 
+                        if not can_launch_next_baseline():
+                            break
+
                         baseline_method = pending_baselines.popleft()
+                        self._record_attempted_target(
+                            baseline_method.target_id,
+                            attempted_target_ids,
+                            attempted_target_id_set,
+                            remaining_target_ids,
+                        )
+                        live_target_ids.add(baseline_method.target_id)
                         future = cast(
                             Future[object],
                             executor.submit(self.ensure_shared_baseline, baseline_method),
@@ -487,6 +519,7 @@ class StudyRunner:
                             method_summaries_by_target[frozen_method.target_id] = method_summary
                             if not baseline.success:
                                 self._mark_method_skipped_by_baseline(method_summary, baseline)
+                                live_target_ids.discard(frozen_method.target_id)
                                 continue
 
                             baseline_mutants = self._collect_method_mutant_snapshots(
@@ -542,16 +575,22 @@ class StudyRunner:
                         method_pending_arms[frozen_method.target_id] = max(remaining_arms, 0)
                         if method_pending_arms[frozen_method.target_id] == 0:
                             method_summary["status"] = self._derive_method_status(method_summary)
+                            if method_summary["status"] == "completed":
+                                completed_target_ids.add(frozen_method.target_id)
+                            live_target_ids.discard(frozen_method.target_id)
                             self.cleanup_shared_baseline(frozen_method.target_id)
 
+                    if has_reached_success_quota():
+                        break
                     submit_ready_tasks()
         finally:
             self.cleanup_shared_baselines()
             self._shared_bug_report_asset = None
 
         method_summaries: list[dict[str, object]] = []
-        for frozen_method in frozen_sampled_methods:
-            summary = method_summaries_by_target.get(frozen_method.target_id)
+        for target_id in attempted_target_ids:
+            frozen_method = candidate_methods_by_target[target_id]
+            summary = method_summaries_by_target.get(target_id)
             if summary is None:
                 summary = cast(
                     dict[str, object],
@@ -574,22 +613,41 @@ class StudyRunner:
 
         ordered_per_method_rows = self._order_per_method_rows(
             per_method_rows,
-            frozen_sampled_methods,
+            attempted_target_ids,
         )
         ordered_per_mutant_records = self._order_per_mutant_records(
             per_mutant_records,
-            frozen_sampled_methods,
+            attempted_target_ids,
         )
+        completed_per_method_rows = [
+            row for row in ordered_per_method_rows if row.target_id in completed_target_ids
+        ]
+        completed_per_mutant_records = [
+            row for row in ordered_per_mutant_records if row.target_id in completed_target_ids
+        ]
         ordered_method_summaries = self._order_method_summaries(
             method_summaries,
-            frozen_sampled_methods,
+            attempted_target_ids,
         )
 
         summary_payload = self._build_summary_payload(
             sampled_methods=sampled_methods,
-            per_method_rows=ordered_per_method_rows,
+            per_method_rows=completed_per_method_rows,
             method_summaries=ordered_method_summaries,
+            completed_target_ids=completed_target_ids,
             seed=seed,
+            requested_success_quota=requested_success_quota,
+        )
+        attempted_sampled_methods = self._build_attempted_sampled_methods(
+            sampled_methods,
+            attempted_target_ids,
+        )
+        logger.debug(
+            "研究调度账本: candidates=%d attempted=%d completed=%d remaining=%d",
+            len(candidate_methods_by_target),
+            len(attempted_target_ids),
+            len(completed_target_ids),
+            len(remaining_target_ids),
         )
         summary_path = output_root / STUDY_OUTPUT_FILENAMES["summary"]
         per_method_path = output_root / STUDY_OUTPUT_FILENAMES["per_method"]
@@ -602,13 +660,14 @@ class StudyRunner:
         self._write_per_method_csv(
             per_method_path,
             protocol.per_method_fields,
-            ordered_per_method_rows,
+            completed_per_method_rows,
         )
         self._write_per_mutant_jsonl(
             per_mutant_path,
             protocol.per_mutant_fields,
-            ordered_per_mutant_records,
+            completed_per_mutant_records,
         )
+        sampled_methods_path = freeze_sampled_methods(output_root, attempted_sampled_methods)
         return StudyRunArtifacts(
             output_root=output_root,
             summary_path=summary_path,
@@ -616,6 +675,19 @@ class StudyRunner:
             per_mutant_path=per_mutant_path,
             sampled_methods_path=sampled_methods_path,
         )
+
+    def _record_attempted_target(
+        self,
+        target_id: str,
+        attempted_target_ids: list[str],
+        attempted_target_id_set: set[str],
+        remaining_target_ids: set[str],
+    ) -> None:
+        if target_id in attempted_target_id_set:
+            return
+        attempted_target_id_set.add(target_id)
+        attempted_target_ids.append(target_id)
+        remaining_target_ids.discard(target_id)
 
     def ensure_shared_baseline(
         self,
@@ -1446,21 +1518,29 @@ class StudyRunner:
         sampled_methods: Sequence[StudySampledMethodSchema],
         per_method_rows: Sequence[StudyPerMethodRowSchema],
         method_summaries: Sequence[Mapping[str, object]],
+        completed_target_ids: set[str],
         seed: int,
+        requested_success_quota: int | None = None,
     ) -> dict[str, object]:
+        completed_method_count = len(completed_target_ids)
+        attempted_method_count = len(method_summaries)
+        resolved_requested_success_quota = (
+            len(sampled_methods)
+            if requested_success_quota is None
+            else max(requested_success_quota, 0)
+        )
         project_averages: dict[str, dict[str, object]] = {}
         for arm in self.arm_names:
             arm_rows = [row for row in per_method_rows if row.arm == arm]
             baseline_total_mutants = sum(row.fixed_mutant_count for row in arm_rows)
             pre_killed = sum(row.pre_killed for row in arm_rows)
             post_killed = sum(row.post_killed for row in arm_rows)
-            row_count = len(arm_rows)
             summary = StudyOutputSummarySchema(
                 arm=arm,
                 baseline_arm=BASELINE_ARCHIVE_DIR,
-                sample_size=len(sampled_methods),
+                sample_size=completed_method_count,
                 seed=seed,
-                method_count=row_count,
+                method_count=completed_method_count,
                 baseline_total_mutants=baseline_total_mutants,
                 pre_killed=pre_killed,
                 post_killed=post_killed,
@@ -1479,23 +1559,28 @@ class StudyRunner:
             )
             project_averages[arm] = summary.model_dump(mode="json")
 
-        successful_method_count = sum(
-            1 for item in method_summaries if item["status"] == "completed"
-        )
+        successful_method_count = completed_method_count
         partial_failure_method_count = sum(
             1 for item in method_summaries if item["status"] == "partial_failed"
         )
         failed_method_count = sum(1 for item in method_summaries if item["status"] == "failed")
+        successful_sample_shortfall = max(
+            resolved_requested_success_quota - successful_method_count,
+            0,
+        )
 
         return {
             "arms": list(self.arm_names),
             "baseline_arm": BASELINE_ARCHIVE_DIR,
-            "sample_size": len(sampled_methods),
+            "sample_size": completed_method_count,
+            "requested_sample_size": resolved_requested_success_quota,
             "seed": seed,
-            "method_count": len(sampled_methods),
+            "method_count": completed_method_count,
+            "attempted_method_count": attempted_method_count,
             "successful_method_count": successful_method_count,
             "partial_failure_method_count": partial_failure_method_count,
             "failed_method_count": failed_method_count,
+            "successful_sample_shortfall": successful_sample_shortfall,
             "successful_arm_count": sum(
                 self._to_int(item.get("successful_arm_count", 0)) for item in method_summaries
             ),
@@ -1509,21 +1594,30 @@ class StudyRunner:
             "methods": [dict(item) for item in method_summaries],
         }
 
-    def _build_method_order_map(
-        self,
-        sampled_methods: Sequence[FrozenStudyMethod | StudySampledMethodSchema],
-    ) -> dict[str, int]:
-        return {method.target_id: index for index, method in enumerate(sampled_methods)}
+    def _build_attempted_order_map(self, attempted_target_ids: Sequence[str]) -> dict[str, int]:
+        return {target_id: index for index, target_id in enumerate(attempted_target_ids)}
 
     def _build_arm_order_map(self) -> dict[str, int]:
         return {arm: index for index, arm in enumerate(self.arm_names)}
 
+    def _build_attempted_sampled_methods(
+        self,
+        sampled_methods: Sequence[StudySampledMethodSchema],
+        attempted_target_ids: Sequence[str],
+    ) -> list[StudySampledMethodSchema]:
+        methods_by_target = {method.target_id: method for method in sampled_methods}
+        return [
+            methods_by_target[target_id]
+            for target_id in attempted_target_ids
+            if target_id in methods_by_target
+        ]
+
     def _order_per_method_rows(
         self,
         rows: Sequence[StudyPerMethodRowSchema],
-        sampled_methods: Sequence[FrozenStudyMethod],
+        attempted_target_ids: Sequence[str],
     ) -> list[StudyPerMethodRowSchema]:
-        method_order_map = self._build_method_order_map(sampled_methods)
+        method_order_map = self._build_attempted_order_map(attempted_target_ids)
         arm_order_map = self._build_arm_order_map()
         return sorted(
             rows,
@@ -1536,9 +1630,9 @@ class StudyRunner:
     def _order_per_mutant_records(
         self,
         rows: Sequence[StudyPerMutantRecordSchema],
-        sampled_methods: Sequence[FrozenStudyMethod],
+        attempted_target_ids: Sequence[str],
     ) -> list[StudyPerMutantRecordSchema]:
-        method_order_map = self._build_method_order_map(sampled_methods)
+        method_order_map = self._build_attempted_order_map(attempted_target_ids)
         arm_order_map = self._build_arm_order_map()
         return sorted(
             rows,
@@ -1552,9 +1646,9 @@ class StudyRunner:
     def _order_method_summaries(
         self,
         method_summaries: Sequence[Mapping[str, object]],
-        sampled_methods: Sequence[FrozenStudyMethod],
+        attempted_target_ids: Sequence[str],
     ) -> list[dict[str, object]]:
-        method_order_map = self._build_method_order_map(sampled_methods)
+        method_order_map = self._build_attempted_order_map(attempted_target_ids)
         return [
             dict(item)
             for item in sorted(
@@ -2136,13 +2230,12 @@ def run_default_study(
             discovered_methods,
             coverage_store=cast(MethodCoverageStore, raw_sampling_coverage_store),
         )
-    sampled_methods = sample_cold_start_methods(
+    candidate_queue = build_cold_start_candidate_queue(
         discovered_methods,
-        sample_size=sample_size,
         seed=seed,
         preferred_target_ids=preferred_target_ids,
     )
-    if not sampled_methods:
+    if not candidate_queue:
         raise RuntimeError("未找到可用于研究的公共方法，请检查项目源码与最小方法行数配置")
 
     def execute_arm(
@@ -2162,10 +2255,11 @@ def run_default_study(
         )
 
     return runner.run_study(
-        sampled_methods,
+        candidate_queue,
         arm_executor=execute_arm,
         config=settings,
         seed=seed,
+        requested_success_quota=sample_size,
     )
 
 
