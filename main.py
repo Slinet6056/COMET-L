@@ -7,24 +7,147 @@ import os
 import sys
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from comet.agent import AgentTools, ParallelPlannerAgent, PlannerAgent
 from comet.agent.target_selector import TargetSelector
 from comet.config import Settings
 from comet.executor import JavaExecutor, MetricsCollector, MutationEvaluator
+from comet.executor.coverage_parser import CoverageParser
 from comet.extractors import PatternExtractor, SpecExtractor
 from comet.generators import MutantGenerator, StaticGuard, TestGenerator
 from comet.knowledge import create_knowledge_base
 from comet.llm import LLMClient
 from comet.store import Database, KnowledgeStore
 from comet.utils import ProjectScanner, SandboxManager
+from comet.utils.code_utils import extract_test_methods_from_class
 from comet.web import configure_logging, run_cli
 from comet.web.study_protocol import DEFAULT_STUDY_SAMPLE_SIZE, DEFAULT_STUDY_SEED
 from comet.web.study_runner import run_default_study
 
 logger = logging.getLogger(__name__)
+
+
+def _project_has_reusable_tests(project_path: Path) -> bool:
+    test_root = project_path / "src" / "test" / "java"
+    if not test_root.exists():
+        return False
+
+    for test_file in sorted(path for path in test_root.rglob("*.java") if path.is_file()):
+        try:
+            code = test_file.read_text(encoding="utf-8")
+        except OSError as error:
+            logger.warning(f"读取测试文件失败，跳过 coverage 预热探测: {test_file}: {error}")
+            continue
+
+        if extract_test_methods_from_class(code):
+            return True
+
+    return False
+
+
+def _build_sampling_warmup_config(config: Settings, output_root: Path) -> Settings:
+    warmup_config = config.model_copy(deep=True)
+    warmup_config.set_runtime_roots(
+        state=output_root / ".study-state" / "sampling",
+        output=output_root / ".study-warmup" / "sampling",
+        sandbox=output_root / ".study-sandbox" / "sampling",
+    )
+    warmup_config.ensure_directories()
+    return warmup_config
+
+
+def _close_study_sampling_components(components: dict[str, object]) -> None:
+    for key in ("knowledge_store", "db"):
+        candidate = components.get(key)
+        close_method = getattr(candidate, "close", None)
+        if callable(close_method):
+            with suppress(Exception):
+                close_method()
+
+
+def _prepare_study_sampling_coverage_store(
+    *,
+    project_path: Path,
+    output_root: Path,
+    config: Settings,
+    system_initializer: Any,
+) -> tuple[object | None, Callable[[], None]]:
+    if not _project_has_reusable_tests(project_path):
+        return None, lambda: None
+
+    warmup_config = _build_sampling_warmup_config(config, output_root)
+    warmup_components = system_initializer(
+        warmup_config,
+        parallel_mode=False,
+        skip_bug_report_index=True,
+    )
+    raw_db = warmup_components.get("db")
+    raw_java_executor = warmup_components.get("java_executor")
+    raw_sandbox_manager = warmup_components.get("sandbox_manager")
+
+    if raw_db is None or raw_java_executor is None or raw_sandbox_manager is None:
+        _close_study_sampling_components(warmup_components)
+        logger.warning("study sampling coverage 预热初始化不完整，回退到默认抽样")
+        return None, lambda: None
+
+    db = raw_db
+    java_executor = raw_java_executor
+    sandbox_manager = raw_sandbox_manager
+    run_tests_with_coverage = getattr(java_executor, "run_tests_with_coverage", None)
+    if not callable(run_tests_with_coverage):
+        _close_study_sampling_components(warmup_components)
+        logger.info("study sampling coverage 预热缺少 coverage 执行器，回退到默认抽样")
+        return None, lambda: None
+
+    workspace_path = Path(sandbox_manager.create_workspace_sandbox(str(project_path))).resolve()
+    sandbox_id = workspace_path.name
+
+    try:
+        coverage_result = run_tests_with_coverage(str(workspace_path))
+        if not coverage_result.get("success", False):
+            error_detail = (
+                coverage_result.get("error")
+                or coverage_result.get("output")
+                or coverage_result.get("stderr")
+                or coverage_result.get("stdout")
+                or "unknown error"
+            )
+            logger.warning(f"study sampling coverage 预热失败，回退到默认抽样: {error_detail}")
+            _close_study_sampling_components(warmup_components)
+            return None, lambda: None
+
+        jacoco_path = workspace_path / "target" / "site" / "jacoco" / "jacoco.xml"
+        parser = CoverageParser()
+        method_coverages = parser.parse_jacoco_xml_with_lines(str(jacoco_path))
+        if not method_coverages:
+            logger.info("study sampling coverage 预热未产生方法级覆盖率，回退到默认抽样")
+            _close_study_sampling_components(warmup_components)
+            return None, lambda: None
+
+        save_method_coverage = getattr(db, "save_method_coverage", None)
+        if not callable(save_method_coverage):
+            logger.warning("study sampling coverage store 不支持保存覆盖率，回退到默认抽样")
+            _close_study_sampling_components(warmup_components)
+            return None, lambda: None
+
+        for coverage in method_coverages:
+            save_method_coverage(coverage, 0)
+
+        logger.info(
+            "study sampling coverage 预热完成: 写入 %s 条方法覆盖率",
+            len(method_coverages),
+        )
+
+        def cleanup() -> None:
+            _close_study_sampling_components(warmup_components)
+
+        return db, cleanup
+    finally:
+        with suppress(Exception):
+            sandbox_manager.cleanup_sandbox(sandbox_id)
 
 
 def configure_runtime_environment(config: Settings) -> dict[str, str]:
@@ -326,6 +449,7 @@ def initialize_system(
         "config": config,
         "llm_client": llm_client,
         "db": db,
+        "knowledge_store": knowledge_store,
         "knowledge_base": knowledge_base,
         "spec_extractor": spec_extractor,
         "pattern_extractor": pattern_extractor,
@@ -718,15 +842,27 @@ def run_study_command(
         parallel_mode=False,
         skip_bug_report_index=True,
     )
-    artifacts = study_runner(
-        project_path=str(project_path),
-        output_dir=output_root,
-        sample_size=args.sample_size,
-        seed=args.seed,
-        components=components,
-        settings=config,
+    sampling_coverage_store, cleanup_sampling_store = _prepare_study_sampling_coverage_store(
+        project_path=project_path,
+        output_root=output_root,
+        config=config,
         system_initializer=study_system_initializer,
     )
+    if sampling_coverage_store is not None:
+        components["sampling_coverage_store"] = sampling_coverage_store
+
+    try:
+        artifacts = study_runner(
+            project_path=str(project_path),
+            output_dir=output_root,
+            sample_size=args.sample_size,
+            seed=args.seed,
+            components=components,
+            settings=config,
+            system_initializer=study_system_initializer,
+        )
+    finally:
+        cleanup_sampling_store()
     logger.info(f"研究完成，汇总文件: {artifacts.summary_path}")
     logger.info(f"研究方法明细: {artifacts.per_method_path}")
     logger.info(f"研究变异体明细: {artifacts.per_mutant_path}")

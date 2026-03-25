@@ -33,6 +33,8 @@ class _StudyCliFakeDatabase(_FakeDatabase):
     def __init__(self, calculator_source: Path) -> None:
         super().__init__()
         self.calculator_source = calculator_source.resolve()
+        self.saved_coverages: list[tuple[object, int]] = []
+        self.closed = False
 
     def get_all_class_mappings(self) -> list[dict[str, str]]:
         return [{"simple_name": "Calculator", "file_path": str(self.calculator_source)}]
@@ -43,7 +45,10 @@ class _StudyCliFakeDatabase(_FakeDatabase):
         return None
 
     def save_method_coverage(self, coverage: _FakeCoverage, iteration: int) -> None:
-        _ = (coverage, iteration)
+        self.saved_coverages.append((coverage, iteration))
+
+    def close(self) -> None:
+        self.closed = True
 
     def save_mutant(self, mutant: Mutant) -> None:
         key = (str(mutant.class_name), str(mutant.method_name), mutant.method_signature)
@@ -501,6 +506,251 @@ class StudyCliTests(unittest.TestCase):
         )
         self.assertEqual(init_mock.call_count, 2)
 
+    def test_run_study_command_prepares_sampling_coverage_store_when_project_has_tests(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            test_root = project_path / "src" / "test" / "java" / "pkg"
+            test_root.mkdir(parents=True)
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+            (test_root / "ExistingTest.java").write_text(
+                "package pkg;\n"
+                "import org.junit.jupiter.api.Test;\n"
+                "class ExistingTest {\n"
+                "  @Test\n"
+                "  void testWarmup() {}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            args = SimpleNamespace(
+                project_path=str(project_path),
+                config="config.yaml",
+                sample_size=2,
+                seed=11,
+                output_dir=str(root / "study-output"),
+                bug_reports_dir=None,
+                debug=False,
+            )
+            settings = Settings(llm=LLMConfig(api_key="test-key"))
+            initializer_outputs: list[dict[str, object]] = []
+            runner_components: dict[str, object] = {}
+
+            def fake_initializer(
+                config: Settings,
+                bug_reports_dir: str | None = None,
+                parallel_mode: bool = False,
+                *,
+                skip_bug_report_index: bool = False,
+            ) -> dict[str, object]:
+                self.assertIsNone(bug_reports_dir)
+                self.assertFalse(parallel_mode)
+                self.assertTrue(skip_bug_report_index)
+                db = _StudyCliFakeDatabase(project_path / "src" / "main" / "java" / "Demo.java")
+                sandbox_manager = SandboxManager(str(config.resolve_sandbox_root()))
+                java_executor = MagicMock()
+
+                def warmup(workspace: str) -> dict[str, object]:
+                    jacoco_dir = Path(workspace) / "target" / "site" / "jacoco"
+                    jacoco_dir.mkdir(parents=True, exist_ok=True)
+                    (jacoco_dir / "jacoco.xml").write_text("<report/>", encoding="utf-8")
+                    return {"success": True}
+
+                java_executor.run_tests_with_coverage.side_effect = warmup
+                components = {
+                    "tools": object(),
+                    "db": db,
+                    "sandbox_manager": sandbox_manager,
+                    "java_executor": java_executor,
+                }
+                initializer_outputs.append(components)
+                return components
+
+            artifacts = SimpleNamespace(
+                summary_path=root / "study-output" / "summary.json",
+                per_method_path=root / "study-output" / "per_method.csv",
+                per_mutant_path=root / "study-output" / "per_mutant.jsonl",
+                sampled_methods_path=root / "study-output" / "sampled_methods.json",
+            )
+
+            def fake_study_runner(**kwargs):
+                runner_components.update(kwargs["components"])
+                return artifacts
+
+            with (
+                patch.object(main, "configure_logging"),
+                patch.object(main, "initialize_system", side_effect=fake_initializer),
+                patch.object(main, "run_default_study", side_effect=fake_study_runner),
+                patch.object(
+                    main.CoverageParser,
+                    "parse_jacoco_xml_with_lines",
+                    return_value=[_FakeCoverage(line_coverage_rate=0.5)],
+                ),
+            ):
+                exit_code = main.run_study_command(
+                    args,
+                    settings_loader=lambda _: settings,
+                    system_initializer=main.initialize_system,
+                    study_runner=main.run_default_study,
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("sampling_coverage_store", runner_components)
+        self.assertIsNot(runner_components["sampling_coverage_store"], runner_components["db"])
+        warmup_db = initializer_outputs[1]["db"]
+        assert isinstance(warmup_db, _StudyCliFakeDatabase)
+        self.assertEqual(len(warmup_db.saved_coverages), 1)
+        self.assertTrue(warmup_db.closed)
+
+    def test_run_study_command_skips_sampling_coverage_warmup_without_project_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            args = SimpleNamespace(
+                project_path=str(project_path),
+                config="config.yaml",
+                sample_size=2,
+                seed=11,
+                output_dir=str(root / "study-output"),
+                bug_reports_dir=None,
+                debug=False,
+            )
+            settings = Settings(llm=LLMConfig(api_key="test-key"))
+            runner_components: dict[str, object] = {}
+            init_count = 0
+
+            def fake_initializer(
+                config: Settings,
+                bug_reports_dir: str | None = None,
+                parallel_mode: bool = False,
+                *,
+                skip_bug_report_index: bool = False,
+            ) -> dict[str, object]:
+                nonlocal init_count
+                init_count += 1
+                _ = (config, bug_reports_dir, parallel_mode, skip_bug_report_index)
+                return {
+                    "tools": object(),
+                    "db": object(),
+                    "sandbox_manager": object(),
+                    "java_executor": object(),
+                }
+
+            artifacts = SimpleNamespace(
+                summary_path=root / "study-output" / "summary.json",
+                per_method_path=root / "study-output" / "per_method.csv",
+                per_mutant_path=root / "study-output" / "per_mutant.jsonl",
+                sampled_methods_path=root / "study-output" / "sampled_methods.json",
+            )
+
+            def fake_study_runner(**kwargs):
+                runner_components.update(kwargs["components"])
+                return artifacts
+
+            with (
+                patch.object(main, "configure_logging"),
+                patch.object(main, "initialize_system", side_effect=fake_initializer),
+                patch.object(main, "run_default_study", side_effect=fake_study_runner),
+            ):
+                exit_code = main.run_study_command(
+                    args,
+                    settings_loader=lambda _: settings,
+                    system_initializer=main.initialize_system,
+                    study_runner=main.run_default_study,
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(init_count, 1)
+        self.assertNotIn("sampling_coverage_store", runner_components)
+
+    def test_run_study_command_falls_back_when_sampling_coverage_warmup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            test_root = project_path / "src" / "test" / "java" / "pkg"
+            test_root.mkdir(parents=True)
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+            (test_root / "ExistingTest.java").write_text(
+                "package pkg;\n"
+                "import org.junit.jupiter.api.Test;\n"
+                "class ExistingTest {\n"
+                "  @Test\n"
+                "  void testWarmup() {}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            args = SimpleNamespace(
+                project_path=str(project_path),
+                config="config.yaml",
+                sample_size=2,
+                seed=11,
+                output_dir=str(root / "study-output"),
+                bug_reports_dir=None,
+                debug=False,
+            )
+            settings = Settings(llm=LLMConfig(api_key="test-key"))
+            runner_components: dict[str, object] = {}
+            initializer_outputs: list[dict[str, object]] = []
+
+            def fake_initializer(
+                config: Settings,
+                bug_reports_dir: str | None = None,
+                parallel_mode: bool = False,
+                *,
+                skip_bug_report_index: bool = False,
+            ) -> dict[str, object]:
+                _ = (bug_reports_dir, parallel_mode, skip_bug_report_index)
+                db = _StudyCliFakeDatabase(project_path / "src" / "main" / "java" / "Demo.java")
+                sandbox_manager = SandboxManager(str(config.resolve_sandbox_root()))
+                java_executor = MagicMock()
+                java_executor.run_tests_with_coverage.return_value = {
+                    "success": False,
+                    "error": "warmup failed",
+                }
+                components = {
+                    "tools": object(),
+                    "db": db,
+                    "sandbox_manager": sandbox_manager,
+                    "java_executor": java_executor,
+                }
+                initializer_outputs.append(components)
+                return components
+
+            artifacts = SimpleNamespace(
+                summary_path=root / "study-output" / "summary.json",
+                per_method_path=root / "study-output" / "per_method.csv",
+                per_mutant_path=root / "study-output" / "per_mutant.jsonl",
+                sampled_methods_path=root / "study-output" / "sampled_methods.json",
+            )
+
+            def fake_study_runner(**kwargs):
+                runner_components.update(kwargs["components"])
+                return artifacts
+
+            with (
+                patch.object(main, "configure_logging"),
+                patch.object(main, "initialize_system", side_effect=fake_initializer),
+                patch.object(main, "run_default_study", side_effect=fake_study_runner),
+            ):
+                exit_code = main.run_study_command(
+                    args,
+                    settings_loader=lambda _: settings,
+                    system_initializer=main.initialize_system,
+                    study_runner=main.run_default_study,
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("sampling_coverage_store", runner_components)
+        warmup_db = initializer_outputs[1]["db"]
+        assert isinstance(warmup_db, _StudyCliFakeDatabase)
+        self.assertTrue(warmup_db.closed)
+
     def test_main_routes_study_command_through_real_handler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -644,7 +894,7 @@ class StudyCliTests(unittest.TestCase):
                 main.main()
 
             run_cli_mock.assert_not_called()
-            self.assertEqual(len(initializer_output_roots), 4)
+            self.assertEqual(len(initializer_output_roots), 6)
             self.assertEqual(
                 java_executor.public_method_files,
                 [calculator_source],
