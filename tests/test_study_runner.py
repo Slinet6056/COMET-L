@@ -42,6 +42,7 @@ class _FakeDatabase:
         self.tests: dict[tuple[str, str, str | None], list[TestCase]] = {}
         self.coverages: dict[tuple[str, str, str | None], _FakeCoverage] = {}
         self.mutants: dict[tuple[str, str, str | None], list[Mutant]] = {}
+        self.closed = False
 
     def save_mutant(self, mutant: Mutant) -> None:
         key = (mutant.class_name, mutant.method_name or "", mutant.method_signature)
@@ -92,6 +93,17 @@ class _FakeDatabase:
         if status is None:
             return mutants
         return [mutant for mutant in mutants if mutant.status == status]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeClosableStore:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _FakeTools:
@@ -2076,6 +2088,24 @@ class StudyRunnerTest(unittest.TestCase):
             self.assertEqual(tools.generate_mutant_calls[target_id], 1)
             self.assertEqual(tools.evaluate_calls.get(target_id, 0), 0)
             self.assertEqual(result.metrics.baseline_total_mutants, 0)
+
+    def test_close_system_components_closes_database_and_knowledge_store(self) -> None:
+        runner = StudyRunner(
+            workspace_project_path=".",
+            artifacts_root="artifacts",
+        )
+        db = _FakeDatabase()
+        knowledge_store = _FakeClosableStore()
+
+        runner._close_system_components(
+            {
+                "db": db,
+                "knowledge_store": knowledge_store,
+            }
+        )
+
+        self.assertTrue(db.closed)
+        self.assertTrue(knowledge_store.closed)
 
     def test_arms_use_isolated_state_roots(self) -> None:
         with TemporaryDirectory() as tmp_dir:

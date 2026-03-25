@@ -3,9 +3,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
+from unittest.mock import patch
 
+from comet.config.settings import LLMConfig, Settings
 from comet.executor.coverage_parser import MethodCoverage
 from comet.utils.method_keys import build_method_key
+from comet.web.study_runner import StudyRunArtifacts, run_default_study
 from comet.web.study_sampling import (
     ClassMappingRecord,
     MethodRecord,
@@ -318,6 +321,81 @@ class StudySamplingTest(unittest.TestCase):
         )
         self.assertEqual(len(sampled), 3)
         self.assertEqual([item.order for item in sampled], [0, 1, 2])
+
+    def test_run_default_study_ignores_shared_db_coverage_without_explicit_sampling_store(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            output_dir = root / "output"
+            project_path.mkdir(parents=True, exist_ok=True)
+            _ = (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            settings = Settings(llm=LLMConfig(api_key="test-key"))
+            settings.set_runtime_roots(
+                state=output_dir / ".study-state",
+                output=output_dir,
+                sandbox=output_dir / ".study-sandbox",
+            )
+            settings.ensure_directories()
+
+            discovered = [
+                _build_sampled_method("Alpha", "partial", "public void partial()"),
+                _build_sampled_method("Alpha", "other", "public void other()"),
+            ]
+            captured_preferred_ids: list[set[str]] = []
+
+            class _CoverageStore:
+                def get_method_coverage(
+                    self,
+                    class_name: str,
+                    method_name: str,
+                    method_signature: str | None = None,
+                ) -> MethodCoverage | None:
+                    if method_name != "partial" or method_signature is None:
+                        return None
+                    return _build_coverage(class_name, method_name, method_signature, 0.4)
+
+            def fake_system_initializer(*args, **kwargs):
+                raise AssertionError("默认抽样阶段不应读取共享 coverage store")
+
+            def fake_run_study(self, *args, **kwargs):
+                return StudyRunArtifacts(
+                    output_root=output_dir,
+                    summary_path=output_dir / "summary.json",
+                    per_method_path=output_dir / "per_method.csv",
+                    per_mutant_path=output_dir / "per_mutant.jsonl",
+                    sampled_methods_path=output_dir / "sampled_methods.json",
+                )
+
+            with (
+                patch(
+                    "comet.web.study_runner.discover_cold_start_methods", return_value=discovered
+                ),
+                patch(
+                    "comet.web.study_runner.sample_cold_start_methods",
+                    side_effect=lambda methods, sample_size, seed, preferred_target_ids: (
+                        captured_preferred_ids.append(set(preferred_target_ids)) or methods[:1]
+                    ),
+                ),
+                patch("comet.web.study_runner.StudyRunner.run_study", new=fake_run_study),
+            ):
+                artifacts = run_default_study(
+                    project_path=str(project_path),
+                    output_dir=output_dir,
+                    sample_size=1,
+                    seed=42,
+                    components={
+                        "db": _CoverageStore(),
+                        "java_executor": object(),
+                    },
+                    settings=settings,
+                    system_initializer=fake_system_initializer,
+                )
+
+            self.assertEqual(artifacts.output_root, output_dir)
+            self.assertEqual(captured_preferred_ids, [set()])
 
 
 def _build_sampled_method(

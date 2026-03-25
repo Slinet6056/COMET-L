@@ -9,6 +9,7 @@ import subprocess
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from ..knowledge.knowledge_base import (
     create_knowledge_base,
 )
 from ..models import Mutant, MutationPatch, TestCase, TestMethod
+from ..store.database import Database
 from ..store.knowledge_store import KnowledgeStore
 from ..utils.code_utils import extract_imports, extract_test_methods_from_class, parse_java_class
 from ..utils.method_keys import build_method_key, normalize_method_signature
@@ -188,6 +190,9 @@ class StudyBaselineResult:
     status: str = "completed"
     error: str | None = None
     workspace_path: str | None = None
+    database_path: str | None = None
+    database: StudyDatabaseProtocol | None = None
+    sandbox_manager: StudySandboxManagerProtocol | None = None
     metrics: StudyBaselineMetrics = field(default_factory=StudyBaselineMetrics)
 
     @property
@@ -216,6 +221,40 @@ class StudyArmPaths:
     @property
     def vector_store_root(self) -> Path:
         return self.state_root / "chromadb"
+
+
+@dataclass(slots=True, frozen=True)
+class StudyBaselinePaths:
+    target_id: str
+    state_root: Path
+    output_root: Path
+    sandbox_root: Path
+    workspace_root: Path
+    artifacts_root: Path
+
+    @property
+    def database_path(self) -> Path:
+        return self.state_root / "comet.db"
+
+    @property
+    def knowledge_database_path(self) -> Path:
+        return self.state_root / "knowledge.db"
+
+    @property
+    def vector_store_root(self) -> Path:
+        return self.state_root / "chromadb"
+
+
+@dataclass(slots=True, frozen=True)
+class StudyBaselineContext:
+    target_id: str
+    config: Settings
+    paths: StudyBaselinePaths
+    sandbox_manager: SandboxManager
+
+    @property
+    def workspace_path(self) -> Path:
+        return self.paths.workspace_root
 
 
 @dataclass(slots=True, frozen=True)
@@ -325,6 +364,7 @@ class StudyRunner:
         database: object | None = None,
         sandbox_manager: object | None = None,
         settings: Settings | None = None,
+        system_initializer: Callable[..., Mapping[str, object]] | None = None,
         pit_runner: Callable[[str], Mapping[str, object]] | None = None,
         arm_names: Sequence[str] = STUDY_ARM_NAMES,
     ) -> None:
@@ -341,6 +381,7 @@ class StudyRunner:
         if self.sandbox_manager is None and tools is not None:
             self.sandbox_manager = getattr(tools, "sandbox_manager", None)
         self.settings: Settings | None = settings
+        self.system_initializer: Callable[..., Mapping[str, object]] | None = system_initializer
         self.pit_runner: Callable[[str], Mapping[str, object]] | None = pit_runner
         self.arm_names: tuple[str, ...] = tuple(arm_names)
         self._baseline_cache: dict[str, StudyBaselineResult] = {}
@@ -448,7 +489,9 @@ class StudyRunner:
                                 self._mark_method_skipped_by_baseline(method_summary, baseline)
                                 continue
 
-                            baseline_mutants = self._collect_method_mutant_snapshots(frozen_method)
+                            baseline_mutants = self._collect_method_mutant_snapshots(
+                                frozen_method, baseline
+                            )
                             method_pending_arms[frozen_method.target_id] = len(self.arm_names)
                             for arm_name in self.arm_names:
                                 ready_arm_tasks.append(
@@ -608,10 +651,14 @@ class StudyRunner:
             self._cleanup_baseline_workspace(result)
 
     def _cleanup_baseline_workspace(self, result: StudyBaselineResult) -> None:
-        if self.sandbox_manager is None or not result.workspace_path:
+        if not result.workspace_path:
             return
 
-        sandbox_manager = cast(StudySandboxManagerProtocol, self.sandbox_manager)
+        raw_manager = result.sandbox_manager or self.sandbox_manager
+        if raw_manager is None:
+            return
+
+        sandbox_manager = cast(StudySandboxManagerProtocol, raw_manager)
         sandbox_id = Path(result.workspace_path).name
         try:
             sandbox_manager.cleanup_sandbox(sandbox_id)
@@ -652,6 +699,31 @@ class StudyRunner:
             artifacts_root=self.artifacts_root / archive_dirs[arm],
         )
 
+    def build_baseline_scoped_paths(
+        self,
+        target_id: str,
+        config: Settings | None = None,
+    ) -> StudyBaselinePaths:
+        resolved_config = self._require_settings(config)
+        state_root = (
+            resolved_config.resolve_state_root() / "study" / target_id / BASELINE_ARCHIVE_DIR
+        )
+        output_root = (
+            resolved_config.resolve_output_root() / "study" / target_id / BASELINE_ARCHIVE_DIR
+        )
+        sandbox_root = (
+            resolved_config.resolve_sandbox_root() / "study" / target_id / BASELINE_ARCHIVE_DIR
+        )
+        archive_dirs = build_method_archive_dirs(target_id)
+        return StudyBaselinePaths(
+            target_id=target_id,
+            state_root=state_root,
+            output_root=output_root,
+            sandbox_root=sandbox_root,
+            workspace_root=sandbox_root / "workspace",
+            artifacts_root=self.artifacts_root / archive_dirs[BASELINE_ARCHIVE_DIR],
+        )
+
     def prepare_arm_context(
         self,
         target_id: str,
@@ -689,6 +761,42 @@ class StudyRunner:
                 artifacts_root=scoped_paths.artifacts_root,
             ),
             sandbox_manager=arm_sandbox_manager,
+        )
+
+    def prepare_baseline_context(
+        self,
+        target_id: str,
+        config: Settings | None = None,
+    ) -> StudyBaselineContext:
+        resolved_config = self._require_settings(config)
+        scoped_paths = self.build_baseline_scoped_paths(target_id, resolved_config)
+        scoped_config = resolved_config.model_copy(deep=True)
+        bug_reports_dir = resolved_config.resolve_bug_reports_dir()
+        if bug_reports_dir is not None:
+            scoped_config.set_bug_reports_dir(bug_reports_dir)
+        scoped_config.set_runtime_roots(
+            state=scoped_paths.state_root,
+            output=scoped_paths.output_root,
+            sandbox=scoped_paths.sandbox_root,
+        )
+        scoped_config.ensure_directories()
+
+        baseline_sandbox_manager = SandboxManager(str(scoped_paths.sandbox_root))
+        workspace_path = Path(
+            baseline_sandbox_manager.create_workspace_sandbox(self.workspace_project_path)
+        ).resolve()
+        return StudyBaselineContext(
+            target_id=target_id,
+            config=scoped_config,
+            paths=StudyBaselinePaths(
+                target_id=scoped_paths.target_id,
+                state_root=scoped_paths.state_root,
+                output_root=scoped_paths.output_root,
+                sandbox_root=scoped_paths.sandbox_root,
+                workspace_root=workspace_path,
+                artifacts_root=scoped_paths.artifacts_root,
+            ),
+            sandbox_manager=baseline_sandbox_manager,
         )
 
     def run_target_arms(
@@ -764,7 +872,7 @@ class StudyRunner:
             )
 
         try:
-            guidance_mutants = self._collect_baseline_survived_mutants(frozen_method)
+            guidance_mutants = self._collect_baseline_survived_mutants(frozen_method, baseline)
             results: dict[str, StudyArmExecutionResult[ArmResultT]] = {}
 
             for arm in ("M2", "M3"):
@@ -983,7 +1091,7 @@ class StudyRunner:
             return guidance, None
 
         knowledge_base = self.create_arm_knowledge_base(context)
-        guidance = self._collect_baseline_survived_mutants(method)
+        guidance = self._collect_baseline_survived_mutants(method, baseline)
         return tuple(guidance), knowledge_base
 
     def _run_study_arm_task(
@@ -1037,17 +1145,41 @@ class StudyRunner:
     def _collect_method_mutant_snapshots(
         self,
         method: FrozenStudyMethod,
+        baseline: StudyBaselineResult | None = None,
     ) -> tuple[StudyMutantSnapshot, ...]:
-        db = self._require_db()
-        mutants = db.get_mutants_by_method(
-            method.class_name,
-            method.method_name,
-            status="valid",
-            method_signature=method.method_signature,
-        )
+        mutants = self._load_mutants_from_baseline(method, baseline)
         snapshots = [self._normalize_mutant_snapshot(mutant) for mutant in mutants]
         snapshots.sort(key=lambda item: item.mutant_id)
         return tuple(snapshots)
+
+    def _load_mutants_from_baseline(
+        self,
+        method: FrozenStudyMethod,
+        baseline: StudyBaselineResult | None = None,
+    ) -> list[StudyMutantLike]:
+        db, close_db = self._open_baseline_db(baseline)
+        try:
+            return db.get_mutants_by_method(
+                method.class_name,
+                method.method_name,
+                status="valid",
+                method_signature=method.method_signature,
+            )
+        finally:
+            close_db()
+
+    def _open_baseline_db(
+        self,
+        baseline: StudyBaselineResult | None,
+    ) -> tuple[StudyDatabaseProtocol, Callable[[], None]]:
+        database_path = baseline.database_path if baseline is not None else None
+        if not database_path:
+            if baseline is not None and baseline.database is not None:
+                return baseline.database, lambda: None
+            return self._require_db(), lambda: None
+
+        baseline_db = Database(database_path)
+        return cast(StudyDatabaseProtocol, cast(object, baseline_db)), baseline_db.close
 
     def _normalize_post_evaluation(
         self,
@@ -1551,14 +1683,9 @@ class StudyRunner:
     def _collect_baseline_survived_mutants(
         self,
         method: FrozenStudyMethod,
+        baseline: StudyBaselineResult | None = None,
     ) -> tuple[StudyMutantLike, ...]:
-        db = self._require_db()
-        baseline_mutants = db.get_mutants_by_method(
-            method.class_name,
-            method.method_name,
-            status="valid",
-            method_signature=method.method_signature,
-        )
+        baseline_mutants = self._load_mutants_from_baseline(method, baseline)
         survived_mutants = [
             mutant
             for mutant in baseline_mutants
@@ -1567,20 +1694,14 @@ class StudyRunner:
         return tuple(survived_mutants)
 
     def _generate_method_baseline(self, method: FrozenStudyMethod) -> StudyBaselineResult:
-        db = self._require_db()
-        sandbox_manager = self._require_sandbox_manager()
-        tools = self._require_tools()
-
         archive_dirs = build_method_archive_dirs(method.target_id)
         archive_root = self.artifacts_root / method.target_id
         baseline_dir = self.artifacts_root / archive_dirs[BASELINE_ARCHIVE_DIR]
         baseline_dir.mkdir(parents=True, exist_ok=True)
 
-        workspace_path = sandbox_manager.create_validation_sandbox(
-            self.workspace_project_path,
-            validation_id=f"study_baseline_{self._sanitize_target_id(method.target_id)}",
+        db, tools, sandbox_manager, workspace_path, sandbox_id, local_components = (
+            self._prepare_baseline_runtime(method)
         )
-        sandbox_id = Path(workspace_path).name
 
         result = StudyBaselineResult(
             target_id=method.target_id,
@@ -1591,6 +1712,9 @@ class StudyRunner:
             baseline_dir=str(baseline_dir),
             archive_dirs=archive_dirs,
             workspace_path=workspace_path,
+            database_path=self._resolve_database_path(db),
+            database=db,
+            sandbox_manager=sandbox_manager,
         )
 
         try:
@@ -1643,6 +1767,8 @@ class StudyRunner:
             result.workspace_path = None
             sandbox_manager.cleanup_sandbox(sandbox_id)
             return result
+        finally:
+            self._close_system_components(local_components)
 
     def _collect_baseline_metrics(
         self,
@@ -1799,6 +1925,93 @@ class StudyRunner:
         scoped_tools.state = _StudyBaselineState(current_target, iteration=base_iteration)
         return scoped_tools
 
+    def _prepare_baseline_runtime(
+        self,
+        method: FrozenStudyMethod,
+    ) -> tuple[
+        StudyDatabaseProtocol,
+        StudyToolsProtocol,
+        StudySandboxManagerProtocol,
+        str,
+        str,
+        Mapping[str, object] | None,
+    ]:
+        if self.system_initializer is None or self.settings is None:
+            sandbox_manager = self._require_sandbox_manager()
+            workspace_path = sandbox_manager.create_validation_sandbox(
+                self.workspace_project_path,
+                validation_id=f"study_baseline_{self._sanitize_target_id(method.target_id)}",
+            )
+            sandbox_id = Path(workspace_path).name
+            return (
+                self._require_db(),
+                self._require_tools(),
+                sandbox_manager,
+                workspace_path,
+                sandbox_id,
+                None,
+            )
+
+        baseline_context = self.prepare_baseline_context(method.target_id, self.settings)
+        baseline_components = self.system_initializer(baseline_context.config, parallel_mode=False)
+        raw_db = baseline_components.get("db")
+        raw_tools = baseline_components.get("tools")
+        if raw_db is None or raw_tools is None:
+            raise RuntimeError(f"baseline 初始化失败：缺少 db 或 tools: {method.target_id}")
+
+        baseline_db = cast(StudyDatabaseProtocol, raw_db)
+        baseline_tools = cast(StudyToolsProtocol, raw_tools)
+        project_scanner = baseline_components.get("project_scanner")
+        if project_scanner is not None:
+            scan_project = getattr(project_scanner, "scan_project", None)
+            if callable(scan_project):
+                scan_project(str(baseline_context.workspace_path), use_cache=True)
+
+        current_target = {
+            "target_id": method.target_id,
+            "class_name": method.class_name,
+            "method_name": method.method_name,
+            "method_signature": method.method_signature,
+        }
+        baseline_tools.project_path = str(baseline_context.workspace_path)
+        baseline_tools.original_project_path = self.workspace_project_path
+        baseline_tools.db = baseline_db
+        baseline_tools.sandbox_manager = baseline_context.sandbox_manager
+        baseline_tools.state = _StudyBaselineState(current_target)
+        workspace_path = str(baseline_context.workspace_path)
+        return (
+            baseline_db,
+            baseline_tools,
+            baseline_context.sandbox_manager,
+            workspace_path,
+            "workspace",
+            baseline_components,
+        )
+
+    @staticmethod
+    def _resolve_database_path(db: StudyDatabaseProtocol) -> str | None:
+        db_path = getattr(db, "db_path", None)
+        if isinstance(db_path, Path):
+            return str(db_path)
+        if isinstance(db_path, str):
+            return db_path
+        return None
+
+    def _close_system_components(self, components: Mapping[str, object] | None) -> None:
+        if components is None:
+            return
+
+        closers = []
+        for key in ("db", "knowledge_store"):
+            candidate = components.get(key)
+            close_method = getattr(candidate, "close", None)
+            if callable(close_method):
+                closers.append(close_method)
+
+        for close_method in closers:
+            with suppress(Exception):
+                close_method()
+
     def _freeze_method(self, method: FrozenStudyMethod | Mapping[str, object]) -> FrozenStudyMethod:
         if isinstance(method, FrozenStudyMethod):
             return method
@@ -1902,6 +2115,7 @@ def run_default_study(
         database=components.get("db"),
         sandbox_manager=components.get("sandbox_manager"),
         settings=settings,
+        system_initializer=system_initializer,
     )
 
     java_executor = components.get("java_executor")
@@ -1915,10 +2129,13 @@ def run_default_study(
         db=cast(ClassMappingStore, cast(object, db)),
         min_method_lines=settings.evolution.min_method_lines,
     )
-    preferred_target_ids = collect_partially_covered_target_ids(
-        discovered_methods,
-        coverage_store=cast(MethodCoverageStore, cast(object, db)),
-    )
+    preferred_target_ids: set[str] = set()
+    raw_sampling_coverage_store = components.get("sampling_coverage_store")
+    if raw_sampling_coverage_store is not None:
+        preferred_target_ids = collect_partially_covered_target_ids(
+            discovered_methods,
+            coverage_store=cast(MethodCoverageStore, raw_sampling_coverage_store),
+        )
     sampled_methods = sample_cold_start_methods(
         discovered_methods,
         sample_size=sample_size,
@@ -1994,29 +2211,34 @@ def _execute_default_study_arm(
             setattr(test_generator, "kb", knowledge_base)
             setattr(test_generator, "_is_rag_enabled", isinstance(knowledge_base, RAGKnowledgeBase))
 
-    baseline_db = runner._require_db()
-    _seed_arm_test_cases(arm_db, baseline_db, method)
-    _seed_arm_coverage(arm_db, runner, baseline_db, method)
+    baseline = runner.ensure_shared_baseline(method)
+    baseline_db, close_baseline_db = runner._open_baseline_db(baseline)
+    try:
+        _seed_arm_test_cases(arm_db, baseline_db, method)
+        _seed_arm_coverage(arm_db, runner, baseline_db, method)
 
-    if context.arm == "M0":
-        guidance_mutants = _build_guidance_mutants(method, guidance)
-        for mutant in guidance_mutants:
-            arm_db.save_mutant(mutant)
-        _run_arm_refinement(arm_tools, method, context.arm)
-        for mutant in guidance_mutants:
-            arm_db.save_mutant(mutant.model_copy(update={"status": "outdated"}))
-        _seed_arm_baseline_mutants(arm_db, baseline_db, method)
-    else:
-        _seed_arm_baseline_mutants(arm_db, baseline_db, method)
-        _run_arm_refinement(arm_tools, method, context.arm)
+        if context.arm == "M0":
+            guidance_mutants = _build_guidance_mutants(method, guidance)
+            for mutant in guidance_mutants:
+                arm_db.save_mutant(mutant)
+            _run_arm_refinement(arm_tools, method, context.arm)
+            for mutant in guidance_mutants:
+                arm_db.save_mutant(mutant.model_copy(update={"status": "outdated"}))
+            _seed_arm_baseline_mutants(arm_db, baseline_db, method)
+        else:
+            _seed_arm_baseline_mutants(arm_db, baseline_db, method)
+            _run_arm_refinement(arm_tools, method, context.arm)
 
-    evaluation_result = arm_tools.run_evaluation()
-    runner._raise_for_failed_evaluation(evaluation_result)
-    return StudyArmRunResult(
-        target_id=method.target_id,
-        arm=context.arm,
-        post_evaluation=_collect_post_evaluation_from_db(arm_db, runner, method),
-    )
+        evaluation_result = arm_tools.run_evaluation()
+        runner._raise_for_failed_evaluation(evaluation_result)
+        return StudyArmRunResult(
+            target_id=method.target_id,
+            arm=context.arm,
+            post_evaluation=_collect_post_evaluation_from_db(arm_db, runner, method),
+        )
+    finally:
+        close_baseline_db()
+        runner._close_system_components(arm_components)
 
 
 def _run_arm_refinement(
