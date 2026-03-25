@@ -445,89 +445,90 @@ class Database:
         注意：此方法会删除数据库中存在但不在 test_case.methods 列表中的旧方法，
         这样可以处理方法名变更的情况（LLM 返回的新方法名可能与旧方法名不同）
         """
-        cursor = self.conn.cursor()
+        with self._lock:
+            cursor = self.conn.cursor()
 
-        # 检查测试用例是否存在
-        cursor.execute("SELECT id FROM test_cases WHERE id = ?", (test_case.id,))
-        case_exists = cursor.fetchone() is not None
+            # 检查测试用例是否存在
+            cursor.execute("SELECT id FROM test_cases WHERE id = ?", (test_case.id,))
+            case_exists = cursor.fetchone() is not None
 
-        if case_exists:
-            logger.debug(f"测试用例 {test_case.id} 已存在，将更新测试方法")
+            if case_exists:
+                logger.debug(f"测试用例 {test_case.id} 已存在，将更新测试方法")
 
-            # 获取数据库中已有的方法名列表
-            cursor.execute(
-                "SELECT method_name FROM test_methods WHERE test_case_id = ?",
-                (test_case.id,),
-            )
-            existing_method_names = {row[0] for row in cursor.fetchall()}
+                # 获取数据库中已有的方法名列表
+                cursor.execute(
+                    "SELECT method_name FROM test_methods WHERE test_case_id = ?",
+                    (test_case.id,),
+                )
+                existing_method_names = {row[0] for row in cursor.fetchall()}
 
-            # 获取当前要保存的方法名列表
-            current_method_names = {method.method_name for method in test_case.methods}
+                # 获取当前要保存的方法名列表
+                current_method_names = {method.method_name for method in test_case.methods}
 
-            # 找出需要删除的方法（在数据库中存在但不在当前列表中）
-            methods_to_delete = existing_method_names - current_method_names
+                # 找出需要删除的方法（在数据库中存在但不在当前列表中）
+                methods_to_delete = existing_method_names - current_method_names
 
-            if methods_to_delete:
-                logger.info(f"删除已不存在的旧测试方法: {methods_to_delete}")
-                for method_name in methods_to_delete:
-                    cursor.execute(
-                        "DELETE FROM test_methods WHERE test_case_id = ? AND method_name = ?",
-                        (test_case.id, method_name),
-                    )
-        else:
-            logger.debug(f"创建新测试用例: {test_case.id}")
+                if methods_to_delete:
+                    logger.info(f"删除已不存在的旧测试方法: {methods_to_delete}")
+                    for method_name in methods_to_delete:
+                        cursor.execute(
+                            "DELETE FROM test_methods WHERE test_case_id = ? AND method_name = ?",
+                            (test_case.id, method_name),
+                        )
+            else:
+                logger.debug(f"创建新测试用例: {test_case.id}")
 
-        # 处理每个测试方法
-        for method in test_case.methods:
-            method.updated_at = datetime.now()
+            # 处理每个测试方法
+            for method in test_case.methods:
+                method.updated_at = datetime.now()
 
-            # 保存方法到数据库，使用 COALESCE 保留原有的 created_at
+                # 保存方法到数据库，使用 COALESCE 保留原有的 created_at
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO test_methods
+                    (test_case_id, method_name, code, target_method, target_method_signature, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?,
+                            COALESCE((SELECT created_at FROM test_methods WHERE test_case_id = ? AND method_name = ?), ?),
+                            ?)
+                """,
+                    (
+                        test_case.id,
+                        method.method_name,
+                        method.code,
+                        method.target_method,
+                        method.target_method_signature,
+                        test_case.id,
+                        method.method_name,
+                        method.created_at.isoformat() if method.created_at else None,
+                        method.updated_at.isoformat() if method.updated_at else None,
+                    ),
+                )
+
+            # 更新测试用例主表
+            test_case.updated_at = datetime.now()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO test_methods
-                (test_case_id, method_name, code, target_method, target_method_signature, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?,
-                        COALESCE((SELECT created_at FROM test_methods WHERE test_case_id = ? AND method_name = ?), ?),
-                        ?)
+                INSERT OR REPLACE INTO test_cases VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     test_case.id,
-                    method.method_name,
-                    method.code,
-                    method.target_method,
-                    method.target_method_signature,
-                    test_case.id,
-                    method.method_name,
-                    method.created_at.isoformat() if method.created_at else None,
-                    method.updated_at.isoformat() if method.updated_at else None,
+                    test_case.class_name,
+                    test_case.target_class,
+                    test_case.package_name,
+                    json.dumps(test_case.imports),
+                    json.dumps([m.model_dump(mode="json") for m in test_case.methods]),
+                    test_case.full_code,
+                    1 if test_case.compile_success else 0,
+                    test_case.compile_error,
+                    json.dumps(test_case.kills),
+                    json.dumps(test_case.coverage_lines),
+                    json.dumps(test_case.coverage_branches),
+                    None,  # code_hash
+                    test_case.created_at.isoformat() if test_case.created_at else None,
+                    test_case.updated_at.isoformat() if test_case.updated_at else None,
                 ),
             )
-
-        # 更新测试用例主表
-        test_case.updated_at = datetime.now()
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO test_cases VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                test_case.id,
-                test_case.class_name,
-                test_case.target_class,
-                test_case.package_name,
-                json.dumps(test_case.imports),
-                json.dumps([m.model_dump(mode="json") for m in test_case.methods]),
-                test_case.full_code,
-                1 if test_case.compile_success else 0,
-                test_case.compile_error,
-                json.dumps(test_case.kills),
-                json.dumps(test_case.coverage_lines),
-                json.dumps(test_case.coverage_branches),
-                None,  # code_hash
-                test_case.created_at.isoformat() if test_case.created_at else None,
-                test_case.updated_at.isoformat() if test_case.updated_at else None,
-            ),
-        )
-        self.conn.commit()
+            self.conn.commit()
 
         logger.info(f"已保存测试用例 {test_case.id}，包含 {len(test_case.methods)} 个测试方法")
 
