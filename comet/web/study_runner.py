@@ -264,6 +264,28 @@ class _StudyBaselineState:
             return
         self.current_target = dict(target)
 
+    def add_failed_target(
+        self,
+        class_name: str,
+        method_name: str,
+        reason: str,
+        method_signature: str | None = None,
+    ) -> None:
+        target_key = build_method_key(class_name, method_name, method_signature)
+        if any(item.get("target") == target_key for item in self.failed_targets):
+            return
+
+        self.failed_targets.append(
+            {
+                "target": target_key,
+                "class_name": class_name,
+                "method_name": method_name,
+                "method_signature": method_signature,
+                "reason": reason,
+                "iteration": self.iteration,
+            }
+        )
+
 
 class StudyRunner:
     def __init__(

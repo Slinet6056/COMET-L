@@ -20,6 +20,7 @@ from comet.web.study_runner import (
     StudyArmContext,
     StudyRunner,
     _build_guidance_mutants,
+    _StudyBaselineState,
 )
 
 
@@ -360,6 +361,31 @@ def _write_study_manifest(root: Path, methods: Sequence[Mapping[str, object]]) -
 
 
 class StudyRunnerTest(unittest.TestCase):
+    def test_study_baseline_state_records_failed_targets(self) -> None:
+        state = _StudyBaselineState(
+            {
+                "class_name": "com.example.Calculator",
+                "method_name": "add",
+                "method_signature": "int add(int, int)",
+            },
+            iteration=2,
+        )
+
+        state.add_failed_target(
+            "com.example.Calculator",
+            "add",
+            "compile failed",
+            "int add(int, int)",
+        )
+
+        self.assertEqual(len(state.failed_targets), 1)
+        self.assertEqual(
+            state.failed_targets[0]["target"],
+            build_method_key("com.example.Calculator", "add", "int add(int, int)"),
+        )
+        self.assertEqual(state.failed_targets[0]["reason"], "compile failed")
+        self.assertEqual(state.failed_targets[0]["iteration"], 2)
+
     def test_runner_exports_expected_artifacts(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
