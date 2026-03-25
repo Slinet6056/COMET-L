@@ -1,25 +1,31 @@
 import csv
 import json
+import threading
+import time
 import unittest
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
 from comet.config.settings import LLMConfig, Settings
 from comet.executor.coverage_parser import MethodCoverage
-from comet.knowledge.knowledge_base import RAGKnowledgeBase
+from comet.knowledge.knowledge_base import BugReportSharedAsset, RAGKnowledgeBase
 from comet.models import Mutant, MutationPatch, TestCase, TestMethod
 from comet.store.database import Database
+from comet.store.knowledge_store import KnowledgeStore
 from comet.utils.method_keys import build_method_key
 from comet.utils.sandbox import SandboxManager
 from comet.web.study_protocol import BASELINE_ARCHIVE_DIR
 from comet.web.study_runner import (
     FrozenStudyMethod,
     StudyArmContext,
+    StudyArmRunResult,
+    StudyRunArtifacts,
     StudyRunner,
     _build_guidance_mutants,
     _StudyBaselineState,
@@ -250,6 +256,28 @@ class _FakeTools:
             "survived": survived_count,
             "status": "completed",
         }
+
+
+class _FakeEmbeddingService:
+    def embed(self, text: str) -> list[float]:
+        normalized = text.lower()
+        if "alpha" in normalized:
+            return [1.0, 0.0]
+        if "beta" in normalized:
+            return [0.0, 1.0]
+        return [0.5, 0.5]
+
+
+class _RecordingSandboxManager(SandboxManager):
+    def __init__(self, sandbox_root: str) -> None:
+        super().__init__(sandbox_root)
+        self.cleanup_calls: list[tuple[str, str]] = []
+        self._cleanup_calls_lock = threading.Lock()
+
+    def cleanup_sandbox(self, sandbox_id: str) -> None:
+        with self._cleanup_calls_lock:
+            self.cleanup_calls.append((sandbox_id, str(self.sandbox_root / sandbox_id)))
+        super().cleanup_sandbox(sandbox_id)
 
 
 def _build_settings(tmp_dir: str) -> Settings:
@@ -593,6 +621,737 @@ class StudyRunnerTest(unittest.TestCase):
                 artifacts.sampled_methods_path.read_text(encoding="utf-8")
             )
             self.assertEqual(exported_manifest, methods)
+
+    def test_run_study_consumes_explicit_post_evaluation_result(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+
+            methods = [
+                {
+                    "target_id": build_method_key(
+                        "com.example.Calculator",
+                        "add",
+                        "int add(int, int)",
+                    ),
+                    "class_name": "com.example.Calculator",
+                    "method_name": "add",
+                    "method_signature": "int add(int, int)",
+                    "order": 0,
+                }
+            ]
+            manifest_path = _write_study_manifest(root, methods)
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+
+            def fake_pit_runner(workspace: str) -> dict[str, object]:
+                report_path = Path(workspace) / "target" / "pit-reports"
+                report_path.mkdir(parents=True, exist_ok=True)
+                _ = (report_path / "mutations.xml").write_text(
+                    _build_pit_mutations_xml(),
+                    encoding="utf-8",
+                )
+                return {"success": True}
+
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+                pit_runner=fake_pit_runner,
+            )
+
+            def execute_arm(
+                context: StudyArmContext,
+                method: object,
+                _guidance: object,
+                _knowledge_base: object,
+            ) -> StudyArmRunResult:
+                _ = _write_final_arm_test(context, "ExplicitPostEval")
+                target_id = getattr(method, "target_id")
+                return StudyArmRunResult(
+                    target_id=target_id,
+                    arm=context.arm,
+                    post_evaluation={
+                        "post_line_coverage": 0.66,
+                        "mutants": [
+                            _build_post_mutant(methods[0], "killed", "MathMutator", "KILLED"),
+                            _build_post_mutant(
+                                methods[0],
+                                "survived",
+                                "NegateConditionalsMutator",
+                                "SURVIVED",
+                            ),
+                        ],
+                    },
+                )
+
+            def post_evaluator(_context: StudyArmContext, _method: object) -> dict[str, object]:
+                raise AssertionError("显式结果对象路径不应再读取共享 post_evaluation side-channel")
+
+            artifacts = runner.run_study(
+                manifest_path,
+                arm_executor=execute_arm,
+                post_evaluator=post_evaluator,
+            )
+
+            summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["successful_arm_count"], 3)
+
+            with artifacts.per_method_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(row["post_line_coverage"] == "0.66" for row in rows))
+
+    def test_parallel_budget_scheduler_limits_global_slots(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 2
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+
+            methods = [
+                {
+                    "target_id": build_method_key("Alpha", "run", "public int run()"),
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 0,
+                },
+                {
+                    "target_id": build_method_key("Beta", "run", "public int run()"),
+                    "class_name": "Beta",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 1,
+                },
+                {
+                    "target_id": build_method_key("Gamma", "run", "public int run()"),
+                    "class_name": "Gamma",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 2,
+                },
+            ]
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            lock = threading.Lock()
+            active_tasks = 0
+            max_active_tasks = 0
+            starts: dict[str, float] = {}
+            intervals: list[tuple[str, str, str, float, float]] = []
+
+            def mark_start(task_type: str, target_id: str, arm: str = "") -> None:
+                nonlocal active_tasks, max_active_tasks
+                key = f"{task_type}:{target_id}:{arm}"
+                now = time.monotonic()
+                with lock:
+                    active_tasks += 1
+                    max_active_tasks = max(max_active_tasks, active_tasks)
+                    starts[key] = now
+
+            def mark_end(task_type: str, target_id: str, arm: str = "") -> None:
+                nonlocal active_tasks
+                key = f"{task_type}:{target_id}:{arm}"
+                now = time.monotonic()
+                with lock:
+                    started_at = starts.pop(key)
+                    intervals.append((task_type, target_id, arm, started_at, now))
+                    active_tasks -= 1
+
+            original_ensure_shared_baseline = runner.ensure_shared_baseline
+
+            def tracked_ensure_shared_baseline(
+                method: FrozenStudyMethod | Mapping[str, object],
+            ) -> object:
+                frozen_method = runner._freeze_method(method)
+                mark_start("baseline", frozen_method.target_id)
+                time.sleep(0.05)
+                try:
+                    return original_ensure_shared_baseline(method)
+                finally:
+                    mark_end("baseline", frozen_method.target_id)
+
+            def execute_arm(
+                context: StudyArmContext,
+                method: FrozenStudyMethod,
+                _guidance: Sequence[object],
+                _knowledge_base: object,
+            ) -> StudyArmRunResult:
+                mark_start("arm", method.target_id, context.arm)
+                time.sleep(0.05)
+                try:
+                    _ = _write_final_arm_test(context, "ParallelBudget")
+                    return StudyArmRunResult(
+                        target_id=method.target_id,
+                        arm=context.arm,
+                        post_evaluation={"post_line_coverage": 0.8, "mutants": ()},
+                    )
+                finally:
+                    mark_end("arm", method.target_id, context.arm)
+
+            with (
+                patch.object(
+                    runner,
+                    "ensure_shared_baseline",
+                    side_effect=tracked_ensure_shared_baseline,
+                ),
+                patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()),
+            ):
+                _ = runner.run_study(methods, arm_executor=execute_arm, config=settings, seed=7)
+
+            def is_overlapping(
+                left: tuple[str, str, str, float, float],
+                right: tuple[str, str, str, float, float],
+            ) -> bool:
+                return min(left[4], right[4]) > max(left[3], right[3])
+
+            different_method_overlap = any(
+                is_overlapping(intervals[i], intervals[j]) and intervals[i][1] != intervals[j][1]
+                for i in range(len(intervals))
+                for j in range(i + 1, len(intervals))
+            )
+            same_method_arm_overlap = any(
+                is_overlapping(intervals[i], intervals[j])
+                and intervals[i][0] == "arm"
+                and intervals[j][0] == "arm"
+                and intervals[i][1] == intervals[j][1]
+                and intervals[i][2] != intervals[j][2]
+                for i in range(len(intervals))
+                for j in range(i + 1, len(intervals))
+            )
+
+            self.assertEqual(settings.agent.parallel.max_parallel_targets, 2)
+            self.assertLessEqual(max_active_tasks, 2)
+            self.assertEqual(max_active_tasks, 2)
+            self.assertTrue(different_method_overlap)
+            self.assertTrue(same_method_arm_overlap)
+
+    def test_serial_equivalence_scheduler_when_parallel_budget_is_one(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 1
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+
+            methods = [
+                {
+                    "target_id": build_method_key("Alpha", "run", "public int run()"),
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 0,
+                },
+                {
+                    "target_id": build_method_key("Beta", "run", "public int run()"),
+                    "class_name": "Beta",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 1,
+                },
+            ]
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            execution_trace: list[str] = []
+            original_ensure_shared_baseline = runner.ensure_shared_baseline
+
+            def tracked_ensure_shared_baseline(
+                method: FrozenStudyMethod | Mapping[str, object],
+            ) -> object:
+                frozen_method = runner._freeze_method(method)
+                execution_trace.append(f"baseline:{frozen_method.target_id}")
+                return original_ensure_shared_baseline(method)
+
+            def execute_arm(
+                context: StudyArmContext,
+                method: FrozenStudyMethod,
+                _guidance: Sequence[object],
+                _knowledge_base: object,
+            ) -> StudyArmRunResult:
+                execution_trace.append(f"arm:{method.target_id}:{context.arm}")
+                _ = _write_final_arm_test(context, "SerialBudget")
+                return StudyArmRunResult(
+                    target_id=method.target_id,
+                    arm=context.arm,
+                    post_evaluation={"post_line_coverage": 0.7, "mutants": ()},
+                )
+
+            with (
+                patch.object(
+                    runner,
+                    "ensure_shared_baseline",
+                    side_effect=tracked_ensure_shared_baseline,
+                ),
+                patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()),
+            ):
+                artifacts = runner.run_study(
+                    methods, arm_executor=execute_arm, config=settings, seed=11
+                )
+
+            expected_trace = [
+                f"baseline:{methods[0]['target_id']}",
+                f"arm:{methods[0]['target_id']}:M0",
+                f"arm:{methods[0]['target_id']}:M2",
+                f"arm:{methods[0]['target_id']}:M3",
+                f"baseline:{methods[1]['target_id']}",
+                f"arm:{methods[1]['target_id']}:M0",
+                f"arm:{methods[1]['target_id']}:M2",
+                f"arm:{methods[1]['target_id']}:M3",
+            ]
+            self.assertEqual(execution_trace, expected_trace)
+
+            summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["successful_method_count"], 2)
+            self.assertEqual(summary["successful_arm_count"], 6)
+            self.assertEqual(summary["failed_arm_count"], 0)
+
+    def test_parallel_study_isolation_uses_unique_method_arm_paths(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 3
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+
+            method_signature = "public int run()"
+            methods = [
+                {
+                    "target_id": build_method_key("Alpha", "run", method_signature),
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": method_signature,
+                    "order": 0,
+                },
+                {
+                    "target_id": build_method_key("Beta", "run", method_signature),
+                    "class_name": "Beta",
+                    "method_name": "run",
+                    "method_signature": method_signature,
+                    "order": 1,
+                },
+            ]
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root / "artifacts"),
+                output_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            captured_paths: dict[tuple[str, str], dict[str, str]] = {}
+            captured_paths_lock = threading.Lock()
+
+            def execute_arm(
+                context: StudyArmContext,
+                method: FrozenStudyMethod,
+                _guidance: Sequence[object],
+                _knowledge_base: object,
+            ) -> StudyArmRunResult:
+                context.paths.vector_store_root.mkdir(parents=True, exist_ok=True)
+                _ = context.paths.database_path.write_text(context.arm, encoding="utf-8")
+                _ = context.paths.knowledge_database_path.write_text(context.arm, encoding="utf-8")
+                _ = (context.paths.vector_store_root / "marker.txt").write_text(
+                    context.arm,
+                    encoding="utf-8",
+                )
+                _ = _write_final_arm_test(context, "StudyIsolation")
+                with captured_paths_lock:
+                    captured_paths[(method.target_id, context.arm)] = {
+                        "state": str(context.paths.state_root),
+                        "output": str(context.paths.output_root),
+                        "sandbox": str(context.paths.sandbox_root),
+                        "workspace": str(context.workspace_path),
+                        "database": str(context.paths.database_path),
+                        "knowledge": str(context.paths.knowledge_database_path),
+                        "vector": str(context.paths.vector_store_root),
+                    }
+                return StudyArmRunResult(
+                    target_id=method.target_id,
+                    arm=context.arm,
+                    post_evaluation={"post_line_coverage": 0.61, "mutants": ()},
+                )
+
+            with patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()):
+                artifacts = runner.run_study(
+                    methods,
+                    arm_executor=execute_arm,
+                    config=settings,
+                    seed=17,
+                )
+
+            self.assertTrue(artifacts.summary_path.exists())
+            self.assertEqual(len(captured_paths), 6)
+            for key in (
+                "state",
+                "output",
+                "sandbox",
+                "workspace",
+                "database",
+                "knowledge",
+                "vector",
+            ):
+                self.assertEqual(len({paths[key] for paths in captured_paths.values()}), 6)
+
+    def test_parallel_study_cleanup_delays_baseline_release_and_cleans_arm_sandboxes(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 3
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+            method_signature = "public int run()"
+            target_id = build_method_key("Alpha", "run", method_signature)
+            methods = [
+                {
+                    "target_id": target_id,
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": method_signature,
+                    "order": 0,
+                }
+            ]
+
+            db = _FakeDatabase()
+            sandbox_manager = _RecordingSandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root / "artifacts"),
+                output_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            arm_workspace_paths: dict[str, Path] = {}
+            arm_workspace_paths_lock = threading.Lock()
+            m2_finished = threading.Event()
+            m3_waiting = threading.Event()
+            release_m3 = threading.Event()
+            run_result: dict[str, object] = {}
+
+            def execute_arm(
+                context: StudyArmContext,
+                method: FrozenStudyMethod,
+                _guidance: Sequence[object],
+                _knowledge_base: object,
+            ) -> StudyArmRunResult:
+                with arm_workspace_paths_lock:
+                    arm_workspace_paths[context.arm] = context.workspace_path
+                _ = _write_final_arm_test(context, "Cleanup")
+
+                if context.arm == "M2":
+                    m2_finished.set()
+                    raise RuntimeError("M2 cleanup failure")
+
+                if context.arm == "M3":
+                    m3_waiting.set()
+                    self.assertTrue(release_m3.wait(timeout=5), "M3 等待释放信号超时")
+
+                return StudyArmRunResult(
+                    target_id=method.target_id,
+                    arm=context.arm,
+                    post_evaluation={"post_line_coverage": 0.7, "mutants": ()},
+                )
+
+            def run_study() -> None:
+                try:
+                    with patch.object(
+                        StudyRunner,
+                        "build_m0_pit_guidance_from_baseline",
+                        return_value=(),
+                    ):
+                        run_result["artifacts"] = runner.run_study(
+                            methods,
+                            arm_executor=execute_arm,
+                            config=settings,
+                            seed=23,
+                        )
+                except Exception as error:
+                    run_result["error"] = error
+
+            worker = threading.Thread(target=run_study, name="study-cleanup-test")
+            worker.start()
+
+            try:
+                self.assertTrue(m2_finished.wait(timeout=5), "M2 未按预期完成")
+                self.assertTrue(m3_waiting.wait(timeout=5), "M3 未进入等待状态")
+
+                baseline_result = runner._baseline_cache[target_id]
+                self.assertIsNotNone(baseline_result.workspace_path)
+                baseline_workspace = Path(cast(str, baseline_result.workspace_path))
+                self.assertTrue(baseline_workspace.exists())
+                self.assertNotIn(
+                    baseline_workspace.name,
+                    [sandbox_id for sandbox_id, _path in sandbox_manager.cleanup_calls],
+                )
+
+                with arm_workspace_paths_lock:
+                    m2_workspace = arm_workspace_paths["M2"]
+                    m3_workspace = arm_workspace_paths["M3"]
+                for _ in range(200):
+                    if not m2_workspace.exists():
+                        break
+                    time.sleep(0.01)
+                self.assertFalse(m2_workspace.exists())
+                self.assertTrue(m3_workspace.exists())
+            finally:
+                release_m3.set()
+                worker.join(timeout=5)
+
+            self.assertFalse(worker.is_alive(), "study 线程未按预期结束")
+            self.assertNotIn("error", run_result)
+
+            self.assertIsNone(baseline_result.workspace_path)
+            self.assertFalse(baseline_workspace.exists())
+            with arm_workspace_paths_lock:
+                for workspace_path in arm_workspace_paths.values():
+                    self.assertFalse(workspace_path.exists())
+
+            cleanup_ids = [sandbox_id for sandbox_id, _path in sandbox_manager.cleanup_calls]
+            self.assertIn(baseline_workspace.name, cleanup_ids)
+
+            artifacts = cast(StudyRunArtifacts, run_result["artifacts"])
+            summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            method_summary = summary["methods"][0]
+            self.assertEqual(summary["failed_arm_count"], 1)
+            self.assertEqual(summary["successful_arm_count"], 2)
+            self.assertEqual(method_summary["status"], "partial_failed")
+            self.assertEqual(method_summary["arm_statuses"]["M2"], "failed")
+
+            for arm in ("M0", "M2", "M3"):
+                archived_test = (
+                    output_root / "artifacts" / target_id / arm / "pkg" / f"{arm}CleanupTest.java"
+                )
+                self.assertTrue(archived_test.exists())
+
+    def test_ordering_outputs_are_stable_after_out_of_order_parallel_completion(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 3
+            project_path = _create_isolated_project(root)
+            output_root = root / "study-output"
+
+            methods = [
+                {
+                    "target_id": build_method_key("Beta", "run", "public int run()"),
+                    "class_name": "Beta",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 1,
+                },
+                {
+                    "target_id": build_method_key("Alpha", "run", "public int run()"),
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": "public int run()",
+                    "order": 0,
+                },
+            ]
+
+            post_results = {
+                (methods[0]["target_id"], "M0"): {
+                    "line_coverage_rate": 0.61,
+                    "mutants": [
+                        _build_post_mutant(methods[0], "a", "MathMutator", "KILLED"),
+                        _build_post_mutant(
+                            methods[0], "b", "NegateConditionalsMutator", "SURVIVED"
+                        ),
+                    ],
+                },
+                (methods[0]["target_id"], "M2"): {
+                    "line_coverage_rate": 0.62,
+                    "mutants": [
+                        _build_post_mutant(methods[0], "a", "MathMutator", "KILLED"),
+                        _build_post_mutant(methods[0], "b", "NegateConditionalsMutator", "KILLED"),
+                    ],
+                },
+                (methods[0]["target_id"], "M3"): {
+                    "line_coverage_rate": 0.63,
+                    "mutants": [
+                        _build_post_mutant(methods[0], "a", "MathMutator", "KILLED"),
+                        _build_post_mutant(methods[0], "b", "NegateConditionalsMutator", "KILLED"),
+                    ],
+                },
+                (methods[1]["target_id"], "M0"): {
+                    "line_coverage_rate": 0.71,
+                    "mutants": [
+                        _build_post_mutant(methods[1], "a", "MathMutator", "KILLED"),
+                        _build_post_mutant(
+                            methods[1], "b", "NegateConditionalsMutator", "SURVIVED"
+                        ),
+                    ],
+                },
+                (methods[1]["target_id"], "M2"): {
+                    "line_coverage_rate": 0.72,
+                    "mutants": [
+                        _build_post_mutant(methods[1], "a", "MathMutator", "KILLED"),
+                        _build_post_mutant(methods[1], "b", "NegateConditionalsMutator", "KILLED"),
+                    ],
+                },
+                (methods[1]["target_id"], "M3"): {
+                    "line_coverage_rate": 0.73,
+                    "mutants": [
+                        _build_post_mutant(methods[1], "a", "MathMutator", "KILLED"),
+                        _build_post_mutant(methods[1], "b", "NegateConditionalsMutator", "KILLED"),
+                    ],
+                },
+            }
+            completion_delays = {
+                (methods[1]["target_id"], "M0"): 0.18,
+                (methods[1]["target_id"], "M2"): 0.12,
+                (methods[1]["target_id"], "M3"): 0.06,
+                (methods[0]["target_id"], "M0"): 0.05,
+                (methods[0]["target_id"], "M2"): 0.01,
+                (methods[0]["target_id"], "M3"): 0.02,
+            }
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(output_root / "artifacts"),
+                output_root=str(output_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            completion_trace: list[tuple[str, str]] = []
+            completion_trace_lock = threading.Lock()
+
+            def execute_arm(
+                context: StudyArmContext,
+                method: FrozenStudyMethod,
+                _guidance: Sequence[object],
+                _knowledge_base: object,
+            ) -> StudyArmRunResult:
+                time.sleep(completion_delays[(method.target_id, context.arm)])
+                with completion_trace_lock:
+                    completion_trace.append((method.target_id, context.arm))
+                _ = _write_final_arm_test(context, "Ordering")
+                return StudyArmRunResult(
+                    target_id=method.target_id,
+                    arm=context.arm,
+                    post_evaluation=post_results[(method.target_id, context.arm)],
+                )
+
+            with patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()):
+                artifacts = runner.run_study(
+                    methods, arm_executor=execute_arm, config=settings, seed=31
+                )
+
+            self.assertNotEqual(
+                completion_trace,
+                [
+                    (methods[1]["target_id"], "M0"),
+                    (methods[1]["target_id"], "M2"),
+                    (methods[1]["target_id"], "M3"),
+                    (methods[0]["target_id"], "M0"),
+                    (methods[0]["target_id"], "M2"),
+                    (methods[0]["target_id"], "M3"),
+                ],
+                msg="测试必须先制造出与最终稳定写盘顺序不同的完成顺序",
+            )
+
+            summary_payload = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["target_id"] for item in summary_payload["methods"]],
+                [methods[1]["target_id"], methods[0]["target_id"]],
+            )
+
+            with artifacts.per_method_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(
+                [(row["target_id"], row["arm"]) for row in rows],
+                [
+                    (methods[1]["target_id"], "M0"),
+                    (methods[1]["target_id"], "M2"),
+                    (methods[1]["target_id"], "M3"),
+                    (methods[0]["target_id"], "M0"),
+                    (methods[0]["target_id"], "M2"),
+                    (methods[0]["target_id"], "M3"),
+                ],
+            )
+
+            per_mutant_lines = [
+                json.loads(line)
+                for line in artifacts.per_mutant_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(
+                [(item["target_id"], item["arm"]) for item in per_mutant_lines],
+                [
+                    (methods[1]["target_id"], "M0"),
+                    (methods[1]["target_id"], "M0"),
+                    (methods[1]["target_id"], "M0"),
+                    (methods[1]["target_id"], "M0"),
+                    (methods[1]["target_id"], "M2"),
+                    (methods[1]["target_id"], "M2"),
+                    (methods[1]["target_id"], "M2"),
+                    (methods[1]["target_id"], "M2"),
+                    (methods[1]["target_id"], "M3"),
+                    (methods[1]["target_id"], "M3"),
+                    (methods[1]["target_id"], "M3"),
+                    (methods[1]["target_id"], "M3"),
+                    (methods[0]["target_id"], "M0"),
+                    (methods[0]["target_id"], "M0"),
+                    (methods[0]["target_id"], "M0"),
+                    (methods[0]["target_id"], "M0"),
+                    (methods[0]["target_id"], "M2"),
+                    (methods[0]["target_id"], "M2"),
+                    (methods[0]["target_id"], "M2"),
+                    (methods[0]["target_id"], "M2"),
+                    (methods[0]["target_id"], "M3"),
+                    (methods[0]["target_id"], "M3"),
+                    (methods[0]["target_id"], "M3"),
+                    (methods[0]["target_id"], "M3"),
+                ],
+            )
+            for index in range(0, len(per_mutant_lines), 4):
+                mutant_ids = [item["mutant_id"] for item in per_mutant_lines[index : index + 4]]
+                self.assertEqual(mutant_ids, sorted(mutant_ids))
 
     def test_run_pit_mutation_coverage_uses_target_java_environment(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -1001,6 +1760,70 @@ class StudyRunnerTest(unittest.TestCase):
                 / "M3SemanticTest.java"
             )
             self.assertTrue(m3_archived_test.exists())
+
+    def test_guided_m2_m3_cleanup_releases_baseline_workspace_on_success_and_failure(self) -> None:
+        for failing_arm in (None, "M2"):
+            with self.subTest(failing_arm=failing_arm), TemporaryDirectory() as tmp_dir:
+                root = Path(tmp_dir)
+                settings = _build_settings(tmp_dir)
+                project_path = _create_isolated_project(root)
+
+                method_signature = "public int run()"
+                target_id = build_method_key("Alpha", "run", method_signature)
+                db = _FakeDatabase()
+                sandbox_manager = _RecordingSandboxManager(str(root / "sandbox"))
+                tools = _FakeTools(db, sandbox_manager)
+                runner = StudyRunner(
+                    workspace_project_path=str(project_path),
+                    artifacts_root=str(settings.resolve_output_root() / "artifacts"),
+                    tools=tools,
+                    database=db,
+                    sandbox_manager=sandbox_manager,
+                    settings=settings,
+                )
+
+                observed_baseline_workspace: Path | None = None
+
+                def execute_arm(
+                    context: StudyArmContext, _knowledge_base: Any, guidance: tuple[Any, ...]
+                ) -> str:
+                    nonlocal observed_baseline_workspace
+                    baseline_result = runner._baseline_cache[target_id]
+                    self.assertIsNotNone(baseline_result.workspace_path)
+                    baseline_workspace = Path(cast(str, baseline_result.workspace_path))
+                    self.assertTrue(baseline_workspace.exists())
+                    observed_baseline_workspace = baseline_workspace
+                    self.assertEqual(len(guidance), 1)
+                    if context.arm == failing_arm:
+                        raise RuntimeError(f"{context.arm} guided cleanup failure")
+                    _ = _write_final_arm_test(context, "GuidedCleanup")
+                    return f"{context.arm}-ok"
+
+                results = runner.run_guided_m2_m3_arms(
+                    {
+                        "target_id": target_id,
+                        "class_name": "Alpha",
+                        "method_name": "run",
+                        "method_signature": method_signature,
+                    },
+                    execute_arm,
+                )
+
+                self.assertIsNotNone(observed_baseline_workspace)
+                if observed_baseline_workspace is None:
+                    raise AssertionError("baseline workspace 应在 guided arm 执行期间可见")
+                baseline_result = runner._baseline_cache[target_id]
+                self.assertIsNone(baseline_result.workspace_path)
+                self.assertFalse(observed_baseline_workspace.exists())
+                cleanup_ids = [sandbox_id for sandbox_id, _path in sandbox_manager.cleanup_calls]
+                self.assertIn(observed_baseline_workspace.name, cleanup_ids)
+                if failing_arm is None:
+                    self.assertTrue(results["M2"].succeeded)
+                    self.assertTrue(results["M3"].succeeded)
+                else:
+                    self.assertFalse(results["M2"].succeeded)
+                    self.assertEqual(str(results["M2"].error), "M2 guided cleanup failure")
+                    self.assertTrue(results["M3"].succeeded)
 
     def test_zero_test_project_uses_shared_baseline_once(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -1426,6 +2249,214 @@ class StudyRunnerTest(unittest.TestCase):
                     / f"{arm}FailureTest.java"
                 )
                 self.assertTrue(archived_test.exists())
+
+    def test_study_run_reuses_bug_report_index_once_across_methods(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.agent.parallel.max_parallel_targets = 1
+            bug_reports_dir = root / "bug-reports"
+            bug_reports_dir.mkdir()
+            _ = (bug_reports_dir / "bug.md").write_text("# bug\n", encoding="utf-8")
+            settings.set_bug_reports_dir(bug_reports_dir)
+            project_path = _create_isolated_project(root)
+
+            method_signature = "public int run()"
+            sampled_methods = [
+                {
+                    "order": 2,
+                    "target_id": build_method_key("Beta", "run", method_signature),
+                    "class_name": "Beta",
+                    "method_name": "run",
+                    "method_signature": method_signature,
+                    "source_file": "src/main/java/pkg/Beta.java",
+                    "line_start": 20,
+                    "line_end": 24,
+                },
+                {
+                    "order": 1,
+                    "target_id": build_method_key("Alpha", "run", method_signature),
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": method_signature,
+                    "source_file": "src/main/java/pkg/Alpha.java",
+                    "line_start": 10,
+                    "line_end": 14,
+                },
+            ]
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(settings.resolve_output_root() / "artifacts"),
+                output_root=str(settings.resolve_output_root()),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+                settings=settings,
+            )
+
+            execution_order: list[tuple[str, str]] = []
+            lifecycle_events: list[tuple[str, str]] = []
+            attached_asset_roots: list[str] = []
+            bug_report_index_calls: list[str] = []
+
+            shared_asset = BugReportSharedAsset(
+                asset_root=root / "shared-bug-reports",
+                manifest_path=root / "shared-bug-reports" / "manifest.json",
+                snapshot_path=root / "shared-bug-reports" / "documents.json",
+                source_dir=bug_reports_dir.resolve(),
+                report_count=1,
+            )
+
+            def fake_create_knowledge_base(**_kwargs: Any) -> Any:
+                knowledge_base = SimpleNamespace()
+
+                def attach_bug_report_shared_asset(asset: BugReportSharedAsset) -> None:
+                    attached_asset_roots.append(str(asset.asset_root))
+
+                def index_bug_reports(path: str) -> int:
+                    bug_report_index_calls.append(path)
+                    return 1
+
+                knowledge_base.attach_bug_report_shared_asset = attach_bug_report_shared_asset
+                knowledge_base.index_bug_reports = index_bug_reports
+                return knowledge_base
+
+            def fake_build_bug_report_shared_asset(**_kwargs: Any) -> BugReportSharedAsset:
+                lifecycle_events.append(("build", str(shared_asset.asset_root)))
+                return shared_asset
+
+            def arm_executor(
+                context: StudyArmContext,
+                method: FrozenStudyMethod,
+                _guidance: Sequence[object],
+                _knowledge_base: Any,
+            ) -> None:
+                lifecycle_events.append(("arm", f"{method.target_id}:{context.arm}"))
+                execution_order.append((method.target_id, context.arm))
+                _ = _write_final_arm_test(context, f"{method.class_name}{context.arm}")
+
+            def post_evaluator(
+                _context: StudyArmContext, _method: FrozenStudyMethod
+            ) -> dict[str, object]:
+                return {"post_line_coverage": 0.75, "mutants": ()}
+
+            with (
+                patch(
+                    "comet.web.study_runner.build_bug_report_shared_asset",
+                    side_effect=fake_build_bug_report_shared_asset,
+                ),
+                patch(
+                    "comet.web.study_runner.create_knowledge_base",
+                    side_effect=fake_create_knowledge_base,
+                ),
+                patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()),
+            ):
+                artifacts = runner.run_study(
+                    sampled_methods,
+                    arm_executor=arm_executor,
+                    post_evaluator=post_evaluator,
+                    config=settings,
+                    seed=99,
+                )
+
+            self.assertEqual(
+                execution_order,
+                [
+                    (build_method_key("Alpha", "run", method_signature), "M0"),
+                    (build_method_key("Alpha", "run", method_signature), "M2"),
+                    (build_method_key("Alpha", "run", method_signature), "M3"),
+                    (build_method_key("Beta", "run", method_signature), "M0"),
+                    (build_method_key("Beta", "run", method_signature), "M2"),
+                    (build_method_key("Beta", "run", method_signature), "M3"),
+                ],
+            )
+            summary_payload = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary_payload["arms"], ["M0", "M2", "M3"])
+            self.assertEqual(summary_payload["sample_size"], 2)
+            self.assertEqual(summary_payload["successful_arm_count"], 6)
+            self.assertEqual(lifecycle_events[0], ("build", str(shared_asset.asset_root)))
+            self.assertEqual(
+                attached_asset_roots,
+                [str(shared_asset.asset_root), str(shared_asset.asset_root)],
+                msg="study run 应为每个 M3 arm 挂载同一个只读共享资产",
+            )
+            self.assertEqual(bug_report_index_calls, [])
+
+    def test_shared_bug_report_asset_supports_read_only_queries(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings = _build_settings(tmp_dir)
+            settings.knowledge.enabled = True
+            asset_root = root / "shared-bug-reports"
+            asset_root.mkdir(parents=True, exist_ok=True)
+            manifest_path = asset_root / "manifest.json"
+            snapshot_path = asset_root / "documents.json"
+            _ = manifest_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "source_dir": str(root / "bug-reports"),
+                        "report_count": 2,
+                        "snapshot_path": str(snapshot_path),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            _ = snapshot_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "source_dir": str(root / "bug-reports"),
+                        "documents": [
+                            {
+                                "id": "bug-alpha",
+                                "content": "Alpha.run 在 null 输入时会失败",
+                                "metadata": {"title": "Alpha bug", "file_path": "bug-alpha.md"},
+                                "embedding": [1.0, 0.0],
+                            },
+                            {
+                                "id": "bug-beta",
+                                "content": "Beta.run 在边界值上会失败",
+                                "metadata": {"title": "Beta bug", "file_path": "bug-beta.md"},
+                                "embedding": [0.0, 1.0],
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            knowledge_base = RAGKnowledgeBase(
+                store=KnowledgeStore(db_path=str(root / "knowledge.db")),
+                config=settings.knowledge,
+                llm_api_key="test-key",
+                vector_store_directory=str(root / "chromadb"),
+            )
+            knowledge_base.attach_bug_report_shared_asset(
+                BugReportSharedAsset(
+                    asset_root=asset_root,
+                    manifest_path=manifest_path,
+                    snapshot_path=snapshot_path,
+                    source_dir=root / "bug-reports",
+                    report_count=2,
+                )
+            )
+            knowledge_base._shared_bug_report_embedding_service = cast(Any, _FakeEmbeddingService())
+
+            with patch.object(RAGKnowledgeBase, "_ensure_initialized", return_value=False):
+                context = knowledge_base.retrieve_for_mutation_generation("Alpha", "run")
+
+            self.assertIn("Alpha.run", context)
+            self.assertIn("Alpha.run 在 null 输入时会失败", context)
+            self.assertNotIn("Beta.run 在边界值上会失败", context)
 
 
 if __name__ == "__main__":

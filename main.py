@@ -135,6 +135,8 @@ def initialize_system(
     config: Settings,
     bug_reports_dir: Optional[str] = None,
     parallel_mode: bool = False,
+    *,
+    skip_bug_report_index: bool = False,
 ):
     """
     初始化系统组件
@@ -143,6 +145,7 @@ def initialize_system(
         config: 配置对象
         bug_reports_dir: Bug 报告目录（可选，用于 RAG 知识库）
         parallel_mode: 是否启用并行 Agent 模式
+        skip_bug_report_index: 是否跳过 Bug 报告索引
 
     Returns:
         初始化后的组件字典
@@ -208,7 +211,7 @@ def initialize_system(
             logger.warning("RAG 知识库预初始化失败，将在后续按需重试")
 
     # 如果提供了 Bug 报告目录，索引 Bug 报告
-    if bug_reports_dir:
+    if bug_reports_dir and not skip_bug_report_index:
         bug_dir = Path(bug_reports_dir)
         if bug_dir.exists() and bug_dir.is_dir():
             try:
@@ -220,6 +223,8 @@ def initialize_system(
                 logger.warning(f"索引 Bug 报告失败: {e}")
         else:
             logger.warning(f"Bug 报告目录不存在: {bug_reports_dir}")
+    elif bug_reports_dir:
+        logger.info("已跳过初始化阶段 Bug 报告索引，交由调用方统一处理")
 
     logger.info("数据库和知识库已初始化")
 
@@ -695,14 +700,24 @@ def run_study_command(
     if bug_reports_dir:
         logger.info(f"研究 Bug 报告目录: {bug_reports_dir}")
 
-    def study_system_initializer(study_config: Settings, parallel_mode: bool = False):
+    def study_system_initializer(
+        study_config: Settings,
+        parallel_mode: bool = False,
+        *,
+        skip_bug_report_index: bool = True,
+    ):
         return system_initializer(
             study_config,
             bug_reports_dir=bug_reports_dir,
             parallel_mode=parallel_mode,
+            skip_bug_report_index=skip_bug_report_index,
         )
 
-    components = study_system_initializer(config, parallel_mode=False)
+    components = study_system_initializer(
+        config,
+        parallel_mode=False,
+        skip_bug_report_index=True,
+    )
     artifacts = study_runner(
         project_path=str(project_path),
         output_dir=output_root,

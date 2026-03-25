@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import threading
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 from ..config.settings import KnowledgeConfig
 from ..models import Contract, Pattern
@@ -17,6 +20,107 @@ if TYPE_CHECKING:
     from .embedding import EmbeddingService
     from .retriever import KnowledgeRetriever
     from .vector_store import VectorStore
+
+
+@dataclass(slots=True, frozen=True)
+class BugReportSharedAsset:
+    asset_root: Path
+    manifest_path: Path
+    snapshot_path: Path
+    source_dir: Path
+    report_count: int
+
+
+def _coerce_bug_report_shared_asset(
+    asset: BugReportSharedAsset | Mapping[str, Any] | None,
+) -> BugReportSharedAsset | None:
+    if asset is None:
+        return None
+    if isinstance(asset, BugReportSharedAsset):
+        return asset
+    return BugReportSharedAsset(
+        asset_root=Path(str(asset["asset_root"])),
+        manifest_path=Path(str(asset["manifest_path"])),
+        snapshot_path=Path(str(asset["snapshot_path"])),
+        source_dir=Path(str(asset["source_dir"])),
+        report_count=int(asset["report_count"]),
+    )
+
+
+def build_bug_report_shared_asset(
+    *,
+    bug_reports_dir: str | Path,
+    config: KnowledgeConfig,
+    llm_api_key: str | None,
+    asset_root: str | Path,
+) -> BugReportSharedAsset:
+    from .bug_parser import load_bug_reports
+    from .embedding import EmbeddingService
+
+    resolved_bug_reports_dir = Path(bug_reports_dir).expanduser().resolve()
+    resolved_asset_root = Path(asset_root).expanduser().resolve()
+    resolved_asset_root.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = resolved_asset_root / "manifest.json"
+    snapshot_path = resolved_asset_root / "documents.json"
+    embedding_cache_dir = resolved_asset_root / "embedding_cache"
+
+    reports = load_bug_reports(str(resolved_bug_reports_dir))
+    contents = [report.to_text() for report in reports]
+    embedding_service = EmbeddingService.from_config(
+        config.embedding,
+        llm_api_key=llm_api_key,
+        cache_dir=str(embedding_cache_dir),
+    )
+    embeddings = embedding_service.embed_batch(contents) if contents else []
+
+    documents = [
+        {
+            "id": report.id,
+            "content": content,
+            "metadata": {
+                "title": report.title,
+                "file_path": report.file_path,
+                "file_type": report.file_type,
+            },
+            "embedding": embedding,
+        }
+        for report, content, embedding in zip(reports, contents, embeddings, strict=True)
+    ]
+
+    manifest_payload = {
+        "version": 1,
+        "source_dir": str(resolved_bug_reports_dir),
+        "report_count": len(documents),
+        "snapshot_path": str(snapshot_path),
+    }
+    snapshot_payload = {
+        "version": 1,
+        "source_dir": str(resolved_bug_reports_dir),
+        "documents": documents,
+    }
+
+    _ = manifest_path.write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _ = snapshot_path.write_text(
+        json.dumps(snapshot_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    logger.info(
+        "已构建只读 Bug 报告共享资产: %s (%s 个报告)",
+        resolved_asset_root,
+        len(documents),
+    )
+    return BugReportSharedAsset(
+        asset_root=resolved_asset_root,
+        manifest_path=manifest_path,
+        snapshot_path=snapshot_path,
+        source_dir=resolved_bug_reports_dir,
+        report_count=len(documents),
+    )
 
 
 class KnowledgeBase:
@@ -179,6 +283,12 @@ class KnowledgeBase:
     def index_bug_reports(self, bug_reports_dir: str) -> int:
         return 0
 
+    def attach_bug_report_shared_asset(
+        self,
+        asset: BugReportSharedAsset | Mapping[str, Any],
+    ) -> None:
+        raise AttributeError("知识库不支持只读 Bug 报告共享资产")
+
     def clear_cache(self) -> None:
         """清除缓存"""
         self._contracts_cache.clear()
@@ -217,6 +327,9 @@ class RAGKnowledgeBase(KnowledgeBase):
         self._retriever: KnowledgeRetriever | None = None
         self._initialized: bool = False
         self._init_lock = threading.RLock()
+        self._shared_bug_report_asset: BugReportSharedAsset | None = None
+        self._shared_bug_report_documents: list[dict[str, Any]] | None = None
+        self._shared_bug_report_embedding_service: EmbeddingService | None = None
 
     def initialize(self) -> bool:
         return self._ensure_initialized()
@@ -468,12 +581,57 @@ class RAGKnowledgeBase(KnowledgeBase):
         Returns:
             格式化的知识文本
         """
-        if not self._ensure_initialized():
-            return ""
+        if self._shared_bug_report_asset is None:
+            if not self._ensure_initialized():
+                return ""
 
-        return self.retriever.retrieve_for_test_generation(
-            class_name, method_name, method_signature, source_code
-        )
+            return self.retriever.retrieve_for_test_generation(
+                class_name, method_name, method_signature, source_code
+            )
+
+        results: Dict[str, List[Any]] = {
+            "contracts": [],
+            "bug_reports": self._search_bug_reports(
+                query=self._build_test_gen_query(
+                    class_name, method_name, method_signature, source_code
+                )
+            ),
+            "patterns": [],
+        }
+
+        if self._ensure_initialized():
+            query = self._build_test_gen_query(
+                class_name, method_name, method_signature, source_code
+            )
+            vector_store = self.vector_store
+            from .vector_store import KnowledgeType
+
+            results["contracts"] = vector_store.search(
+                KnowledgeType.CONTRACTS,
+                query,
+                top_k=self._top_k,
+                score_threshold=self._score_threshold,
+                filter_metadata=(
+                    {
+                        "class_name": class_name,
+                        **(
+                            {"method_signature": method_signature}
+                            if method_signature
+                            else {"method_name": method_name}
+                        ),
+                    }
+                    if class_name
+                    else None
+                ),
+            )
+            results["patterns"] = vector_store.search(
+                KnowledgeType.PATTERNS,
+                query,
+                top_k=self._top_k,
+                score_threshold=self._score_threshold,
+            )
+
+        return self._format_test_gen_context(results, class_name, method_name)
 
     def retrieve_for_mutation_generation(
         self,
@@ -493,15 +651,263 @@ class RAGKnowledgeBase(KnowledgeBase):
         Returns:
             格式化的知识文本
         """
-        if not self._ensure_initialized():
-            return ""
+        if self._shared_bug_report_asset is None:
+            if not self._ensure_initialized():
+                return ""
 
-        return self.retriever.retrieve_for_mutation_generation(
-            class_name,
-            method_name,
-            method_signature,
-            source_code,
+            return self.retriever.retrieve_for_mutation_generation(
+                class_name,
+                method_name,
+                method_signature,
+                source_code,
+            )
+
+        query = self._build_mutation_gen_query(class_name, method_name, source_code)
+        results: Dict[str, List[Any]] = {
+            "source_analysis": [],
+            "patterns": [],
+            "bug_reports": self._search_bug_reports(query=query),
+        }
+
+        if self._ensure_initialized():
+            vector_store = self.vector_store
+            from .vector_store import KnowledgeType
+
+            results["source_analysis"] = vector_store.search(
+                KnowledgeType.SOURCE_ANALYSIS,
+                query,
+                top_k=self._top_k,
+                score_threshold=self._score_threshold,
+                filter_metadata=(
+                    {
+                        "class_name": class_name,
+                        **(
+                            {"method_signature": method_signature}
+                            if method_signature
+                            else {"method_name": method_name}
+                        ),
+                    }
+                    if class_name
+                    else None
+                ),
+            )
+            results["patterns"] = vector_store.search(
+                KnowledgeType.PATTERNS,
+                query,
+                top_k=self._top_k * 2,
+                score_threshold=self._score_threshold,
+            )
+
+        return self._format_mutation_gen_context(results, class_name, method_name)
+
+    def attach_bug_report_shared_asset(
+        self,
+        asset: BugReportSharedAsset | Mapping[str, Any],
+    ) -> None:
+        self._shared_bug_report_asset = _coerce_bug_report_shared_asset(asset)
+        self._shared_bug_report_documents = None
+
+    @property
+    def _top_k(self) -> int:
+        config = self.config
+        if config is None:
+            return 5
+        return config.retrieval.top_k
+
+    @property
+    def _score_threshold(self) -> float:
+        config = self.config
+        if config is None:
+            return 0.5
+        return config.retrieval.score_threshold
+
+    def _load_shared_bug_report_documents(self) -> list[dict[str, Any]]:
+        if self._shared_bug_report_documents is not None:
+            return self._shared_bug_report_documents
+
+        asset = self._shared_bug_report_asset
+        if asset is None:
+            self._shared_bug_report_documents = []
+            return self._shared_bug_report_documents
+
+        payload = json.loads(asset.snapshot_path.read_text(encoding="utf-8"))
+        documents_payload = payload.get("documents", [])
+        documents: list[dict[str, Any]] = []
+        for item in documents_payload:
+            if not isinstance(item, Mapping):
+                continue
+            metadata_value = item.get("metadata")
+            embedding_value = item.get("embedding")
+            documents.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "content": str(item.get("content") or ""),
+                    "metadata": dict(metadata_value) if isinstance(metadata_value, Mapping) else {},
+                    "embedding": (
+                        [float(value) for value in embedding_value]
+                        if isinstance(embedding_value, list)
+                        else []
+                    ),
+                }
+            )
+
+        self._shared_bug_report_documents = documents
+        return documents
+
+    def _shared_bug_report_query_embedding_service(self) -> EmbeddingService:
+        if self._shared_bug_report_embedding_service is not None:
+            return self._shared_bug_report_embedding_service
+
+        if self._embedding_service is not None:
+            self._shared_bug_report_embedding_service = self._embedding_service
+            return self._shared_bug_report_embedding_service
+
+        from .embedding import EmbeddingService
+
+        cache_root = Path(self.vector_store_directory or "./state/chromadb") / "embedding_cache"
+        self._shared_bug_report_embedding_service = EmbeddingService.from_config(
+            self._require_config().embedding,
+            llm_api_key=self.llm_api_key,
+            cache_dir=str(cache_root),
         )
+        return self._shared_bug_report_embedding_service
+
+    def _search_bug_reports(self, query: str) -> List[Any]:
+        if self._shared_bug_report_asset is None:
+            if not self._ensure_initialized():
+                return []
+            from .vector_store import KnowledgeType
+
+            return self.vector_store.search(
+                KnowledgeType.BUG_REPORTS,
+                query,
+                top_k=self._top_k,
+                score_threshold=self._score_threshold,
+            )
+
+        from .vector_store import Document, SearchResult
+
+        documents = self._load_shared_bug_report_documents()
+        if not documents:
+            return []
+
+        query_embedding = self._shared_bug_report_query_embedding_service().embed(query)
+        results: list[SearchResult] = []
+        for item in documents:
+            score = self._cosine_similarity(query_embedding, item["embedding"])
+            if score < self._score_threshold:
+                continue
+            results.append(
+                SearchResult(
+                    document=Document(
+                        id=item["id"],
+                        content=item["content"],
+                        metadata=dict(item["metadata"]),
+                    ),
+                    score=score,
+                )
+            )
+
+        results.sort(key=lambda result: result.score, reverse=True)
+        return results[: self._top_k]
+
+    @staticmethod
+    def _cosine_similarity(left: List[float], right: List[float]) -> float:
+        if not left or not right or len(left) != len(right):
+            return 0.0
+
+        numerator = sum(left_value * right_value for left_value, right_value in zip(left, right))
+        left_norm = math.sqrt(sum(value * value for value in left))
+        right_norm = math.sqrt(sum(value * value for value in right))
+        if left_norm == 0 or right_norm == 0:
+            return 0.0
+        return numerator / (left_norm * right_norm)
+
+    @staticmethod
+    def _build_test_gen_query(
+        class_name: str,
+        method_name: str,
+        method_signature: Optional[str] = None,
+        source_code: Optional[str] = None,
+    ) -> str:
+        parts = [f"test generation for {class_name}.{method_name}"]
+        if method_signature:
+            parts.append(f"signature: {method_signature}")
+        if source_code:
+            parts.append(f"code: {source_code[:300]}")
+        return " ".join(parts)
+
+    @staticmethod
+    def _build_mutation_gen_query(
+        class_name: str,
+        method_name: str,
+        source_code: Optional[str] = None,
+    ) -> str:
+        query = f"mutation patterns for {class_name}.{method_name}"
+        if source_code:
+            query += f" with code: {source_code[:500]}"
+        return query
+
+    @staticmethod
+    def _format_test_gen_context(
+        results: Dict[str, List[Any]],
+        class_name: str,
+        method_name: str,
+    ) -> str:
+        sections = []
+
+        contracts = results.get("contracts", [])
+        if contracts:
+            sections.append("## 方法契约信息")
+            for result in contracts[:3]:
+                sections.append(f"\n{result.document.content}")
+
+        bugs = results.get("bug_reports", [])
+        if bugs:
+            sections.append("\n## 相关 Bug 案例（参考）")
+            for result in bugs[:2]:
+                sections.append(f"\n{result.document.content[:500]}...")
+
+        patterns = results.get("patterns", [])
+        if patterns:
+            sections.append("\n## 相关缺陷模式（测试应覆盖）")
+            for result in patterns[:3]:
+                sections.append(f"\n- {result.document.content[:200]}")
+
+        if not sections:
+            return ""
+        return f"# {class_name}.{method_name} 的相关知识\n" + "\n".join(sections)
+
+    @staticmethod
+    def _format_mutation_gen_context(
+        results: Dict[str, List[Any]],
+        class_name: str,
+        method_name: str,
+    ) -> str:
+        sections = []
+
+        analysis = results.get("source_analysis", [])
+        if analysis:
+            sections.append("## 代码分析结果")
+            for result in analysis[:2]:
+                sections.append(f"\n{result.document.content}")
+
+        patterns = results.get("patterns", [])
+        if patterns:
+            sections.append("\n## 可用的缺陷模式（用于变异）")
+            for result in patterns[:5]:
+                sections.append(f"\n### {result.document.metadata.get('name', 'Pattern')}")
+                sections.append(result.document.content[:300])
+
+        bugs = results.get("bug_reports", [])
+        if bugs:
+            sections.append("\n## 相关 Bug 案例（变异参考）")
+            for result in bugs[:2]:
+                sections.append(f"\n{result.document.content[:400]}...")
+
+        if not sections:
+            return ""
+        return f"# {class_name}.{method_name} 的变异知识\n" + "\n".join(sections)
 
     def index_source_analysis(
         self,

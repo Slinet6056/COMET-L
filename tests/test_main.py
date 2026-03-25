@@ -440,15 +440,22 @@ class StudyCliTests(unittest.TestCase):
                 per_mutant_path=root / "study-output" / "per_mutant.jsonl",
                 sampled_methods_path=root / "study-output" / "sampled_methods.json",
             )
-            initializer_calls: list[tuple[Path | None, str | None, bool]] = []
+            initializer_calls: list[tuple[Path | None, str | None, bool, bool]] = []
 
             def fake_initializer(
                 config: Settings,
                 bug_reports_dir: str | None = None,
                 parallel_mode: bool = False,
+                *,
+                skip_bug_report_index: bool = False,
             ):
                 initializer_calls.append(
-                    (config.resolve_bug_reports_dir(), bug_reports_dir, parallel_mode)
+                    (
+                        config.resolve_bug_reports_dir(),
+                        bug_reports_dir,
+                        parallel_mode,
+                        skip_bug_report_index,
+                    )
                 )
                 return components
 
@@ -479,8 +486,8 @@ class StudyCliTests(unittest.TestCase):
         self.assertEqual(
             initializer_calls,
             [
-                (bug_reports_dir.resolve(), str(bug_reports_dir.resolve()), False),
-                (bug_reports_dir.resolve(), str(bug_reports_dir.resolve()), False),
+                (bug_reports_dir.resolve(), str(bug_reports_dir.resolve()), False, True),
+                (bug_reports_dir.resolve(), str(bug_reports_dir.resolve()), False, True),
             ],
         )
         study_mock.assert_called_once_with(
@@ -520,16 +527,18 @@ class StudyCliTests(unittest.TestCase):
                 per_mutant_path=output_dir / "per_mutant.jsonl",
                 sampled_methods_path=output_dir / "sampled_methods.json",
             )
-            init_bug_dirs: list[str | None] = []
+            init_calls: list[tuple[str | None, bool]] = []
             settings = Settings(llm=LLMConfig(api_key="test-key"))
 
             def fake_initializer(
                 config: Settings,
                 bug_reports_dir: str | None = None,
                 parallel_mode: bool = False,
+                *,
+                skip_bug_report_index: bool = False,
             ):
                 _ = (config, parallel_mode)
-                init_bug_dirs.append(bug_reports_dir)
+                init_calls.append((bug_reports_dir, skip_bug_report_index))
                 return {
                     "tools": object(),
                     "db": object(),
@@ -559,7 +568,7 @@ class StudyCliTests(unittest.TestCase):
             ):
                 main.main()
 
-        self.assertEqual(init_bug_dirs, [str(bug_reports_dir.resolve())])
+        self.assertEqual(init_calls, [(str(bug_reports_dir.resolve()), True)])
         run_cli_mock.assert_not_called()
 
     def test_main_runs_study_e2e_on_calculator_demo(self) -> None:
@@ -577,9 +586,12 @@ class StudyCliTests(unittest.TestCase):
                 config: Settings,
                 bug_reports_dir: str | None = None,
                 parallel_mode: bool = False,
+                *,
+                skip_bug_report_index: bool = False,
             ) -> dict[str, object]:
                 self.assertIsNone(bug_reports_dir)
                 self.assertFalse(parallel_mode)
+                self.assertTrue(skip_bug_report_index)
                 initializer_output_roots.append(config.resolve_output_root())
                 db = _StudyCliFakeDatabase(calculator_source)
                 sandbox_manager = SandboxManager(str(config.resolve_sandbox_root()))
@@ -691,6 +703,80 @@ class StudyCliTests(unittest.TestCase):
 
         self.assertIs(result, knowledge_base)
         knowledge_base.index_bug_reports.assert_called_once_with(str(bug_reports_dir.resolve()))
+
+    def test_run_study_command_uses_skip_bug_report_index_path_for_study_initializers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+            bug_reports_dir = root / "bug-reports"
+            bug_reports_dir.mkdir()
+            (bug_reports_dir / "bug.md").write_text("# bug", encoding="utf-8")
+
+            args = SimpleNamespace(
+                project_path=str(project_path),
+                config="config.yaml",
+                sample_size=2,
+                seed=11,
+                output_dir=str(root / "study-output"),
+                bug_reports_dir=str(bug_reports_dir),
+                debug=False,
+            )
+            settings = Settings(llm=LLMConfig(api_key="test-key"))
+            components = {"tools": object(), "db": object(), "sandbox_manager": object()}
+            artifacts = SimpleNamespace(
+                summary_path=root / "study-output" / "summary.json",
+                per_method_path=root / "study-output" / "per_method.csv",
+                per_mutant_path=root / "study-output" / "per_mutant.jsonl",
+                sampled_methods_path=root / "study-output" / "sampled_methods.json",
+            )
+            initializer_calls: list[tuple[str | None, bool]] = []
+            indexing_calls: list[str | None] = []
+
+            def fake_initializer(
+                config: Settings,
+                bug_reports_dir: str | None = None,
+                parallel_mode: bool = False,
+                *,
+                skip_bug_report_index: bool = False,
+            ) -> dict[str, object]:
+                self.assertFalse(parallel_mode)
+                _ = config
+                initializer_calls.append((bug_reports_dir, skip_bug_report_index))
+                if bug_reports_dir is not None and not skip_bug_report_index:
+                    indexing_calls.append(bug_reports_dir)
+                return components
+
+            def fake_study_runner(**kwargs):
+                kwargs["system_initializer"](kwargs["settings"], parallel_mode=False)
+                return artifacts
+
+            with (
+                patch.object(main, "configure_logging"),
+                patch.object(main, "initialize_system", side_effect=fake_initializer),
+                patch.object(main, "run_default_study", side_effect=fake_study_runner),
+            ):
+                exit_code = main.run_study_command(
+                    args,
+                    settings_loader=lambda _: settings,
+                    system_initializer=main.initialize_system,
+                    study_runner=main.run_default_study,
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            initializer_calls,
+            [
+                (str(bug_reports_dir.resolve()), True),
+                (str(bug_reports_dir.resolve()), True),
+            ],
+        )
+        self.assertEqual(
+            indexing_calls,
+            [],
+            msg="study CLI 应统一走 skip-index 初始化分支，避免任何 study initializer 再次承担 bug report 索引职责",
+        )
 
 
 if __name__ == "__main__":

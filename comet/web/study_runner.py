@@ -6,7 +6,9 @@ import json
 import logging
 import shutil
 import subprocess
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +16,13 @@ from typing import Generic, Protocol, TypeVar, cast
 
 from ..config.settings import Settings
 from ..executor.pit_xml_parser import PitMutantRecord, parse_pit_mutations_xml
-from ..knowledge.knowledge_base import KnowledgeBase, RAGKnowledgeBase, create_knowledge_base
+from ..knowledge.knowledge_base import (
+    BugReportSharedAsset,
+    KnowledgeBase,
+    RAGKnowledgeBase,
+    build_bug_report_shared_asset,
+    create_knowledge_base,
+)
 from ..models import Mutant, MutationPatch, TestCase, TestMethod
 from ..store.knowledge_store import KnowledgeStore
 from ..utils.code_utils import extract_imports, extract_test_methods_from_class, parse_java_class
@@ -247,12 +255,27 @@ class StudyPostEvaluation:
 
 
 @dataclass(slots=True, frozen=True)
+class StudyArmRunResult:
+    target_id: str
+    arm: str
+    post_evaluation: StudyPostEvaluation | Mapping[str, object]
+
+
+@dataclass(slots=True, frozen=True)
 class StudyRunArtifacts:
     output_root: Path
     summary_path: Path
     per_method_path: Path
     per_mutant_path: Path
     sampled_methods_path: Path
+
+
+@dataclass(slots=True, frozen=True)
+class _PendingStudyArmTask:
+    method: FrozenStudyMethod
+    arm: str
+    baseline: StudyBaselineResult
+    baseline_mutants: tuple[StudyMutantSnapshot, ...]
 
 
 class _StudyBaselineState:
@@ -319,6 +342,7 @@ class StudyRunner:
         self.pit_runner: Callable[[str], Mapping[str, object]] | None = pit_runner
         self.arm_names: tuple[str, ...] = tuple(arm_names)
         self._baseline_cache: dict[str, StudyBaselineResult] = {}
+        self._shared_bug_report_asset: BugReportSharedAsset | None = None
 
     def run_study(
         self,
@@ -328,83 +352,198 @@ class StudyRunner:
         ],
         post_evaluator: Callable[
             [StudyArmContext, FrozenStudyMethod], StudyPostEvaluation | Mapping[str, object]
-        ],
+        ]
+        | None = None,
         config: Settings | None = None,
         seed: int = DEFAULT_STUDY_SEED,
     ) -> StudyRunArtifacts:
         protocol = build_study_protocol()
         output_root = self.output_root
+        resolved_config = self._require_settings(config)
+        max_parallel_targets = resolved_config.agent.parallel.max_parallel_targets
         sampled_methods = self._load_sampled_methods(frozen_methods)
+        frozen_sampled_methods = [
+            self._freeze_method(sampled_method.model_dump(mode="json"))
+            for sampled_method in sampled_methods
+        ]
         sampled_methods_path = freeze_sampled_methods(output_root, sampled_methods)
+        self._shared_bug_report_asset = self.prepare_bug_report_shared_asset(resolved_config)
 
         per_method_rows: list[StudyPerMethodRowSchema] = []
         per_mutant_records: list[StudyPerMutantRecordSchema] = []
-        method_summaries: list[dict[str, object]] = []
+        method_summaries_by_target: dict[str, dict[str, object]] = {}
+        method_pending_arms: dict[str, int] = {}
 
         try:
-            for sampled_method in sampled_methods:
-                frozen_method = self._freeze_method(sampled_method.model_dump(mode="json"))
-                baseline = self.ensure_shared_baseline(frozen_method)
-                method_summary = self._build_method_summary(frozen_method, baseline)
-                arm_statuses = cast(dict[str, str], method_summary["arm_statuses"])
-                arm_errors = cast(dict[str, str | None], method_summary["arm_errors"])
+            pending_baselines = deque(frozen_sampled_methods)
+            ready_arm_tasks: deque[_PendingStudyArmTask] = deque()
+            active_futures: dict[Future[object], tuple[str, FrozenStudyMethod, str | None]] = {}
 
-                if not baseline.success:
-                    self._mark_method_skipped_by_baseline(method_summary, baseline)
-                    method_summaries.append(method_summary)
-                    continue
+            with ThreadPoolExecutor(max_workers=max_parallel_targets) as executor:
 
-                baseline_mutants = self._collect_method_mutant_snapshots(frozen_method)
+                def submit_ready_tasks() -> None:
+                    while len(active_futures) < max_parallel_targets and (
+                        ready_arm_tasks or pending_baselines
+                    ):
+                        if ready_arm_tasks:
+                            arm_task = ready_arm_tasks.popleft()
+                            future = cast(
+                                Future[object],
+                                executor.submit(
+                                    self._run_study_arm_task,
+                                    method=arm_task.method,
+                                    arm=arm_task.arm,
+                                    baseline=arm_task.baseline,
+                                    baseline_mutants=arm_task.baseline_mutants,
+                                    arm_executor=arm_executor,
+                                    post_evaluator=post_evaluator,
+                                    config=resolved_config,
+                                ),
+                            )
+                            active_futures[future] = ("arm", arm_task.method, arm_task.arm)
+                            continue
 
-                for arm in self.arm_names:
-                    arm_context = self.prepare_arm_context(frozen_method.target_id, arm, config)
-                    try:
-                        guidance, knowledge_base = self._prepare_arm_inputs(
-                            arm=arm,
-                            method=frozen_method,
-                            baseline=baseline,
-                            context=arm_context,
+                        baseline_method = pending_baselines.popleft()
+                        future = cast(
+                            Future[object],
+                            executor.submit(self.ensure_shared_baseline, baseline_method),
                         )
-                        _ = arm_executor(arm_context, frozen_method, guidance, knowledge_base)
-                        post_evaluation = self._normalize_post_evaluation(
-                            post_evaluator(arm_context, frozen_method)
-                        )
-                        row, mutant_records = self._build_method_artifacts(
-                            method=frozen_method,
-                            arm=arm,
-                            baseline=baseline,
-                            baseline_mutants=baseline_mutants,
-                            post_evaluation=post_evaluation,
-                        )
-                        per_method_rows.append(row)
-                        per_mutant_records.extend(mutant_records)
-                        arm_statuses[arm] = "completed"
-                        arm_errors[arm] = None
-                        successful_arm_count = cast(int, method_summary["successful_arm_count"])
-                        method_summary["successful_arm_count"] = successful_arm_count + 1
-                    except Exception as error:
-                        logger.exception(
-                            f"研究方法 {frozen_method.target_id} 的 {arm} 臂执行失败: {error}"
-                        )
-                        arm_statuses[arm] = "failed"
-                        arm_errors[arm] = str(error)
-                        failed_arm_count = cast(int, method_summary["failed_arm_count"])
-                        method_summary["failed_arm_count"] = failed_arm_count + 1
-                    finally:
-                        _ = arm_context.sandbox_manager.export_test_files_to_directory(
-                            "workspace",
-                            arm_context.paths.artifacts_root,
-                        )
+                        active_futures[future] = ("baseline", baseline_method, None)
 
-                method_summary["status"] = self._derive_method_status(method_summary)
-                method_summaries.append(method_summary)
+                submit_ready_tasks()
+                while active_futures:
+                    done, _ = wait(active_futures.keys(), return_when=FIRST_COMPLETED)
+                    for future in done:
+                        task_type, frozen_method, arm = active_futures.pop(future)
+
+                        if task_type == "baseline":
+                            try:
+                                baseline = cast(StudyBaselineResult, future.result())
+                            except Exception as error:
+                                logger.exception(
+                                    "研究方法 %s 的 baseline 执行失败: %s",
+                                    frozen_method.target_id,
+                                    error,
+                                )
+                                archive_dirs = build_method_archive_dirs(frozen_method.target_id)
+                                baseline = StudyBaselineResult(
+                                    target_id=frozen_method.target_id,
+                                    class_name=frozen_method.class_name,
+                                    method_name=frozen_method.method_name,
+                                    method_signature=frozen_method.method_signature,
+                                    archive_root=str(self.artifacts_root / frozen_method.target_id),
+                                    baseline_dir=str(
+                                        self.artifacts_root / archive_dirs[BASELINE_ARCHIVE_DIR]
+                                    ),
+                                    archive_dirs=archive_dirs,
+                                    status="failed",
+                                    error=str(error),
+                                )
+
+                            method_summary = self._build_method_summary(frozen_method, baseline)
+                            method_summaries_by_target[frozen_method.target_id] = method_summary
+                            if not baseline.success:
+                                self._mark_method_skipped_by_baseline(method_summary, baseline)
+                                continue
+
+                            baseline_mutants = self._collect_method_mutant_snapshots(frozen_method)
+                            method_pending_arms[frozen_method.target_id] = len(self.arm_names)
+                            for arm_name in self.arm_names:
+                                ready_arm_tasks.append(
+                                    _PendingStudyArmTask(
+                                        method=frozen_method,
+                                        arm=arm_name,
+                                        baseline=baseline,
+                                        baseline_mutants=baseline_mutants,
+                                    )
+                                )
+                            continue
+
+                        if arm is None:
+                            raise RuntimeError("研究臂任务缺少 arm 标识")
+
+                        method_summary = method_summaries_by_target.get(frozen_method.target_id)
+                        if method_summary is None:
+                            raise RuntimeError(
+                                f"研究方法 {frozen_method.target_id} 缺少 baseline 汇总信息"
+                            )
+
+                        arm_statuses = cast(dict[str, str], method_summary["arm_statuses"])
+                        arm_errors = cast(dict[str, str | None], method_summary["arm_errors"])
+                        try:
+                            row, mutant_records = cast(
+                                tuple[
+                                    StudyPerMethodRowSchema,
+                                    tuple[StudyPerMutantRecordSchema, ...],
+                                ],
+                                future.result(),
+                            )
+                            per_method_rows.append(row)
+                            per_mutant_records.extend(mutant_records)
+                            arm_statuses[arm] = "completed"
+                            arm_errors[arm] = None
+                            successful_arm_count = cast(int, method_summary["successful_arm_count"])
+                            method_summary["successful_arm_count"] = successful_arm_count + 1
+                        except Exception as error:
+                            logger.exception(
+                                f"研究方法 {frozen_method.target_id} 的 {arm} 臂执行失败: {error}"
+                            )
+                            arm_statuses[arm] = "failed"
+                            arm_errors[arm] = str(error)
+                            failed_arm_count = cast(int, method_summary["failed_arm_count"])
+                            method_summary["failed_arm_count"] = failed_arm_count + 1
+
+                        remaining_arms = method_pending_arms.get(frozen_method.target_id, 0) - 1
+                        method_pending_arms[frozen_method.target_id] = max(remaining_arms, 0)
+                        if method_pending_arms[frozen_method.target_id] == 0:
+                            method_summary["status"] = self._derive_method_status(method_summary)
+                            self.cleanup_shared_baseline(frozen_method.target_id)
+
+                    submit_ready_tasks()
         finally:
             self.cleanup_shared_baselines()
+            self._shared_bug_report_asset = None
+
+        method_summaries: list[dict[str, object]] = []
+        for frozen_method in frozen_sampled_methods:
+            summary = method_summaries_by_target.get(frozen_method.target_id)
+            if summary is None:
+                summary = cast(
+                    dict[str, object],
+                    {
+                        "target_id": frozen_method.target_id,
+                        "class_name": frozen_method.class_name,
+                        "method_name": frozen_method.method_name,
+                        "method_signature": frozen_method.method_signature or "",
+                        "status": "failed",
+                        "baseline_status": "failed",
+                        "baseline_error": "baseline 未执行",
+                        "successful_arm_count": 0,
+                        "failed_arm_count": 0,
+                        "skipped_arm_count": len(self.arm_names),
+                        "arm_statuses": {arm: "skipped" for arm in self.arm_names},
+                        "arm_errors": {arm: "baseline 未执行" for arm in self.arm_names},
+                    },
+                )
+            method_summaries.append(summary)
+
+        ordered_per_method_rows = self._order_per_method_rows(
+            per_method_rows,
+            frozen_sampled_methods,
+        )
+        ordered_per_mutant_records = self._order_per_mutant_records(
+            per_mutant_records,
+            frozen_sampled_methods,
+        )
+        ordered_method_summaries = self._order_method_summaries(
+            method_summaries,
+            frozen_sampled_methods,
+        )
 
         summary_payload = self._build_summary_payload(
             sampled_methods=sampled_methods,
-            per_method_rows=per_method_rows,
-            method_summaries=method_summaries,
+            per_method_rows=ordered_per_method_rows,
+            method_summaries=ordered_method_summaries,
             seed=seed,
         )
         summary_path = output_root / STUDY_OUTPUT_FILENAMES["summary"]
@@ -415,11 +554,15 @@ class StudyRunner:
             json.dumps(summary_payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        self._write_per_method_csv(per_method_path, protocol.per_method_fields, per_method_rows)
+        self._write_per_method_csv(
+            per_method_path,
+            protocol.per_method_fields,
+            ordered_per_method_rows,
+        )
         self._write_per_mutant_jsonl(
             per_mutant_path,
             protocol.per_mutant_fields,
-            per_mutant_records,
+            ordered_per_mutant_records,
         )
         return StudyRunArtifacts(
             output_root=output_root,
@@ -452,20 +595,39 @@ class StudyRunner:
             results[frozen_method.target_id] = self.ensure_shared_baseline(frozen_method)
         return results
 
-    def cleanup_shared_baselines(self) -> None:
-        if self.sandbox_manager is None:
+    def cleanup_shared_baseline(self, target_id: str) -> None:
+        result = self._baseline_cache.get(target_id)
+        if result is None:
             return
-        sandbox_manager = cast(StudySandboxManagerProtocol, self.sandbox_manager)
+        self._cleanup_baseline_workspace(result)
 
+    def cleanup_shared_baselines(self) -> None:
         for result in self._baseline_cache.values():
-            if not result.workspace_path:
-                continue
-            sandbox_id = Path(result.workspace_path).name
-            try:
-                sandbox_manager.cleanup_sandbox(sandbox_id)
-            except Exception as error:
-                logger.warning(f"清理 baseline 沙箱失败 {sandbox_id}: {error}")
+            self._cleanup_baseline_workspace(result)
+
+    def _cleanup_baseline_workspace(self, result: StudyBaselineResult) -> None:
+        if self.sandbox_manager is None or not result.workspace_path:
+            return
+
+        sandbox_manager = cast(StudySandboxManagerProtocol, self.sandbox_manager)
+        sandbox_id = Path(result.workspace_path).name
+        try:
+            sandbox_manager.cleanup_sandbox(sandbox_id)
+        except Exception as error:
+            logger.warning(f"清理 baseline 沙箱失败 {sandbox_id}: {error}")
+        finally:
             result.workspace_path = None
+
+    def _cleanup_arm_workspace(self, context: StudyArmContext) -> None:
+        try:
+            context.sandbox_manager.cleanup_sandbox("workspace")
+        except Exception as error:
+            logger.warning(
+                "清理研究臂 %s 的局部沙箱失败 %s: %s",
+                context.arm,
+                context.paths.workspace_root,
+                error,
+            )
 
     def build_arm_scoped_paths(
         self,
@@ -547,10 +709,13 @@ class StudyRunner:
                 error = exc
                 logger.exception(f"研究臂 {arm} 执行失败: {exc}")
             finally:
-                archived_files = context.sandbox_manager.export_test_files_to_directory(
-                    "workspace",
-                    context.paths.artifacts_root,
-                )
+                try:
+                    archived_files = context.sandbox_manager.export_test_files_to_directory(
+                        "workspace",
+                        context.paths.artifacts_root,
+                    )
+                finally:
+                    self._cleanup_arm_workspace(context)
 
             results[arm] = StudyArmExecutionResult(
                 context=context,
@@ -596,36 +761,42 @@ class StudyRunner:
                 f"共享 baseline 失败: {frozen_method.target_id}: {baseline.error or 'unknown error'}"
             )
 
-        guidance_mutants = self._collect_baseline_survived_mutants(frozen_method)
-        results: dict[str, StudyArmExecutionResult[ArmResultT]] = {}
+        try:
+            guidance_mutants = self._collect_baseline_survived_mutants(frozen_method)
+            results: dict[str, StudyArmExecutionResult[ArmResultT]] = {}
 
-        for arm in ("M2", "M3"):
-            context = self.prepare_arm_context(frozen_method.target_id, arm, config)
-            knowledge_base = self.create_arm_knowledge_base(context)
+            for arm in ("M2", "M3"):
+                context = self.prepare_arm_context(frozen_method.target_id, arm, config)
+                knowledge_base = self.create_arm_knowledge_base(context)
 
-            value: ArmResultT | None = None
-            error: Exception | None = None
-            archived_files: list[Path] = []
+                value: ArmResultT | None = None
+                error: Exception | None = None
+                archived_files: list[Path] = []
 
-            try:
-                value = arm_executor(context, knowledge_base, guidance_mutants)
-            except Exception as exc:
-                error = exc
-                logger.exception(f"研究臂 {arm} 语义变异执行失败: {exc}")
-            finally:
-                archived_files = context.sandbox_manager.export_test_files_to_directory(
-                    "workspace",
-                    context.paths.artifacts_root,
+                try:
+                    value = arm_executor(context, knowledge_base, guidance_mutants)
+                except Exception as exc:
+                    error = exc
+                    logger.exception(f"研究臂 {arm} 语义变异执行失败: {exc}")
+                finally:
+                    try:
+                        archived_files = context.sandbox_manager.export_test_files_to_directory(
+                            "workspace",
+                            context.paths.artifacts_root,
+                        )
+                    finally:
+                        self._cleanup_arm_workspace(context)
+
+                results[arm] = StudyArmExecutionResult(
+                    context=context,
+                    value=value,
+                    error=error,
+                    archived_test_count=len(archived_files),
                 )
 
-            results[arm] = StudyArmExecutionResult(
-                context=context,
-                value=value,
-                error=error,
-                archived_test_count=len(archived_files),
-            )
-
-        return results
+            return results
+        finally:
+            self.cleanup_shared_baseline(frozen_method.target_id)
 
     def create_arm_knowledge_base(self, context: StudyArmContext) -> KnowledgeBase:
         knowledge_config = context.config.knowledge.model_copy(deep=True)
@@ -642,8 +813,22 @@ class StudyRunner:
             vector_store_directory=str(context.paths.vector_store_root),
         )
         if context.arm == "M3":
+            shared_asset_mounted = False
+            if self._shared_bug_report_asset is not None:
+                try:
+                    knowledge_base.attach_bug_report_shared_asset(self._shared_bug_report_asset)
+                    shared_asset_mounted = True
+                    logger.info(
+                        "M3 已挂载 study 级只读 Bug 报告共享资产: %s",
+                        self._shared_bug_report_asset.asset_root,
+                    )
+                except AttributeError:
+                    logger.warning("研究臂知识库不支持只读 Bug 报告共享资产，回退到本地索引")
+                except Exception as error:
+                    logger.warning(f"M3 挂载只读 Bug 报告共享资产失败: {error}")
+
             bug_reports_dir = context.config.resolve_bug_reports_dir()
-            if bug_reports_dir is not None:
+            if bug_reports_dir is not None and not shared_asset_mounted:
                 try:
                     count = knowledge_base.index_bug_reports(str(bug_reports_dir))
                     logger.info(f"M3 已索引 {count} 个 Bug 报告: {bug_reports_dir}")
@@ -653,6 +838,32 @@ class StudyRunner:
                     logger.warning(f"M3 索引 Bug 报告失败: {error}")
 
         return knowledge_base
+
+    def prepare_bug_report_shared_asset(
+        self,
+        config: Settings | None = None,
+    ) -> BugReportSharedAsset | None:
+        resolved_config = self._require_settings(config)
+        bug_reports_dir = resolved_config.resolve_bug_reports_dir()
+        if bug_reports_dir is None:
+            return None
+
+        knowledge_config = resolved_config.knowledge.model_copy(deep=True)
+        knowledge_config.enabled = True
+        asset_root = self.output_root / ".study-shared" / "bug-reports"
+        try:
+            asset = build_bug_report_shared_asset(
+                bug_reports_dir=bug_reports_dir,
+                config=knowledge_config,
+                llm_api_key=resolved_config.llm.api_key,
+                asset_root=asset_root,
+            )
+        except Exception as error:
+            logger.warning(f"study 构建 Bug 报告共享资产失败: {error}")
+            return None
+
+        logger.info("study 已构建 Bug 报告共享资产: %s", asset.asset_root)
+        return asset
 
     def _run_pit_mutation_coverage(self, project_path: str) -> dict[str, object]:
         if self.pit_runner is not None:
@@ -773,6 +984,54 @@ class StudyRunner:
         guidance = self._collect_baseline_survived_mutants(method)
         return tuple(guidance), knowledge_base
 
+    def _run_study_arm_task(
+        self,
+        *,
+        method: FrozenStudyMethod,
+        arm: str,
+        baseline: StudyBaselineResult,
+        baseline_mutants: tuple[StudyMutantSnapshot, ...],
+        arm_executor: Callable[
+            [StudyArmContext, FrozenStudyMethod, Sequence[object], KnowledgeBase | None], object
+        ],
+        post_evaluator: Callable[
+            [StudyArmContext, FrozenStudyMethod], StudyPostEvaluation | Mapping[str, object]
+        ]
+        | None,
+        config: Settings,
+    ) -> tuple[StudyPerMethodRowSchema, tuple[StudyPerMutantRecordSchema, ...]]:
+        arm_context = self.prepare_arm_context(method.target_id, arm, config)
+        try:
+            guidance, knowledge_base = self._prepare_arm_inputs(
+                arm=arm,
+                method=method,
+                baseline=baseline,
+                context=arm_context,
+            )
+            arm_result = arm_executor(arm_context, method, guidance, knowledge_base)
+            resolved_arm_result = self._resolve_arm_run_result(
+                context=arm_context,
+                method=method,
+                raw_result=arm_result,
+                post_evaluator=post_evaluator,
+            )
+            post_evaluation = self._normalize_post_evaluation(resolved_arm_result.post_evaluation)
+            return self._build_method_artifacts(
+                method=method,
+                arm=arm,
+                baseline=baseline,
+                baseline_mutants=baseline_mutants,
+                post_evaluation=post_evaluation,
+            )
+        finally:
+            try:
+                _ = arm_context.sandbox_manager.export_test_files_to_directory(
+                    "workspace",
+                    arm_context.paths.artifacts_root,
+                )
+            finally:
+                self._cleanup_arm_workspace(arm_context)
+
     def _collect_method_mutant_snapshots(
         self,
         method: FrozenStudyMethod,
@@ -816,6 +1075,75 @@ class StudyRunner:
             post_line_coverage=self._to_float(line_coverage),
             mutants=ordered_mutants,
         )
+
+    def _resolve_arm_run_result(
+        self,
+        *,
+        context: StudyArmContext,
+        method: FrozenStudyMethod,
+        raw_result: object,
+        post_evaluator: Callable[
+            [StudyArmContext, FrozenStudyMethod], StudyPostEvaluation | Mapping[str, object]
+        ]
+        | None,
+    ) -> StudyArmRunResult:
+        explicit_result = self._normalize_arm_run_result(
+            context=context,
+            raw_result=raw_result,
+        )
+        if explicit_result is not None:
+            return explicit_result
+
+        if post_evaluator is None:
+            raise RuntimeError(
+                f"研究臂 {context.arm} 未返回 post evaluation 结果对象: {method.target_id}"
+            )
+
+        return StudyArmRunResult(
+            target_id=method.target_id,
+            arm=context.arm,
+            post_evaluation=self._normalize_post_evaluation(post_evaluator(context, method)),
+        )
+
+    def _normalize_arm_run_result(
+        self,
+        *,
+        context: StudyArmContext,
+        raw_result: object,
+    ) -> StudyArmRunResult | None:
+        if isinstance(raw_result, StudyArmRunResult):
+            return StudyArmRunResult(
+                target_id=raw_result.target_id,
+                arm=raw_result.arm,
+                post_evaluation=self._normalize_post_evaluation(raw_result.post_evaluation),
+            )
+
+        if isinstance(raw_result, StudyPostEvaluation):
+            return StudyArmRunResult(
+                target_id=context.target_id,
+                arm=context.arm,
+                post_evaluation=self._normalize_post_evaluation(raw_result),
+            )
+
+        if isinstance(raw_result, Mapping):
+            payload = cast(Mapping[str, object], raw_result)
+            if any(
+                key in payload
+                for key in (
+                    "post_line_coverage",
+                    "line_coverage_rate",
+                    "line_coverage",
+                    "mutants",
+                    "mutant_records",
+                )
+            ):
+                return StudyArmRunResult(
+                    target_id=context.target_id,
+                    arm=context.arm,
+                    post_evaluation=self._normalize_post_evaluation(payload),
+                )
+
+        return None
 
     def _normalize_mutant_snapshot(self, mutant: object) -> StudyMutantSnapshot:
         if isinstance(mutant, StudyMutantSnapshot):
@@ -1046,6 +1374,63 @@ class StudyRunner:
             "project_averages": project_averages,
             "methods": [dict(item) for item in method_summaries],
         }
+
+    def _build_method_order_map(
+        self,
+        sampled_methods: Sequence[FrozenStudyMethod | StudySampledMethodSchema],
+    ) -> dict[str, int]:
+        return {method.target_id: index for index, method in enumerate(sampled_methods)}
+
+    def _build_arm_order_map(self) -> dict[str, int]:
+        return {arm: index for index, arm in enumerate(self.arm_names)}
+
+    def _order_per_method_rows(
+        self,
+        rows: Sequence[StudyPerMethodRowSchema],
+        sampled_methods: Sequence[FrozenStudyMethod],
+    ) -> list[StudyPerMethodRowSchema]:
+        method_order_map = self._build_method_order_map(sampled_methods)
+        arm_order_map = self._build_arm_order_map()
+        return sorted(
+            rows,
+            key=lambda row: (
+                method_order_map.get(row.target_id, len(method_order_map)),
+                arm_order_map.get(row.arm, len(arm_order_map)),
+            ),
+        )
+
+    def _order_per_mutant_records(
+        self,
+        rows: Sequence[StudyPerMutantRecordSchema],
+        sampled_methods: Sequence[FrozenStudyMethod],
+    ) -> list[StudyPerMutantRecordSchema]:
+        method_order_map = self._build_method_order_map(sampled_methods)
+        arm_order_map = self._build_arm_order_map()
+        return sorted(
+            rows,
+            key=lambda row: (
+                method_order_map.get(row.target_id, len(method_order_map)),
+                arm_order_map.get(row.arm, len(arm_order_map)),
+                row.mutant_id,
+            ),
+        )
+
+    def _order_method_summaries(
+        self,
+        method_summaries: Sequence[Mapping[str, object]],
+        sampled_methods: Sequence[FrozenStudyMethod],
+    ) -> list[dict[str, object]]:
+        method_order_map = self._build_method_order_map(sampled_methods)
+        return [
+            dict(item)
+            for item in sorted(
+                method_summaries,
+                key=lambda item: method_order_map.get(
+                    str(item.get("target_id") or ""),
+                    len(method_order_map),
+                ),
+            )
+        ]
 
     def _write_per_method_csv(
         self,
@@ -1536,16 +1921,14 @@ def run_default_study(
     if not sampled_methods:
         raise RuntimeError("未找到可用于研究的公共方法，请检查项目源码与最小方法行数配置")
 
-    post_evaluations: dict[tuple[str, str], StudyPostEvaluation] = {}
-
     def execute_arm(
         context: StudyArmContext,
         method: FrozenStudyMethod,
         guidance: Sequence[object],
         knowledge_base: KnowledgeBase | None,
-    ) -> None:
+    ) -> StudyArmRunResult:
         arm_components = system_initializer(context.config, parallel_mode=False)
-        post_evaluations[(method.target_id, context.arm)] = _execute_default_study_arm(
+        return _execute_default_study_arm(
             runner=runner,
             arm_components=arm_components,
             method=method,
@@ -1554,13 +1937,9 @@ def run_default_study(
             knowledge_base=knowledge_base,
         )
 
-    def post_evaluator(context: StudyArmContext, method: FrozenStudyMethod) -> StudyPostEvaluation:
-        return post_evaluations[(method.target_id, context.arm)]
-
     return runner.run_study(
         sampled_methods,
         arm_executor=execute_arm,
-        post_evaluator=post_evaluator,
         config=settings,
         seed=seed,
     )
@@ -1574,7 +1953,7 @@ def _execute_default_study_arm(
     context: StudyArmContext,
     guidance: Sequence[object],
     knowledge_base: KnowledgeBase | None,
-) -> StudyPostEvaluation:
+) -> StudyArmRunResult:
     raw_arm_db = arm_components.get("db")
     raw_arm_tools = arm_components.get("tools")
     if raw_arm_db is None or raw_arm_tools is None:
@@ -1626,7 +2005,11 @@ def _execute_default_study_arm(
 
     evaluation_result = arm_tools.run_evaluation()
     runner._raise_for_failed_evaluation(evaluation_result)
-    return _collect_post_evaluation_from_db(arm_db, runner, method)
+    return StudyArmRunResult(
+        target_id=method.target_id,
+        arm=context.arm,
+        post_evaluation=_collect_post_evaluation_from_db(arm_db, runner, method),
+    )
 
 
 def _run_arm_refinement(
