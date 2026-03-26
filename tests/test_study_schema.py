@@ -7,6 +7,7 @@ from comet.web.study_protocol import (
     STUDY_ARCHIVE_DIRS,
     STUDY_ARM_NAMES,
     STUDY_OUTPUT_FILENAMES,
+    StudyAnalysisRowSchema,
     StudyOutputSummarySchema,
     StudyPerMethodRowSchema,
     StudyPerMutantRecordSchema,
@@ -40,6 +41,10 @@ class StudySchemaTest(unittest.TestCase):
         self.assertEqual(
             protocol.sampled_method_fields,
             tuple(StudySampledMethodSchema.model_fields.keys()),
+        )
+        self.assertEqual(
+            protocol.analysis_fields,
+            tuple(StudyAnalysisRowSchema.model_fields.keys()),
         )
         self.assertEqual(
             protocol.per_method_fields,
@@ -77,7 +82,13 @@ class StudySchemaTest(unittest.TestCase):
     def test_output_filename_set_is_fixed(self) -> None:
         self.assertEqual(
             set(STUDY_OUTPUT_FILENAMES.values()),
-            {"summary.json", "per_method.csv", "per_mutant.jsonl", "sampled_methods.json"},
+            {
+                "summary.json",
+                "per_method.csv",
+                "per_mutant.jsonl",
+                "sampled_methods.json",
+                "analysis_metrics.csv",
+            },
         )
 
     def test_protocol_schema_formula_strings_are_stable(self) -> None:

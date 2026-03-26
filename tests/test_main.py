@@ -438,6 +438,79 @@ class StudyCliTests(unittest.TestCase):
         self.assertEqual(exc_info.exception.code, 2)
         self.assertIn("--project-path", stderr.getvalue())
 
+    def test_parse_args_supports_analyze_study_defaults(self) -> None:
+        args = main.parse_args(
+            [
+                "analyze-study",
+                "--project-path",
+                "examples/calculator-demo",
+                "--study-results-path",
+                ".artifacts/study-demo",
+            ]
+        )
+
+        self.assertEqual(args.command, "analyze-study")
+        self.assertEqual(args.project_path, "examples/calculator-demo")
+        self.assertEqual(args.study_results_path, ".artifacts/study-demo")
+        self.assertIsNone(args.output_csv)
+        self.assertIsNone(args.max_workers)
+        self.assertEqual(args.config, "config.yaml")
+        self.assertFalse(args.debug)
+
+    def test_parse_args_reports_missing_analyze_study_results_path(self) -> None:
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr), self.assertRaises(SystemExit) as exc_info:
+            main.parse_args(["analyze-study", "--project-path", "examples/calculator-demo"])
+
+        self.assertEqual(exc_info.exception.code, 2)
+        self.assertIn("--study-results-path", stderr.getvalue())
+
+    def test_run_analyze_study_command_invokes_analyzer_with_default_csv_location(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            study_results_path = root / "study-output"
+            study_results_path.mkdir()
+            (study_results_path / "summary.json").write_text("{}", encoding="utf-8")
+
+            args = SimpleNamespace(
+                project_path=str(project_path),
+                study_results_path=str(study_results_path),
+                output_csv=None,
+                max_workers=3,
+                config="config.yaml",
+                debug=True,
+            )
+            settings = Settings(llm=LLMConfig(api_key="test-key"))
+            expected_csv = study_results_path / "analysis_metrics.csv"
+
+            with (
+                patch.object(main, "configure_logging") as configure_logging_mock,
+                patch.object(
+                    main, "analyze_study_results", return_value=expected_csv
+                ) as analyzer_mock,
+            ):
+                exit_code = main.run_analyze_study_command(
+                    args,
+                    settings_loader=lambda _: settings,
+                    analyzer=main.analyze_study_results,
+                )
+
+        self.assertEqual(exit_code, 0)
+        configure_logging_mock.assert_called_once_with(
+            str((study_results_path / "study-analysis.log").resolve()), level="DEBUG"
+        )
+        analyzer_mock.assert_called_once_with(
+            project_path=project_path.resolve(),
+            study_results_path=study_results_path.resolve(),
+            output_csv=None,
+            settings=settings,
+            max_workers=3,
+        )
+
     def test_run_study_command_passes_bug_reports_dir_to_study_chain(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

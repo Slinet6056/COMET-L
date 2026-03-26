@@ -17,6 +17,7 @@ STUDY_OUTPUT_FILENAMES = {
     "per_method": "per_method.csv",
     "per_mutant": "per_mutant.jsonl",
     "sampled_methods": "sampled_methods.json",
+    "analysis_metrics": "analysis_metrics.csv",
 }
 SINGLE_ROUND_IMPROVEMENT_SEMANTICS = "单轮改进仅比较同一方法在固定分母基线下的 pre/post 变化"
 SHARED_BASELINE_STRATEGY = "每个目标方法只生成一次共享 baseline，并复用于 M0/M2/M3 三个研究臂"
@@ -29,11 +30,19 @@ class StudyMutantStatus(StrEnum):
     NO_COVERAGE = "NO_COVERAGE"
     TIMED_OUT = "TIMED_OUT"
     RUN_ERROR = "RUN_ERROR"
+    NON_VIABLE = "NON_VIABLE"
+    MEMORY_ERROR = "MEMORY_ERROR"
 
 
 SCORABLE_MUTANT_STATUSES = frozenset({StudyMutantStatus.KILLED, StudyMutantStatus.SURVIVED})
 NON_SURVIVED_MUTANT_STATUSES = frozenset(
-    {StudyMutantStatus.NO_COVERAGE, StudyMutantStatus.TIMED_OUT, StudyMutantStatus.RUN_ERROR}
+    {
+        StudyMutantStatus.NO_COVERAGE,
+        StudyMutantStatus.TIMED_OUT,
+        StudyMutantStatus.RUN_ERROR,
+        StudyMutantStatus.NON_VIABLE,
+        StudyMutantStatus.MEMORY_ERROR,
+    }
 )
 
 
@@ -146,6 +155,35 @@ class StudySampledMethodSchema(BaseModel):
     order: int = Field(ge=0)
 
 
+class StudyAnalysisRowSchema(BaseModel):
+    target_id: str
+    arm: str
+    class_name: str
+    method_name: str
+    method_signature: str
+    test_archive_dir: str
+    jacoco_line_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    jacoco_branch_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    jacoco_method_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    jacoco_class_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    jacoco_total_lines: int = Field(default=0, ge=0)
+    jacoco_covered_lines: int = Field(default=0, ge=0)
+    jacoco_total_branches: int = Field(default=0, ge=0)
+    jacoco_covered_branches: int = Field(default=0, ge=0)
+    jacoco_total_methods: int = Field(default=0, ge=0)
+    jacoco_covered_methods: int = Field(default=0, ge=0)
+    jacoco_total_classes: int = Field(default=0, ge=0)
+    jacoco_covered_classes: int = Field(default=0, ge=0)
+    pit_total_mutants: int = Field(default=0, ge=0)
+    pit_killed_mutants: int = Field(default=0, ge=0)
+    pit_survived_mutants: int = Field(default=0, ge=0)
+    pit_no_coverage_mutants: int = Field(default=0, ge=0)
+    pit_timed_out_mutants: int = Field(default=0, ge=0)
+    pit_run_error_mutants: int = Field(default=0, ge=0)
+    pit_mutation_kill_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    pit_test_strength: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class StudyProtocolSchema(BaseModel):
     arm_names: tuple[str, ...] = Field(default=STUDY_ARM_NAMES)
     shared_baseline_strategy: str = Field(default=SHARED_BASELINE_STRATEGY)
@@ -223,6 +261,9 @@ class StudyProtocolSchema(BaseModel):
     )
     sampled_method_fields: tuple[str, ...] = Field(
         default=("target_id", "class_name", "method_name", "method_signature", "order")
+    )
+    analysis_fields: tuple[str, ...] = Field(
+        default=tuple(StudyAnalysisRowSchema.model_fields.keys())
     )
 
 

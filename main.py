@@ -9,7 +9,7 @@ import threading
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional, cast
 
 from comet.agent import AgentTools, ParallelPlannerAgent, PlannerAgent
 from comet.agent.target_selector import TargetSelector
@@ -24,7 +24,12 @@ from comet.store import Database, KnowledgeStore
 from comet.utils import ProjectScanner, SandboxManager
 from comet.utils.code_utils import extract_test_methods_from_class
 from comet.web import configure_logging, run_cli
-from comet.web.study_protocol import DEFAULT_STUDY_SAMPLE_SIZE, DEFAULT_STUDY_SEED
+from comet.web.study_analysis import analyze_study_results
+from comet.web.study_protocol import (
+    DEFAULT_STUDY_SAMPLE_SIZE,
+    DEFAULT_STUDY_SEED,
+    STUDY_OUTPUT_FILENAMES,
+)
 from comet.web.study_runner import run_default_study
 
 logger = logging.getLogger(__name__)
@@ -106,7 +111,7 @@ def _prepare_study_sampling_coverage_store(
     sandbox_id = workspace_path.name
 
     try:
-        coverage_result = run_tests_with_coverage(str(workspace_path))
+        coverage_result = cast(Mapping[str, object], run_tests_with_coverage(str(workspace_path)))
         if not coverage_result.get("success", False):
             error_detail = (
                 coverage_result.get("error")
@@ -206,7 +211,7 @@ def parse_args(argv: Optional[list[str]] = None):
     """解析命令行参数"""
     raw_args = list(sys.argv[1:] if argv is None else argv)
     normalized_args = list(raw_args)
-    if not normalized_args or normalized_args[0] not in {"run", "study"}:
+    if not normalized_args or normalized_args[0] not in {"run", "study", "analyze-study"}:
         normalized_args = ["run", *normalized_args]
 
     parser = argparse.ArgumentParser(description="COMET-L: 基于 LLM 的测试变异协同进化系统")
@@ -250,6 +255,43 @@ def parse_args(argv: Optional[list[str]] = None):
         help="Bug 报告目录（用于 M3 RAG 知识库）",
     )
     study_parser.add_argument("--debug", action="store_true", help="启用调试日志（DEBUG级别）")
+
+    analyze_study_parser = subparsers.add_parser(
+        "analyze-study", help="回放 study 归档测试并导出详细统计 CSV"
+    )
+    analyze_study_parser.add_argument(
+        "--project-path", type=str, required=True, help="原始 Java Maven 项目路径"
+    )
+    analyze_study_parser.add_argument(
+        "--study-results-path",
+        type=str,
+        required=True,
+        help="study 结果目录路径（包含 summary.json 和 artifacts/）",
+    )
+    analyze_study_parser.add_argument(
+        "--output-csv",
+        type=str,
+        default=None,
+        help=(
+            "分析 CSV 输出路径（默认写入 study 结果目录下的 "
+            f"{STUDY_OUTPUT_FILENAMES['analysis_metrics']}）"
+        ),
+    )
+    analyze_study_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="并行收集 study 分析结果的线程数（默认使用配置或 CPU 核数）",
+    )
+    analyze_study_parser.add_argument(
+        "--config",
+        type=str,
+        default="config.yaml",
+        help="配置文件路径（默认: config.yaml）",
+    )
+    analyze_study_parser.add_argument(
+        "--debug", action="store_true", help="启用调试日志（DEBUG级别）"
+    )
 
     return parser.parse_args(normalized_args)
 
@@ -870,6 +912,62 @@ def run_study_command(
     return 0
 
 
+def run_analyze_study_command(
+    args: Any,
+    *,
+    settings_loader: Any = Settings.from_yaml_or_default,
+    analyzer: Any = analyze_study_results,
+) -> int:
+    project_path = Path(args.project_path).expanduser().resolve()
+    if not project_path.exists():
+        raise FileNotFoundError(f"目标项目不存在: {project_path}")
+    if not project_path.is_dir():
+        raise NotADirectoryError(f"目标项目不是目录: {project_path}")
+    if not (project_path / "pom.xml").exists():
+        raise FileNotFoundError(f"目标项目缺少 pom.xml: {project_path}")
+
+    study_results_path = Path(args.study_results_path).expanduser().resolve()
+    if not study_results_path.exists():
+        raise FileNotFoundError(f"study 结果目录不存在: {study_results_path}")
+    if not study_results_path.is_dir():
+        raise NotADirectoryError(f"study 结果路径不是目录: {study_results_path}")
+
+    config_path = args.config
+    if config_path == "config.yaml" and not Path(config_path).exists():
+        config_path = None
+    config = settings_loader(config_path)
+    config.set_runtime_roots(
+        state=study_results_path / ".study-analysis-state",
+        output=study_results_path,
+        sandbox=study_results_path / ".study-analysis-sandbox",
+    )
+    config.ensure_directories()
+
+    log_level = "DEBUG" if getattr(args, "debug", False) else "INFO"
+    log_file = study_results_path / "study-analysis.log"
+    _ = configure_logging(str(log_file), level=log_level)
+
+    output_csv = None
+    if getattr(args, "output_csv", None):
+        output_csv = Path(args.output_csv).expanduser().resolve()
+
+    logger.info("开始运行 study 结果分析")
+    logger.info(f"目标项目: {project_path}")
+    logger.info(f"study 结果目录: {study_results_path}")
+    if output_csv is not None:
+        logger.info(f"分析 CSV 输出路径: {output_csv}")
+
+    csv_path = analyzer(
+        project_path=project_path,
+        study_results_path=study_results_path,
+        output_csv=output_csv,
+        settings=config,
+        max_workers=getattr(args, "max_workers", None),
+    )
+    logger.info(f"study 分析完成，CSV 文件: {csv_path}")
+    return 0
+
+
 def main():
     """主函数"""
     args = parse_args()
@@ -879,6 +977,12 @@ def main():
     try:
         if command == "study":
             exit_code = run_study_command(args)
+            if exit_code != 0:
+                sys.exit(exit_code)
+            return
+
+        if command == "analyze-study":
+            exit_code = run_analyze_study_command(args)
             if exit_code != 0:
                 sys.exit(exit_code)
             return

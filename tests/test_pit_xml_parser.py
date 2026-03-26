@@ -94,3 +94,37 @@ class PitXmlParserTests(unittest.TestCase):
 
             with self.assertRaisesRegex(PitXmlParseError, "缺少关键字段 methodDescription"):
                 _ = parse_pit_mutations_xml(xml_path)
+
+    def test_accepts_extended_failure_statuses(self) -> None:
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<mutations>
+  <mutation detected="false" status="NON_VIABLE" numberOfTestsRun="0">
+    <sourceFile>Calculator.java</sourceFile>
+    <mutatedClass>com.example.Calculator</mutatedClass>
+    <mutatedMethod>add</mutatedMethod>
+    <methodDescription>(II)I</methodDescription>
+    <lineNumber>42</lineNumber>
+    <mutator>org.pitest.mutationtest.engine.gregor.mutators.MathMutator</mutator>
+    <killingTest />
+    <description>non viable</description>
+  </mutation>
+  <mutation detected="false" status="MEMORY_ERROR" numberOfTestsRun="0">
+    <sourceFile>Calculator.java</sourceFile>
+    <mutatedClass>com.example.Calculator</mutatedClass>
+    <mutatedMethod>add</mutatedMethod>
+    <methodDescription>(II)I</methodDescription>
+    <lineNumber>43</lineNumber>
+    <mutator>org.pitest.mutationtest.engine.gregor.mutators.MathMutator</mutator>
+    <killingTest />
+    <description>memory error</description>
+  </mutation>
+</mutations>
+"""
+
+        with TemporaryDirectory() as tmp_dir:
+            xml_path = Path(tmp_dir) / "mutations.xml"
+            _ = xml_path.write_text(xml_content, encoding="utf-8")
+
+            records = parse_pit_mutations_xml(xml_path)
+
+        self.assertEqual([record.status for record in records], ["NON_VIABLE", "MEMORY_ERROR"])

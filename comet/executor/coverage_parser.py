@@ -442,10 +442,16 @@ class CoverageParser:
             return {
                 "line_coverage": 0.0,
                 "branch_coverage": 0.0,
+                "method_coverage": 0.0,
+                "class_coverage": 0.0,
                 "total_lines": 0,
                 "covered_lines_count": 0,
                 "total_branches": 0,
                 "covered_branches": 0,
+                "total_methods": 0,
+                "covered_methods": 0,
+                "total_classes": 0,
+                "covered_classes": 0,
             }
 
         # 先按源文件聚合
@@ -513,6 +519,8 @@ class CoverageParser:
             # 直接从报告根元素获取全局 counter
             line_counter = root.find('counter[@type="LINE"]')
             branch_counter = root.find('counter[@type="BRANCH"]')
+            method_counter = root.find('counter[@type="METHOD"]')
+            class_counter = root.find('counter[@type="CLASS"]')
 
             if line_counter is not None:
                 total_lines = int(line_counter.get("covered", 0)) + int(
@@ -532,22 +540,50 @@ class CoverageParser:
                 total_branches = 0
                 covered_branches = 0
 
+            if method_counter is not None:
+                total_methods = int(method_counter.get("covered", 0)) + int(
+                    method_counter.get("missed", 0)
+                )
+                covered_methods = int(method_counter.get("covered", 0))
+            else:
+                total_methods = 0
+                covered_methods = 0
+
+            if class_counter is not None:
+                total_classes = int(class_counter.get("covered", 0)) + int(
+                    class_counter.get("missed", 0)
+                )
+                covered_classes = int(class_counter.get("covered", 0))
+            else:
+                total_classes = 0
+                covered_classes = 0
+
             line_coverage = covered_lines / total_lines if total_lines > 0 else 0.0
             branch_coverage = covered_branches / total_branches if total_branches > 0 else 0.0
+            method_coverage = covered_methods / total_methods if total_methods > 0 else 0.0
+            class_coverage = covered_classes / total_classes if total_classes > 0 else 0.0
 
             logger.info(
                 f"全局覆盖率（从 XML）: "
                 f"行覆盖率 {line_coverage:.1%} ({covered_lines}/{total_lines}), "
-                f"分支覆盖率 {branch_coverage:.1%} ({covered_branches}/{total_branches})"
+                f"分支覆盖率 {branch_coverage:.1%} ({covered_branches}/{total_branches}), "
+                f"方法覆盖率 {method_coverage:.1%} ({covered_methods}/{total_methods}), "
+                f"类覆盖率 {class_coverage:.1%} ({covered_classes}/{total_classes})"
             )
 
             return {
                 "line_coverage": line_coverage,
                 "branch_coverage": branch_coverage,
+                "method_coverage": method_coverage,
+                "class_coverage": class_coverage,
                 "total_lines": total_lines,
                 "covered_lines_count": covered_lines,
                 "total_branches": total_branches,
                 "covered_branches": covered_branches,
+                "total_methods": total_methods,
+                "covered_methods": covered_methods,
+                "total_classes": total_classes,
+                "covered_classes": covered_classes,
             }
 
         except ET.ParseError as e:
@@ -555,18 +591,30 @@ class CoverageParser:
             return {
                 "line_coverage": 0.0,
                 "branch_coverage": 0.0,
+                "method_coverage": 0.0,
+                "class_coverage": 0.0,
                 "total_lines": 0,
                 "covered_lines_count": 0,
                 "total_branches": 0,
                 "covered_branches": 0,
+                "total_methods": 0,
+                "covered_methods": 0,
+                "total_classes": 0,
+                "covered_classes": 0,
             }
         except Exception as e:
             logger.warning(f"解析覆盖率报告时出错: {e}")
             return {
                 "line_coverage": 0.0,
                 "branch_coverage": 0.0,
+                "method_coverage": 0.0,
+                "class_coverage": 0.0,
                 "total_lines": 0,
                 "covered_lines_count": 0,
                 "total_branches": 0,
                 "covered_branches": 0,
+                "total_methods": 0,
+                "covered_methods": 0,
+                "total_classes": 0,
+                "covered_classes": 0,
             }
