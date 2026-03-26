@@ -1183,6 +1183,7 @@ class StudyRunner:
         config: Settings,
     ) -> tuple[StudyPerMethodRowSchema, tuple[StudyPerMutantRecordSchema, ...]]:
         arm_context = self.prepare_arm_context(method.target_id, arm, config)
+        knowledge_base: KnowledgeBase | None = None
         try:
             guidance, knowledge_base = self._prepare_arm_inputs(
                 arm=arm,
@@ -1207,6 +1208,9 @@ class StudyRunner:
             )
         finally:
             try:
+                close_knowledge_base = getattr(knowledge_base, "close", None)
+                if callable(close_knowledge_base):
+                    close_knowledge_base()
                 _ = arm_context.sandbox_manager.export_test_files_to_directory(
                     "workspace",
                     arm_context.paths.artifacts_root,
@@ -2096,8 +2100,17 @@ class StudyRunner:
             return
 
         closers = []
-        for key in ("db", "knowledge_store"):
+        knowledge_base = components.get("knowledge_base")
+        knowledge_store = components.get("knowledge_store")
+        for key in ("knowledge_base", "db", "knowledge_store"):
             candidate = components.get(key)
+            if (
+                key == "knowledge_store"
+                and knowledge_base is not None
+                and knowledge_store is not None
+                and getattr(knowledge_base, "store", None) is knowledge_store
+            ):
+                continue
             close_method = getattr(candidate, "close", None)
             if callable(close_method):
                 closers.append(close_method)

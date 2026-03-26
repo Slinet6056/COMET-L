@@ -69,11 +69,22 @@ class VectorStore:
             path=str(self.persist_directory),
             settings=ChromaSettings(anonymized_telemetry=False),
         )
+        self._closed = False
 
         # 集合缓存
         self._collections: Dict[str, chromadb.Collection] = {}
 
         logger.info(f"向量存储初始化完成，持久化目录: {self.persist_directory}")
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        self._collections.clear()
+        close_method = getattr(self.client, "close", None)
+        if callable(close_method):
+            close_method()
+        self._closed = True
 
     def _get_collection(self, knowledge_type: str) -> chromadb.Collection:
         """

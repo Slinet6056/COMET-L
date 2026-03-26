@@ -987,7 +987,7 @@ class StudyCliTests(unittest.TestCase):
                 main.main()
 
             run_cli_mock.assert_not_called()
-            self.assertEqual(len(initializer_output_roots), 5)
+            self.assertEqual(len(initializer_output_roots), 6)
             self.assertEqual(
                 java_executor.public_method_files,
                 [calculator_source],

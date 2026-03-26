@@ -136,6 +136,7 @@ class KnowledgeBase:
         self.store = store
         self._contracts_cache: Dict[str, List[Contract]] = {}
         self._patterns_cache: Optional[List[Pattern]] = None
+        self._closed = False
 
     def add_contract(self, contract: Contract) -> None:
         """
@@ -297,6 +298,16 @@ class KnowledgeBase:
     def initialize(self) -> bool:
         return True
 
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        self.clear_cache()
+        close_method = getattr(self.store, "close", None)
+        if callable(close_method):
+            close_method()
+        self._closed = True
+
 
 class RAGKnowledgeBase(KnowledgeBase):
     """RAG 增强的知识库 - 支持向量检索"""
@@ -333,6 +344,23 @@ class RAGKnowledgeBase(KnowledgeBase):
 
     def initialize(self) -> bool:
         return self._ensure_initialized()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        vector_store = self._vector_store
+        self._retriever = None
+        self._embedding_service = None
+        self._shared_bug_report_embedding_service = None
+        self._shared_bug_report_documents = None
+        self._initialized = False
+        self._vector_store = None
+
+        if vector_store is not None:
+            vector_store.close()
+
+        super().close()
 
     def _require_config(self) -> KnowledgeConfig:
         config = self.config

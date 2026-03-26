@@ -173,6 +173,30 @@ class RAGKnowledgeBaseInitializationTests(TestCase):
         )
         retriever_factory.assert_called_once_with(config.retrieval, vector_store)
 
+    def test_close_releases_vector_store_and_store(self) -> None:
+        store = Mock()
+        config = KnowledgeConfig(
+            enabled=True,
+            embedding=EmbeddingConfig(api_key="embedding-key"),
+            retrieval=RetrievalConfig(top_k=3, score_threshold=0.2),
+        )
+        knowledge_base = RAGKnowledgeBase(
+            store=store,
+            config=config,
+            llm_api_key="llm-key",
+            vector_store_directory="/tmp/state/runs/run-001/chromadb",
+        )
+        vector_store = Mock()
+        knowledge_base._vector_store = vector_store
+        knowledge_base._initialized = True
+
+        knowledge_base.close()
+
+        vector_store.close.assert_called_once_with()
+        store.close.assert_called_once_with()
+        self.assertFalse(knowledge_base._initialized)
+        self.assertIsNone(knowledge_base._vector_store)
+
 
 class VectorStoreFilterNormalizationTests(TestCase):
     def test_normalize_filter_metadata_keeps_single_field_filter(self) -> None:

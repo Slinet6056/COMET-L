@@ -105,8 +105,22 @@ class _FakeDatabase:
 class _FakeClosableStore:
     def __init__(self) -> None:
         self.closed = False
+        self.close_calls = 0
 
     def close(self) -> None:
+        self.close_calls += 1
+        self.closed = True
+
+
+class _FakeKnowledgeBase:
+    def __init__(self, store: object | None = None) -> None:
+        self.store = store
+        self.closed = False
+
+    def close(self) -> None:
+        close_store = getattr(self.store, "close", None)
+        if callable(close_store):
+            close_store()
         self.closed = True
 
 
@@ -2543,23 +2557,29 @@ class StudyRunnerTest(unittest.TestCase):
             self.assertEqual(tools.evaluate_calls.get(target_id, 0), 0)
             self.assertEqual(result.metrics.baseline_total_mutants, 0)
 
-    def test_close_system_components_closes_database_and_knowledge_store(self) -> None:
+    def test_close_system_components_closes_knowledge_base_and_avoids_double_closing_store(
+        self,
+    ) -> None:
         runner = StudyRunner(
             workspace_project_path=".",
             artifacts_root="artifacts",
         )
         db = _FakeDatabase()
         knowledge_store = _FakeClosableStore()
+        knowledge_base = _FakeKnowledgeBase(store=knowledge_store)
 
         runner._close_system_components(
             {
+                "knowledge_base": knowledge_base,
                 "db": db,
                 "knowledge_store": knowledge_store,
             }
         )
 
+        self.assertTrue(knowledge_base.closed)
         self.assertTrue(db.closed)
         self.assertTrue(knowledge_store.closed)
+        self.assertEqual(knowledge_store.close_calls, 1)
 
     def test_arms_use_isolated_state_roots(self) -> None:
         with TemporaryDirectory() as tmp_dir:
