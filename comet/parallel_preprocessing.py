@@ -786,6 +786,7 @@ class ParallelPreprocessor:
                     package_name=test_case.package_name,
                     imports=test_case.imports,
                     test_methods=method_codes,
+                    existing_full_code=test_case.full_code,
                 )
 
             # 记录测试数量（但不保存到数据库）
@@ -932,6 +933,7 @@ class ParallelPreprocessor:
                     package_name=package_name,
                     imports=test_case.imports,
                     all_methods=test_case.methods,
+                    existing_full_code=test_case.full_code,
                 )
 
                 if valid_methods:
@@ -962,6 +964,7 @@ class ParallelPreprocessor:
                     package_name=test_case.package_name,
                     imports=test_case.imports,
                     test_methods=method_codes,
+                    existing_full_code=test_case.full_code,
                 )
 
                 # 写入workspace
@@ -1142,6 +1145,7 @@ class ParallelPreprocessor:
                 package_name=test_case.package_name,
                 imports=test_case.imports,
                 test_methods=[method.code for method in remaining_methods],
+                existing_full_code=test_case.full_code,
             )
             updated_test_cases.append(
                 test_case.model_copy(
@@ -1344,6 +1348,7 @@ class ParallelPreprocessor:
         package_name: str,
         imports: list[str],
         all_methods: list[TestMethod],
+        existing_full_code: str | None = None,
     ) -> list[TestMethod]:
         """
         在独立验证沙箱中构建和验证合并后的测试文件
@@ -1377,6 +1382,7 @@ class ParallelPreprocessor:
                 package_name=package_name,
                 imports=imports,
                 all_methods=all_methods,
+                existing_full_code=existing_full_code,
                 sandbox_path=sandbox_path,  # 传入沙箱路径
             )
 
@@ -1402,6 +1408,7 @@ class ParallelPreprocessor:
         package_name: str,
         imports: list[str],
         all_methods: list[TestMethod],
+        existing_full_code: str | None = None,
         sandbox_path: Optional[str] = None,
     ) -> list[TestMethod]:
         """
@@ -1448,6 +1455,7 @@ class ParallelPreprocessor:
                 package_name=package_name,
                 imports=imports,
                 test_methods=method_codes,
+                existing_full_code=existing_full_code,
             )
 
             # 写入沙箱
@@ -1476,6 +1484,7 @@ class ParallelPreprocessor:
                         target_class,
                         package_name,
                         imports,
+                        existing_full_code,
                     )
 
                     if failed_methods:
@@ -1546,6 +1555,7 @@ class ParallelPreprocessor:
                         target_class,
                         package_name,
                         imports,
+                        existing_full_code,
                     )
 
                     if failed_methods_from_binary:
@@ -1620,6 +1630,7 @@ class ParallelPreprocessor:
         target_class: str,
         package_name: str,
         imports: list[str],
+        existing_full_code: str | None = None,
     ) -> List[str]:
         """
         二分查找失败的测试方法（支持并行递归）
@@ -1662,6 +1673,7 @@ class ParallelPreprocessor:
                 target_class,
                 package_name,
                 imports,
+                existing_full_code,
             )
             right_future = submit_with_log_context(
                 executor,
@@ -1671,6 +1683,7 @@ class ParallelPreprocessor:
                 target_class,
                 package_name,
                 imports,
+                existing_full_code,
             )
 
             left_valid = left_future.result()
@@ -1701,7 +1714,12 @@ class ParallelPreprocessor:
                 failed_in_individual = []
                 for method in methods:
                     is_valid = self._validate_methods_in_sandbox(
-                        [method], test_class_name, target_class, package_name, imports
+                        [method],
+                        test_class_name,
+                        target_class,
+                        package_name,
+                        imports,
+                        existing_full_code,
                     )
                     if not is_valid:
                         failed_in_individual.append(method.method_name)
@@ -1724,6 +1742,7 @@ class ParallelPreprocessor:
                         target_class,
                         package_name,
                         imports,
+                        existing_full_code,
                     )
                     if len(left_methods) > 1
                     else [left_methods[0].method_name]
@@ -1735,6 +1754,7 @@ class ParallelPreprocessor:
                         target_class,
                         package_name,
                         imports,
+                        existing_full_code,
                     )
                     if len(right_methods) > 1
                     else [right_methods[0].method_name]
@@ -1748,7 +1768,12 @@ class ParallelPreprocessor:
             logger.info(f"左侧 {len(left_methods)} 个方法验证失败，继续递归查找")
             failed.extend(
                 self._binary_search_failed_methods(
-                    left_methods, test_class_name, target_class, package_name, imports
+                    left_methods,
+                    test_class_name,
+                    target_class,
+                    package_name,
+                    imports,
+                    existing_full_code,
                 )
             )
 
@@ -1756,7 +1781,12 @@ class ParallelPreprocessor:
             logger.info(f"右侧 {len(right_methods)} 个方法验证失败，继续递归查找")
             failed.extend(
                 self._binary_search_failed_methods(
-                    right_methods, test_class_name, target_class, package_name, imports
+                    right_methods,
+                    test_class_name,
+                    target_class,
+                    package_name,
+                    imports,
+                    existing_full_code,
                 )
             )
 
@@ -1769,6 +1799,7 @@ class ParallelPreprocessor:
         target_class: str,
         package_name: str,
         imports: list[str],
+        existing_full_code: str | None = None,
     ) -> bool:
         """
         在独立沙箱中验证一组测试方法
@@ -1802,6 +1833,7 @@ class ParallelPreprocessor:
                 package_name=package_name,
                 imports=imports,
                 test_methods=method_codes,
+                existing_full_code=existing_full_code,
             )
 
             # 写入测试文件

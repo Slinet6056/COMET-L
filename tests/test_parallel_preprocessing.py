@@ -377,3 +377,156 @@ class ParallelPreprocessingMutationDisabledTests(TestCase):
         mutation_evaluator.build_kill_matrix.assert_not_called()
         self.assertEqual(preprocessor._get_candidate_test_cases(), [test_case])
         sandbox_manager.cleanup_sandbox.assert_called_once_with("sandbox-1")
+
+
+class ParallelPreprocessingHelperRetentionTests(TestCase):
+    def _build_preprocessor(self) -> ParallelPreprocessor:
+        config = SimpleNamespace(
+            preprocessing=SimpleNamespace(max_workers=1, timeout_per_method=30),
+            evolution=SimpleNamespace(min_method_lines=1),
+            formatting=SimpleNamespace(enabled=False, style="google"),
+        )
+        components = {
+            "sandbox_manager": Mock(),
+            "java_executor": Mock(),
+            "test_generator": Mock(),
+            "mutant_generator": Mock(),
+            "static_guard": Mock(),
+            "mutation_evaluator": Mock(),
+            "db": Mock(),
+            "project_scanner": Mock(),
+        }
+        preprocessor = ParallelPreprocessor(config, components)
+        preprocessor.project_path = "/tmp/project"
+        preprocessor.workspace_sandbox = "/tmp/workspace"
+        return preprocessor
+
+    def test_merge_results_to_workspace_preserves_helper_class(self) -> None:
+        preprocessor = self._build_preprocessor()
+        helper_full_code = (
+            "package com.google.gson;\n\n"
+            "import org.junit.jupiter.api.Test;\n\n"
+            "public class TypeAdapterFromJsonTest {\n\n"
+            "    @Test\n"
+            "    void testFromJsonWithComplexObject() {\n"
+            "        SimpleObject obj = new SimpleObject();\n"
+            '        obj.name = "demo";\n'
+            "    }\n\n"
+            "    class SimpleObject {\n"
+            "        String name;\n"
+            "    }\n"
+            "}\n"
+        )
+        test_case = GeneratedTestCase(
+            id="tc-helper",
+            class_name="TypeAdapterFromJsonTest",
+            target_class="TypeAdapter",
+            package_name="com.google.gson",
+            imports=["import org.junit.jupiter.api.Test;"],
+            methods=[
+                TestMethod(
+                    method_name="testFromJsonWithComplexObject",
+                    code=(
+                        "@Test\n"
+                        "void testFromJsonWithComplexObject() {\n"
+                        "    SimpleObject obj = new SimpleObject();\n"
+                        '    obj.name = "demo";\n'
+                        "}"
+                    ),
+                    target_method="fromJson",
+                    target_method_signature="T fromJson(Reader json)",
+                )
+            ],
+            full_code=helper_full_code,
+            compile_success=True,
+        )
+        preprocessor._get_candidate_test_cases = Mock(return_value=[test_case])
+        preprocessor._build_and_validate_in_sandbox = Mock(return_value=test_case.methods)
+        preprocessor._validate_and_fix_workspace_tests = Mock(side_effect=lambda cases: cases)
+        preprocessor._commit_preprocessing_results = Mock()
+
+        with (
+            patch("comet.utils.project_utils.clear_test_directory", return_value=True),
+            patch("comet.utils.project_utils.write_test_file") as mock_write_test_file,
+        ):
+            preprocessor._merge_results_to_workspace()
+
+        preprocessor._build_and_validate_in_sandbox.assert_called_once_with(
+            test_class_name="TypeAdapterFromJsonTest",
+            target_class="TypeAdapter",
+            package_name="com.google.gson",
+            imports=["import org.junit.jupiter.api.Test;"],
+            all_methods=test_case.methods,
+            existing_full_code=helper_full_code,
+        )
+
+        self.assertTrue(mock_write_test_file.called)
+        written_code = mock_write_test_file.call_args.kwargs["test_code"]
+        self.assertIn("class SimpleObject", written_code)
+        self.assertIn("testFromJsonWithComplexObject", written_code)
+
+    def test_handle_workspace_test_failure_preserves_helper_class(self) -> None:
+        preprocessor = self._build_preprocessor()
+        helper_full_code = (
+            "package com.google.gson;\n\n"
+            "import org.junit.jupiter.api.Test;\n\n"
+            "public class TypeAdapterFromJsonTest {\n\n"
+            "    @Test\n"
+            "    void testKeep() {\n"
+            "        SimpleObject obj = new SimpleObject();\n"
+            '        obj.name = "keep";\n'
+            "    }\n\n"
+            "    @Test\n"
+            "    void testDrop() {\n"
+            "        SimpleObject obj = new SimpleObject();\n"
+            '        obj.name = "drop";\n'
+            "    }\n\n"
+            "    class SimpleObject {\n"
+            "        String name;\n"
+            "    }\n"
+            "}\n"
+        )
+        keep_method = TestMethod(
+            method_name="testKeep",
+            code=(
+                "@Test\n"
+                "void testKeep() {\n"
+                "    SimpleObject obj = new SimpleObject();\n"
+                '    obj.name = "keep";\n'
+                "}"
+            ),
+            target_method="fromJson",
+            target_method_signature="T fromJson(Reader json)",
+        )
+        drop_method = TestMethod(
+            method_name="testDrop",
+            code=(
+                "@Test\n"
+                "void testDrop() {\n"
+                "    SimpleObject obj = new SimpleObject();\n"
+                '    obj.name = "drop";\n'
+                "}"
+            ),
+            target_method="fromJson",
+            target_method_signature="T fromJson(Reader json)",
+        )
+        test_case = GeneratedTestCase(
+            id="tc-helper-failure",
+            class_name="TypeAdapterFromJsonTest",
+            target_class="TypeAdapter",
+            package_name="com.google.gson",
+            imports=["import org.junit.jupiter.api.Test;"],
+            methods=[keep_method, drop_method],
+            full_code=helper_full_code,
+            compile_success=True,
+        )
+        preprocessor._identify_failed_test_methods = Mock(return_value={"testDrop"})
+        preprocessor._rebuild_workspace_tests = Mock()
+
+        updated_cases, removed_count = preprocessor._handle_workspace_test_failure([test_case])
+
+        self.assertEqual(removed_count, 1)
+        self.assertEqual(len(updated_cases), 1)
+        self.assertIn("class SimpleObject", updated_cases[0].full_code or "")
+        self.assertIn("testKeep", updated_cases[0].full_code or "")
+        self.assertNotIn("testDrop", updated_cases[0].full_code or "")

@@ -545,6 +545,7 @@ class AgentTools:
                         package_name=test_case.package_name,
                         imports=test_case.imports,
                         test_methods=method_codes,
+                        existing_full_code=test_case.full_code,
                     )
 
             # 9. 检查最终结果
@@ -765,6 +766,7 @@ class AgentTools:
                         package_name=refined_test_case.package_name,
                         imports=refined_test_case.imports,
                         test_methods=method_codes,
+                        existing_full_code=refined_test_case.full_code,
                     )
 
             # 10. 检查最终结果
@@ -1008,6 +1010,7 @@ class AgentTools:
                     package_name=test_case.package_name,
                     imports=test_case.imports,
                     test_methods=method_codes,
+                    existing_full_code=test_case.full_code,
                 )
 
                 # 写入更新后的测试文件
@@ -1145,6 +1148,7 @@ class AgentTools:
                     package_name=test_case.package_name,
                     imports=test_case.imports,
                     test_methods=temp_methods,
+                    existing_full_code=test_case.full_code,
                 )
 
                 # 写入并测试
@@ -1212,6 +1216,7 @@ class AgentTools:
             package_name=test_case.package_name,
             imports=test_case.imports,
             test_methods=method_codes,
+            existing_full_code=test_case.full_code,
         )
 
         # 最后写入并验证
@@ -1367,6 +1372,7 @@ class AgentTools:
                 package_name=test_case.package_name,
                 imports=test_case.imports,
                 test_methods=temp_methods,
+                existing_full_code=test_case.full_code,
             )
 
             # 写入测试文件
@@ -1942,6 +1948,7 @@ class AgentTools:
                     package_name=tc.package_name,
                     imports=tc.imports,
                     test_methods=[method.code for method in tc.methods],
+                    existing_full_code=tc.full_code,
                 )
                 formatting_enabled, formatting_style = self._get_formatting_config()
                 result = write_test_file(

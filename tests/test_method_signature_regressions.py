@@ -357,6 +357,52 @@ class AgentToolsVerifyAndFixTestsRegressionTests(unittest.TestCase):
             ),
         )
 
+    def _build_test_case_with_helper(self, method_code: str) -> TestCase:
+        helper_full_code = "\n".join(
+            [
+                "package com.example;",
+                "",
+                "import org.junit.jupiter.api.*;",
+                "import static org.junit.jupiter.api.Assertions.*;",
+                "",
+                "public class GeneratedTest {",
+                "    @Test",
+                "    void testSharedName() {",
+                "        Helper helper = new Helper();",
+                method_code,
+                "    }",
+                "",
+                "    static class Helper {",
+                "        int value = 1;",
+                "    }",
+                "}",
+            ]
+        )
+        return TestCase(
+            id="test-helper",
+            class_name="GeneratedTest",
+            target_class="DefaultParser",
+            package_name="com.example",
+            imports=[],
+            methods=[
+                TestMethod(
+                    method_name="testSharedName",
+                    code="\n".join(
+                        [
+                            "@Test",
+                            "void testSharedName() {",
+                            "    Helper helper = new Helper();",
+                            method_code,
+                            "}",
+                        ]
+                    ),
+                    target_method="parse",
+                    target_method_signature="CommandLine parse(Options, String[])",
+                )
+            ],
+            full_code=helper_full_code,
+        )
+
     def test_verify_and_fix_tests_prefers_current_class_results_when_method_names_overlap(
         self,
     ) -> None:
@@ -702,6 +748,77 @@ class AgentToolsVerifyAndFixTestsRegressionTests(unittest.TestCase):
         self.assertIsNone(result.compile_error)
         self.assertIn("import java.util.NoSuchElementException;", result.imports)
         tools.test_generator.regenerate_with_feedback.assert_called_once()
+
+    def test_verify_and_fix_tests_preserves_helper_class_in_temp_rebuilds(self) -> None:
+        tools = self._build_tools()
+        test_case = self._build_test_case_with_helper("    assertEquals(1, helper.value);")
+        fixed_code = "\n".join(
+            [
+                "@Test",
+                "void testSharedName() {",
+                "    Helper helper = new Helper();",
+                "    assertEquals(2, helper.value + 1);",
+                "}",
+            ]
+        )
+
+        tools.java_executor.compile_tests.side_effect = [
+            {"success": True},
+            {"success": True},
+            {"success": True},
+        ]
+        tools.java_executor.run_tests.side_effect = [
+            {"success": False, "error": "suite failed"},
+            {"success": True},
+        ]
+        tools.java_executor.run_single_test_method.return_value = {"success": True}
+        tools.test_generator.fix_single_method.return_value = fixed_code
+
+        suite_results = [
+            SurefireTestSuiteResult(
+                name="com.example.GeneratedTest",
+                total_tests=1,
+                passed_tests=0,
+                failed_tests=1,
+                error_tests=0,
+                skipped_tests=0,
+                time=0.1,
+                test_cases=[
+                    SurefireTestResult(
+                        class_name="com.example.GeneratedTest",
+                        method_name="testSharedName",
+                        time=0.1,
+                        passed=False,
+                        failure_message="boom",
+                    )
+                ],
+            )
+        ]
+
+        with (
+            patch(
+                "comet.executor.surefire_parser.SurefireParser.parse_surefire_reports",
+                return_value=suite_results,
+            ),
+            patch(
+                "comet.utils.project_utils.write_test_file",
+                return_value=Path("/tmp/GeneratedTest.java"),
+            ) as mock_write_test_file,
+        ):
+            result = tools._verify_and_fix_tests(
+                test_case,
+                class_code="public class DefaultParser {}",
+                project_path="/tmp/project",
+            )
+
+        self.assertTrue(result.compile_success)
+        written_payloads = [
+            call.kwargs["test_code"] for call in mock_write_test_file.call_args_list
+        ]
+        self.assertTrue(any("static class Helper" in payload for payload in written_payloads))
+        self.assertTrue(
+            any("Helper helper = new Helper();" in payload for payload in written_payloads)
+        )
 
 
 class TestGeneratorRegressionTests(unittest.TestCase):

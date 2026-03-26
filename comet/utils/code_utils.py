@@ -107,6 +107,7 @@ def build_test_class(
     package_name: Optional[str],
     imports: List[str],
     test_methods: List[str],
+    existing_full_code: str | None = None,
 ) -> str:
     """
     构建完整的测试类代码
@@ -158,6 +159,14 @@ def build_test_class(
     lines.append(f"public class {test_class_name} {{")
     lines.append("")
 
+    preserved_members = ""
+    if existing_full_code:
+        preserved_members = _extract_non_test_class_members(existing_full_code)
+
+    if preserved_members:
+        lines.append(preserved_members)
+        lines.append("")
+
     # 测试方法
     for method_code in test_methods:
         # 缩进
@@ -171,11 +180,54 @@ def build_test_class(
     return "\n".join(lines)
 
 
+def _extract_non_test_class_members(java_code: str) -> str:
+    class_body_start = _find_type_body_start(java_code)
+    if class_body_start is None:
+        return ""
+
+    class_body_end = _find_matching_block_end(java_code, class_body_start)
+    if class_body_end is None:
+        return ""
+
+    member_ranges = _extract_test_method_ranges(java_code)
+    body_start = class_body_start + 1
+    body_end = class_body_end - 1
+    if body_end <= body_start:
+        return ""
+
+    preserved_parts: list[str] = []
+    cursor = body_start
+    for start, end in member_ranges:
+        if end <= body_start or start >= body_end:
+            continue
+        clipped_start = max(start, body_start)
+        clipped_end = min(end, body_end)
+        if cursor < clipped_start:
+            preserved_parts.append(java_code[cursor:clipped_start])
+        cursor = max(cursor, clipped_end)
+
+    if cursor < body_end:
+        preserved_parts.append(java_code[cursor:body_end])
+
+    preserved_body = "".join(preserved_parts).strip()
+    return preserved_body
+
+
 def extract_test_methods_from_class(java_code: str) -> List[str]:
+    methods: List[str] = []
+    for start, end in _extract_test_method_ranges(java_code):
+        method_code = java_code[start:end].strip()
+        if method_code:
+            methods.append(method_code)
+
+    return methods
+
+
+def _extract_test_method_ranges(java_code: str) -> List[tuple[int, int]]:
     annotation_pattern = re.compile(
         r"(?m)^\s*@(?:Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b"
     )
-    methods: List[str] = []
+    ranges: List[tuple[int, int]] = []
     matches = list(annotation_pattern.finditer(java_code))
 
     for match in matches:
@@ -199,20 +251,33 @@ def extract_test_methods_from_class(java_code: str) -> List[str]:
             logger.debug("未找到测试方法起始花括号，跳过一个方法")
             continue
 
-        end = _find_matching_method_end(java_code, brace_start)
+        end = _find_matching_block_end(java_code, brace_start)
 
         if end is None:
             logger.debug("未找到测试方法结束花括号，跳过一个方法")
             continue
 
-        method_code = java_code[start:end].strip()
-        if method_code:
-            methods.append(method_code)
+        ranges.append((start, end))
 
-    return methods
+    return ranges
 
 
 def _find_matching_method_end(java_code: str, brace_start: int) -> int | None:
+    return _find_matching_block_end(java_code, brace_start)
+
+
+def _find_type_body_start(java_code: str) -> int | None:
+    declaration_match = re.search(
+        r"\b(?:public\s+|protected\s+|private\s+)?(?:abstract\s+|final\s+)?(?:class|interface|enum)\s+\w+[^\{]*\{",
+        java_code,
+        re.MULTILINE,
+    )
+    if declaration_match is None:
+        return None
+    return declaration_match.end() - 1
+
+
+def _find_matching_block_end(java_code: str, brace_start: int) -> int | None:
     depth = 0
     in_line_comment = False
     in_block_comment = False
