@@ -7,7 +7,7 @@ import logging
 import shutil
 import subprocess
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -519,6 +519,13 @@ class StudyRunner:
                             method_summaries_by_target[frozen_method.target_id] = method_summary
                             if not baseline.success:
                                 self._mark_method_skipped_by_baseline(method_summary, baseline)
+                                self._log_study_target_progress(
+                                    target_id=frozen_method.target_id,
+                                    method_summary=method_summary,
+                                    attempted_count=len(attempted_target_ids),
+                                    candidate_count=len(candidate_methods_by_target),
+                                    method_summaries=method_summaries_by_target.values(),
+                                )
                                 live_target_ids.discard(frozen_method.target_id)
                                 continue
 
@@ -577,6 +584,13 @@ class StudyRunner:
                             method_summary["status"] = self._derive_method_status(method_summary)
                             if method_summary["status"] == "completed":
                                 completed_target_ids.add(frozen_method.target_id)
+                            self._log_study_target_progress(
+                                target_id=frozen_method.target_id,
+                                method_summary=method_summary,
+                                attempted_count=len(attempted_target_ids),
+                                candidate_count=len(candidate_methods_by_target),
+                                method_summaries=method_summaries_by_target.values(),
+                            )
                             live_target_ids.discard(frozen_method.target_id)
                             self.cleanup_shared_baseline(frozen_method.target_id)
 
@@ -649,6 +663,7 @@ class StudyRunner:
             len(completed_target_ids),
             len(remaining_target_ids),
         )
+        self._log_study_final_summary(summary_payload)
         summary_path = output_root / STUDY_OUTPUT_FILENAMES["summary"]
         per_method_path = output_root / STUDY_OUTPUT_FILENAMES["per_method"]
         per_mutant_path = output_root / STUDY_OUTPUT_FILENAMES["per_mutant"]
@@ -1148,6 +1163,61 @@ class StudyRunner:
         ):
             return "failed"
         return "partial_failed"
+
+    def _count_method_statuses(
+        self,
+        method_summaries: Iterable[Mapping[str, object]],
+    ) -> tuple[int, int, int]:
+        successful_method_count = 0
+        partial_failure_method_count = 0
+        failed_method_count = 0
+        for item in method_summaries:
+            status = str(item.get("status") or "")
+            if status == "completed":
+                successful_method_count += 1
+            elif status == "partial_failed":
+                partial_failure_method_count += 1
+            elif status == "failed":
+                failed_method_count += 1
+        return successful_method_count, partial_failure_method_count, failed_method_count
+
+    def _log_study_target_progress(
+        self,
+        *,
+        target_id: str,
+        method_summary: Mapping[str, object],
+        attempted_count: int,
+        candidate_count: int,
+        method_summaries: Iterable[Mapping[str, object]],
+    ) -> None:
+        successful_method_count, partial_failure_method_count, failed_method_count = (
+            self._count_method_statuses(method_summaries)
+        )
+        logger.info(
+            "study 目标完成: target=%s status=%s baseline=%s arms(success=%d failed=%d skipped=%d) 进度(attempted=%d/%d success=%d partial_failed=%d failed=%d)",
+            target_id,
+            method_summary.get("status"),
+            method_summary.get("baseline_status"),
+            self._to_int(method_summary.get("successful_arm_count", 0)),
+            self._to_int(method_summary.get("failed_arm_count", 0)),
+            self._to_int(method_summary.get("skipped_arm_count", 0)),
+            attempted_count,
+            candidate_count,
+            successful_method_count,
+            partial_failure_method_count,
+            failed_method_count,
+        )
+
+    def _log_study_final_summary(self, summary_payload: Mapping[str, object]) -> None:
+        logger.info(
+            "study 汇总: attempted=%d requested=%d success=%d partial_failed=%d failed=%d shortfall=%d",
+            self._to_int(summary_payload.get("attempted_method_count", 0)),
+            self._to_int(summary_payload.get("requested_sample_size", 0)),
+            self._to_int(summary_payload.get("successful_method_count", 0)),
+            self._to_int(summary_payload.get("partial_failure_method_count", 0)),
+            self._to_int(summary_payload.get("failed_method_count", 0)),
+            self._to_int(summary_payload.get("successful_sample_shortfall", 0)),
+        )
 
     def _prepare_arm_inputs(
         self,

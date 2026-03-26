@@ -1807,6 +1807,7 @@ class StudyRunnerTest(unittest.TestCase):
                     side_effect=tracked_ensure_shared_baseline,
                 ),
                 patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()),
+                self.assertLogs("comet.web.study_runner", level="INFO") as captured_logs,
             ):
                 artifacts = runner.run_study(
                     methods,
@@ -1816,6 +1817,29 @@ class StudyRunnerTest(unittest.TestCase):
                     seed=41,
                     requested_success_quota=2,
                 )
+
+            self.assertTrue(
+                any(
+                    "study 目标完成:" in message
+                    and f"target={flaky_target}" in message
+                    and "status=partial_failed" in message
+                    and "success=0" in message
+                    and "partial_failed=1" in message
+                    for message in captured_logs.output
+                )
+            )
+            self.assertTrue(
+                any(
+                    "study 汇总:" in message
+                    and "attempted=3" in message
+                    and "requested=2" in message
+                    and "success=2" in message
+                    and "partial_failed=1" in message
+                    and "failed=0" in message
+                    and "shortfall=0" in message
+                    for message in captured_logs.output
+                )
+            )
 
             self.assertEqual(
                 execution_trace,
@@ -1981,6 +2005,7 @@ class StudyRunnerTest(unittest.TestCase):
                     side_effect=tracked_ensure_shared_baseline,
                 ),
                 patch.object(StudyRunner, "build_m0_pit_guidance_from_baseline", return_value=()),
+                self.assertLogs("comet.web.study_runner", level="INFO") as captured_logs,
             ):
                 artifacts = runner.run_study(
                     methods,
@@ -1990,6 +2015,29 @@ class StudyRunnerTest(unittest.TestCase):
                     seed=43,
                     requested_success_quota=3,
                 )
+
+            self.assertTrue(
+                any(
+                    "study 目标完成:" in message
+                    and f"target={str(methods[0]['target_id'])}" in message
+                    and "status=failed" in message
+                    and "baseline=failed" in message
+                    and "failed=1" in message
+                    for message in captured_logs.output
+                )
+            )
+            self.assertTrue(
+                any(
+                    "study 汇总:" in message
+                    and "attempted=2" in message
+                    and "requested=3" in message
+                    and "success=0" in message
+                    and "partial_failed=1" in message
+                    and "failed=1" in message
+                    and "shortfall=3" in message
+                    for message in captured_logs.output
+                )
+            )
 
             self.assertEqual(
                 execution_trace[:2],
