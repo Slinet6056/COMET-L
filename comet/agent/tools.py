@@ -1905,8 +1905,20 @@ class AgentTools:
         logger.info(f"开始评估 {len(mutants)} 个变异体 和 {len(test_cases)} 个测试")
 
         # ===== 步骤0: 确保所有测试文件已同步到 project_path =====
-        # 关键修复：从数据库重建所有测试文件到 workspace
-        logger.info("步骤0: 同步测试文件到 workspace...")
+        logger.info("步骤0: 重建 workspace 测试文件...")
+
+        from ..utils.code_utils import build_test_class
+        from ..utils.project_utils import clear_test_directory, write_test_file
+
+        if not clear_test_directory(self.project_path):
+            logger.warning("✗ 清空 workspace 测试目录失败，终止评估")
+            return {
+                "evaluated": 0,
+                "killed": 0,
+                "mutation_score": 0.0,
+                "error": "测试目录清理失败，无法重建 workspace 测试集",
+                "warning": "建议检查文件权限或重试运行",
+            }
 
         # 同步每个测试类（每个测试类对应一个 TestCase 对象）
         compile_success_tests = [tc for tc in test_cases if tc.compile_success]
@@ -1918,20 +1930,24 @@ class AgentTools:
         logger.info(f"需要同步 {len(compile_success_tests)} 个测试类")
 
         for tc in compile_success_tests:
-            # 检查full_code是否存在
-            if not tc.full_code:
-                logger.warning(f"测试类 {tc.class_name} 没有full_code，跳过")
+            if not tc.methods:
+                logger.warning(f"测试类 {tc.class_name} 没有methods，跳过")
                 continue
 
             # 写入测试文件
             try:
-                from ..utils.project_utils import write_test_file
-
+                full_code = build_test_class(
+                    test_class_name=tc.class_name,
+                    target_class=tc.target_class,
+                    package_name=tc.package_name,
+                    imports=tc.imports,
+                    test_methods=[method.code for method in tc.methods],
+                )
                 formatting_enabled, formatting_style = self._get_formatting_config()
                 result = write_test_file(
                     project_path=self.project_path,
                     package_name=tc.package_name,
-                    test_code=tc.full_code,
+                    test_code=full_code,
                     test_class_name=tc.class_name,
                     formatting_enabled=formatting_enabled,
                     formatting_style=formatting_style,

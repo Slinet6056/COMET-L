@@ -194,6 +194,126 @@ class AgentToolsMutationDisabledTests(unittest.TestCase):
         self.assertEqual(result["evaluated"], 0)
         tools.mutation_evaluator.build_kill_matrix.assert_not_called()
 
+    def test_run_evaluation_clears_workspace_before_syncing_tests(self) -> None:
+        tools = self._build_tools(mutation_enabled=True)
+        tools.db.get_valid_mutants.return_value = [Mock(survived=False)]
+        call_order: list[str] = []
+        tools.db.get_all_tests.return_value = [
+            TestCase(
+                id="test-1",
+                class_name="GeneratedTest",
+                target_class="Calculator",
+                package_name="com.example",
+                imports=[],
+                methods=[
+                    TestMethod(
+                        method_name="testAdd",
+                        code="@Test\nvoid testAdd() { assertTrue(true); }",
+                        target_method="add",
+                    )
+                ],
+                full_code=build_test_class(
+                    test_class_name="GeneratedTest",
+                    target_class="Calculator",
+                    package_name="com.example",
+                    imports=[],
+                    test_methods=["@Test\nvoid testAdd() { assertTrue(true); }"],
+                ),
+                compile_success=True,
+            )
+        ]
+        tools.java_executor.run_tests.return_value = {"success": True}
+        tools.java_executor.run_tests_with_coverage.return_value = {"success": False}
+        tools.mutation_evaluator.build_kill_matrix.return_value = {}
+
+        def _mark_cleared(project_path: str) -> bool:
+            self.assertEqual(project_path, "/tmp/project")
+            call_order.append("clear")
+            return True
+
+        def _mark_written(*args, **kwargs):  # type: ignore[no-untyped-def]
+            call_order.append("write")
+            self.assertIn("test_code", kwargs)
+            self.assertIn("void testAdd()", kwargs["test_code"])
+            return Path("/tmp/GeneratedTest.java")
+
+        with (
+            patch(
+                "comet.utils.project_utils.clear_test_directory",
+                side_effect=_mark_cleared,
+            ) as clear_mock,
+            patch(
+                "comet.utils.project_utils.write_test_file",
+                side_effect=_mark_written,
+            ) as write_mock,
+        ):
+            result = tools.run_evaluation()
+
+        self.assertEqual(result["status"], "completed")
+        clear_mock.assert_called_once_with("/tmp/project")
+        write_mock.assert_called_once()
+        self.assertEqual(call_order, ["clear", "write"])
+
+    def test_run_evaluation_stops_when_workspace_cleanup_fails(self) -> None:
+        tools = self._build_tools(mutation_enabled=True)
+        tools.db.get_valid_mutants.return_value = [Mock(survived=True)]
+        tools.db.get_all_tests.return_value = [Mock(compile_success=True)]
+
+        with (
+            patch(
+                "comet.utils.project_utils.clear_test_directory",
+                return_value=False,
+            ) as clear_mock,
+            patch("comet.utils.project_utils.write_test_file") as write_mock,
+        ):
+            result = tools.run_evaluation()
+
+        clear_mock.assert_called_once_with("/tmp/project")
+        write_mock.assert_not_called()
+        self.assertEqual(result["evaluated"], 0)
+        self.assertIn("测试目录清理失败", result["error"])
+        self.assertIn("建议检查文件权限或重试运行", result["warning"])
+
+    def test_run_evaluation_rebuilds_full_code_from_methods_before_sync(self) -> None:
+        tools = self._build_tools(mutation_enabled=True)
+        test_method_code = "@Test\nvoid testAdd() { assertTrue(true); }"
+        tools.db.get_valid_mutants.return_value = [Mock(survived=False)]
+        tools.db.get_all_tests.return_value = [
+            TestCase(
+                id="test-2",
+                class_name="GeneratedTest",
+                target_class="Calculator",
+                package_name="com.example",
+                imports=[],
+                methods=[
+                    TestMethod(
+                        method_name="testAdd",
+                        code=test_method_code,
+                        target_method="add",
+                    )
+                ],
+                full_code="package com.example;\npublic class GeneratedTest { broken",
+                compile_success=True,
+            )
+        ]
+        tools.java_executor.run_tests.return_value = {"success": True}
+        tools.java_executor.run_tests_with_coverage.return_value = {"success": False}
+        tools.mutation_evaluator.build_kill_matrix.return_value = {}
+
+        with (
+            patch("comet.utils.project_utils.clear_test_directory", return_value=True),
+            patch(
+                "comet.utils.project_utils.write_test_file",
+                return_value=Path("/tmp/GeneratedTest.java"),
+            ) as write_mock,
+        ):
+            result = tools.run_evaluation()
+
+        self.assertEqual(result["status"], "completed")
+        written_code = write_mock.call_args.kwargs["test_code"]
+        self.assertIn("void testAdd()", written_code)
+        self.assertNotIn("broken", written_code)
+
     def test_select_target_propagates_mutation_disabled_to_selector_fail_fast(self) -> None:
         tools = self._build_tools(mutation_enabled=False)
 
