@@ -199,17 +199,7 @@ def extract_test_methods_from_class(java_code: str) -> List[str]:
             logger.debug("未找到测试方法起始花括号，跳过一个方法")
             continue
 
-        depth = 0
-        end = None
-        for index in range(brace_start, len(java_code)):
-            char = java_code[index]
-            if char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    end = index + 1
-                    break
+        end = _find_matching_method_end(java_code, brace_start)
 
         if end is None:
             logger.debug("未找到测试方法结束花括号，跳过一个方法")
@@ -220,6 +210,79 @@ def extract_test_methods_from_class(java_code: str) -> List[str]:
             methods.append(method_code)
 
     return methods
+
+
+def _find_matching_method_end(java_code: str, brace_start: int) -> int | None:
+    depth = 0
+    in_line_comment = False
+    in_block_comment = False
+    in_string = False
+    in_char = False
+    escape_next = False
+
+    for index in range(brace_start, len(java_code)):
+        char = java_code[index]
+        next_char = java_code[index + 1] if index + 1 < len(java_code) else ""
+
+        if in_line_comment:
+            if char == "\n":
+                in_line_comment = False
+            continue
+
+        if in_block_comment:
+            if char == "*" and next_char == "/":
+                in_block_comment = False
+                continue
+            continue
+
+        if in_string:
+            if escape_next:
+                escape_next = False
+                continue
+            if char == "\\":
+                escape_next = True
+                continue
+            if char == '"':
+                in_string = False
+            continue
+
+        if in_char:
+            if escape_next:
+                escape_next = False
+                continue
+            if char == "\\":
+                escape_next = True
+                continue
+            if char == "'":
+                in_char = False
+            continue
+
+        if char == "/" and next_char == "/":
+            in_line_comment = True
+            continue
+
+        if char == "/" and next_char == "*":
+            in_block_comment = True
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+
+        if char == "'":
+            in_char = True
+            continue
+
+        if char == "{":
+            depth += 1
+            continue
+
+        if char == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+
+    return None
 
 
 def validate_test_methods(methods: list[SupportsGeneratedTestMethod], class_code: str) -> Set[str]:

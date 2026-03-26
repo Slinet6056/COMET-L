@@ -2503,6 +2503,61 @@ class StudyRunnerTest(unittest.TestCase):
 
             runner.cleanup_shared_baselines()
 
+    def test_existing_project_tests_preserve_braces_inside_string_literals(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            artifacts_root = root / "artifacts"
+            test_root = project_path / "src" / "test" / "java" / "pkg"
+            test_root.mkdir(parents=True, exist_ok=True)
+            _ = (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+            _ = (test_root / "ExistingBaselineTest.java").write_text(
+                """package pkg;
+import org.junit.jupiter.api.Test;
+class ExistingBaselineTest {
+    @Test
+    void preservesBraceInString() {
+        String payload = ")]}'\\n";
+        org.junit.jupiter.api.Assertions.assertTrue(payload.startsWith(")]}'\\n"));
+    }
+}
+""",
+                encoding="utf-8",
+            )
+
+            db = _FakeDatabase()
+            sandbox_manager = SandboxManager(str(root / "sandbox"))
+            tools = _FakeTools(db, sandbox_manager)
+            runner = StudyRunner(
+                workspace_project_path=str(project_path),
+                artifacts_root=str(artifacts_root),
+                tools=tools,
+                database=db,
+                sandbox_manager=sandbox_manager,
+            )
+
+            method_signature = "public int run()"
+            target_id = build_method_key("Alpha", "run", method_signature)
+            result = runner.ensure_shared_baseline(
+                {
+                    "target_id": target_id,
+                    "class_name": "Alpha",
+                    "method_name": "run",
+                    "method_signature": method_signature,
+                }
+            )
+
+            self.assertTrue(result.success)
+            imported_tests = db.get_tests_by_target_method("Alpha", "run", method_signature)
+            self.assertEqual(len(imported_tests), 1)
+            self.assertIn(
+                'assertTrue(payload.startsWith(")]}\'\\n"));',
+                imported_tests[0].methods[0].code,
+            )
+            self.assertTrue(imported_tests[0].methods[0].code.rstrip().endswith("}"))
+
+            runner.cleanup_shared_baselines()
+
     def test_baseline_failure_is_scoped_to_method(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
