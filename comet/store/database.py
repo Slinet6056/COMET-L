@@ -620,13 +620,17 @@ class Database:
                     ]
 
                 if filtered_methods:
-                    full_code = build_test_class(
-                        test_class_name=test_case.class_name,
-                        target_class=test_case.target_class,
-                        package_name=test_case.package_name,
-                        imports=test_case.imports,
-                        test_methods=[tm.code for tm in filtered_methods],
-                    )
+                    if len(filtered_methods) == len(test_case.methods) and test_case.full_code:
+                        full_code = test_case.full_code
+                    else:
+                        full_code = build_test_class(
+                            test_class_name=test_case.class_name,
+                            target_class=test_case.target_class,
+                            package_name=test_case.package_name,
+                            imports=test_case.imports,
+                            test_methods=[tm.code for tm in filtered_methods],
+                            existing_full_code=test_case.full_code,
+                        )
                     results.append(
                         test_case.model_copy(
                             update={"methods": filtered_methods, "full_code": full_code}

@@ -927,6 +927,63 @@ class DatabaseMethodSignatureIsolationTests(unittest.TestCase):
             finally:
                 database.close()
 
+    def test_get_tests_by_target_method_preserves_full_code_when_all_methods_match(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database = Database(str(Path(tmp_dir) / "comet.db"))
+            try:
+                full_code = (
+                    "package com.google.gson;\n\n"
+                    "import org.junit.jupiter.api.Test;\n\n"
+                    "public class TypeAdapterFromJsonTest {\n\n"
+                    "    @Test\n"
+                    "    void testFromJsonWithComplexObject() {\n"
+                    "        SimpleObject obj = new SimpleObject();\n"
+                    '        obj.name = "demo";\n'
+                    "    }\n\n"
+                    "    class SimpleObject {\n"
+                    "        String name;\n"
+                    "    }\n"
+                    "}\n"
+                )
+                method_code = (
+                    "@Test\n"
+                    "void testFromJsonWithComplexObject() {\n"
+                    "    SimpleObject obj = new SimpleObject();\n"
+                    '    obj.name = "demo";\n'
+                    "}"
+                )
+                database.save_test_case(
+                    TestCase(
+                        id="tc-helper",
+                        class_name="TypeAdapterFromJsonTest",
+                        target_class="TypeAdapter",
+                        package_name="com.google.gson",
+                        imports=["import org.junit.jupiter.api.Test;"],
+                        methods=[
+                            TestMethod(
+                                method_name="testFromJsonWithComplexObject",
+                                code=method_code,
+                                target_method="fromJson",
+                                target_method_signature="T fromJson(Reader json)",
+                            )
+                        ],
+                        full_code=full_code,
+                        compile_success=True,
+                    )
+                )
+
+                results = database.get_tests_by_target_method(
+                    "TypeAdapter",
+                    "fromJson",
+                    "T fromJson(Reader json)",
+                )
+
+                self.assertEqual(len(results), 1)
+                self.assertEqual(results[0].full_code, full_code)
+                self.assertIn("class SimpleObject", results[0].full_code or "")
+            finally:
+                database.close()
+
     def test_get_method_coverage_matches_source_signature_with_parameter_names(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             database = Database(str(Path(tmp_dir) / "comet.db"))
