@@ -126,6 +126,18 @@ uv run python main.py study --project-path examples/calculator-demo --sample-siz
 
 退出码约定：`0` 表示研究执行完成；`1` 表示运行期失败（如配置、构建、PIT 或 LLM 调用失败）；`2` 表示命令行参数错误（例如缺少 `--project-path` 或 `--output-dir`）。
 
+### Defects4J 固定测试回放
+
+如果你已经准备好一批固定测试，想批量把它们回放到 Defects4J 的 `buggy` / `fixed` 版本中并统计结果，可以使用：
+
+```bash
+uv run python main.py replay-defects4j --manifest /path/to/manifest.jsonl --output-dir .artifacts/defects4j-replay
+```
+
+如果回放的是 EvoSuite 测试，建议额外加上 `--use-xvfb`，让 Maven 通过 `xvfb-run -a` 执行；如果它还依赖专用 `pom.xml`，可以在 manifest 中为该记录设置 `pom_override_path`。当前 `docker` 模式会直接使用镜像内 Defects4J，而不是宿主机 `defects4j` 目录。
+
+完整说明、manifest 格式、路径约定、CLI 示例和结果文件解释见 `docs/defects4j-replay.md:1`。
+
 常见失败原因：
 
 - 目标路径不存在、不是 Maven 项目，或缺少 `pom.xml`。

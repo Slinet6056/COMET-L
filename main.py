@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping, Optional, cast
 from comet.agent import AgentTools, ParallelPlannerAgent, PlannerAgent
 from comet.agent.target_selector import TargetSelector
 from comet.config import Settings
+from comet.config.settings import LLMConfig
 from comet.executor import JavaExecutor, MetricsCollector, MutationEvaluator
 from comet.executor.coverage_parser import CoverageParser
 from comet.extractors import PatternExtractor, SpecExtractor
@@ -24,6 +25,7 @@ from comet.store import Database, KnowledgeStore
 from comet.utils import ProjectScanner, SandboxManager
 from comet.utils.code_utils import extract_test_methods_from_class
 from comet.web import configure_logging, run_cli
+from comet.web.defects4j_replay import replay_defects4j_tests
 from comet.web.study_analysis import analyze_study_results
 from comet.web.study_protocol import (
     DEFAULT_STUDY_SAMPLE_SIZE,
@@ -211,7 +213,12 @@ def parse_args(argv: Optional[list[str]] = None):
     """解析命令行参数"""
     raw_args = list(sys.argv[1:] if argv is None else argv)
     normalized_args = list(raw_args)
-    if not normalized_args or normalized_args[0] not in {"run", "study", "analyze-study"}:
+    if not normalized_args or normalized_args[0] not in {
+        "run",
+        "study",
+        "analyze-study",
+        "replay-defects4j",
+    }:
         normalized_args = ["run", *normalized_args]
 
     parser = argparse.ArgumentParser(description="COMET-L: 基于 LLM 的测试变异协同进化系统")
@@ -293,7 +300,78 @@ def parse_args(argv: Optional[list[str]] = None):
         "--debug", action="store_true", help="启用调试日志（DEBUG级别）"
     )
 
+    replay_defects4j_parser = subparsers.add_parser(
+        "replay-defects4j", help="批量回放固定测试到 Defects4J buggy/fixed 版本"
+    )
+    replay_defects4j_parser.add_argument(
+        "--manifest", type=str, required=True, help="回放清单路径（.jsonl / .json / .csv）"
+    )
+    replay_defects4j_parser.add_argument(
+        "--output-dir", type=str, required=True, help="回放产物输出目录"
+    )
+    replay_defects4j_parser.add_argument(
+        "--checkout-mode",
+        type=str,
+        choices=("none", "local", "docker"),
+        default="none",
+        help="版本获取方式：none 使用 manifest 中已有路径，local/docker 通过 Defects4J checkout",
+    )
+    replay_defects4j_parser.add_argument(
+        "--defects4j-root",
+        type=str,
+        default=None,
+        help="Defects4J 源码根目录（仅 checkout-mode=local 时必需；docker 模式默认使用镜像内 Defects4J）",
+    )
+    replay_defects4j_parser.add_argument(
+        "--checkout-root",
+        type=str,
+        default=None,
+        help="checkout 产物缓存目录（checkout-mode 为 local/docker 时必需）",
+    )
+    replay_defects4j_parser.add_argument(
+        "--docker-image",
+        type=str,
+        default=None,
+        help="Docker 模式下使用的 Defects4J 镜像名",
+    )
+    replay_defects4j_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="并行回放任务数（默认使用配置或串行）",
+    )
+    replay_defects4j_parser.add_argument(
+        "--refresh-checkouts",
+        action="store_true",
+        help="忽略已有 checkout 缓存并重新拉取 buggy/fixed 工作树",
+    )
+    replay_defects4j_parser.add_argument(
+        "--use-xvfb",
+        action="store_true",
+        help="使用 `xvfb-run -a` 包裹 Maven 执行，适用于 EvoSuite 等依赖图形环境的测试",
+    )
+    replay_defects4j_parser.add_argument(
+        "--config",
+        type=str,
+        default="config.yaml",
+        help="配置文件路径（默认: config.yaml，仅用于 Java/Maven 环境）",
+    )
+    replay_defects4j_parser.add_argument(
+        "--debug", action="store_true", help="启用调试日志（DEBUG级别）"
+    )
+
     return parser.parse_args(normalized_args)
+
+
+def _load_execution_only_settings(config_path: str | None) -> Settings:
+    if config_path is None:
+        return Settings(llm=LLMConfig(api_key="unused"))
+
+    resolved_path = Path(config_path)
+    if resolved_path.exists():
+        return Settings.from_yaml(str(resolved_path))
+
+    raise FileNotFoundError(f"配置文件不存在: {resolved_path}")
 
 
 def initialize_system(
@@ -968,6 +1046,72 @@ def run_analyze_study_command(
     return 0
 
 
+def run_replay_defects4j_command(
+    args: Any,
+    *,
+    settings_loader: Any = _load_execution_only_settings,
+    replay_runner: Any = replay_defects4j_tests,
+) -> int:
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"manifest 不存在: {manifest_path}")
+
+    output_root = Path(args.output_dir).expanduser().resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    config_path = args.config
+    if config_path == "config.yaml" and not Path(config_path).exists():
+        config_path = None
+    config = settings_loader(config_path)
+    config.set_runtime_roots(
+        state=output_root / ".defects4j-replay-state",
+        output=output_root,
+        sandbox=output_root / ".defects4j-replay-sandbox",
+    )
+    config.ensure_directories()
+
+    log_level = "DEBUG" if getattr(args, "debug", False) else "INFO"
+    log_file = output_root / "defects4j-replay.log"
+    _ = configure_logging(str(log_file), level=log_level)
+
+    defects4j_root = None
+    if getattr(args, "defects4j_root", None):
+        defects4j_root = Path(args.defects4j_root).expanduser().resolve()
+
+    checkout_root = None
+    if getattr(args, "checkout_root", None):
+        checkout_root = Path(args.checkout_root).expanduser().resolve()
+
+    logger.info("开始运行 Defects4J 固定测试回放")
+    logger.info(f"manifest: {manifest_path}")
+    logger.info(f"输出目录: {output_root}")
+    logger.info("checkout 模式: %s", args.checkout_mode)
+    logger.info("启用 xvfb-run: %s", bool(getattr(args, "use_xvfb", False)))
+    if defects4j_root is not None and args.checkout_mode == "local":
+        logger.info(f"Defects4J 根目录: {defects4j_root}")
+    elif defects4j_root is not None and args.checkout_mode == "docker":
+        logger.warning("docker 模式将忽略 --defects4j-root，直接使用镜像内 Defects4J")
+    if checkout_root is not None:
+        logger.info(f"checkout 缓存目录: {checkout_root}")
+
+    artifacts = replay_runner(
+        manifest_path=manifest_path,
+        output_dir=output_root,
+        settings=config,
+        checkout_mode=args.checkout_mode,
+        use_xvfb=bool(getattr(args, "use_xvfb", False)),
+        defects4j_root=defects4j_root,
+        checkout_root=checkout_root,
+        docker_image=getattr(args, "docker_image", None),
+        refresh_checkouts=bool(getattr(args, "refresh_checkouts", False)),
+        max_workers=getattr(args, "max_workers", None),
+    )
+    logger.info(f"Defects4J 回放完成，汇总文件: {artifacts.summary_path}")
+    logger.info(f"Defects4J 每 bug 明细: {artifacts.per_bug_path}")
+    logger.info(f"Defects4J 每测试明细: {artifacts.per_test_path}")
+    return 0
+
+
 def main():
     """主函数"""
     args = parse_args()
@@ -983,6 +1127,12 @@ def main():
 
         if command == "analyze-study":
             exit_code = run_analyze_study_command(args)
+            if exit_code != 0:
+                sys.exit(exit_code)
+            return
+
+        if command == "replay-defects4j":
+            exit_code = run_replay_defects4j_command(args)
             if exit_code != 0:
                 sys.exit(exit_code)
             return
