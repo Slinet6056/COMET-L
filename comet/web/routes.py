@@ -2,18 +2,35 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
+from urllib.parse import urlencode, urlparse
 
 import yaml
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import ValidationError
 
 from comet.config import Settings
+from comet.config.settings import GitHubConfig
 
-from .run_service import ActiveRunConflictError, RunLifecycleService, RunRequest
+from .github_auth_service import GitHubAuthError, GitHubOAuthService
+from .run_service import (
+    ActiveRunConflictError,
+    GitBranchConflictError,
+    GitCloneError,
+    GitDefaultBranchResolutionError,
+    GitHubUnauthorizedError,
+    GitNoWritePermissionError,
+    InvalidGitHubRepoUrlError,
+    InvalidJavaVersionError,
+    NonMavenRepositoryError,
+    ReportGenerationError,
+    RunLifecycleService,
+    RunRequest,
+)
 from .schemas import (
     ApiError,
     ConfigParseResponse,
@@ -32,6 +49,7 @@ from .schemas import (
 @dataclass(slots=True)
 class AppServices:
     run_service: RunLifecycleService
+    github_auth_service: GitHubOAuthService
     default_config_path: Path
     system_initializer: Callable[..., dict[str, Any]] | None = None
     evolution_runner: Callable[..., None] | None = None
@@ -49,6 +67,12 @@ def get_run_service(
     services: AppServices = Depends(get_app_services),
 ) -> RunLifecycleService:
     return services.run_service
+
+
+def get_github_auth_service(
+    services: AppServices = Depends(get_app_services),
+) -> GitHubOAuthService:
+    return services.github_auth_service
 
 
 def _error_response(
@@ -73,11 +97,22 @@ def _validation_errors(exc: ValidationError) -> list[FieldError]:
     ]
 
 
+def _github_oauth_result_redirect(
+    result: str,
+    *,
+    message: str | None = None,
+) -> RedirectResponse:
+    query: dict[str, str] = {"github_oauth": result}
+    if message:
+        query["message"] = message
+    return RedirectResponse(url=f"/?{urlencode(query)}", status_code=303)
+
+
 def _load_settings_from_yaml(content: str) -> Settings:
     config_data = yaml.safe_load(content)
     if config_data is None:
         config_data = {}
-    return Settings.model_validate(config_data)
+    return Settings.model_validate(_strip_uploaded_runtime_overrides(config_data))
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -89,6 +124,10 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             merged[key] = value
     return merged
+
+
+def _strip_uploaded_runtime_overrides(config_data: dict[str, Any]) -> dict[str, Any]:
+    return GitHubConfig.strip_yaml_config(config_data)
 
 
 def _load_default_settings(default_config_path: Path) -> Settings:
@@ -177,15 +216,140 @@ def _validate_project_path(project_path: str) -> list[FieldError]:
             FieldError(
                 path=["projectPath"],
                 code="path_not_found",
-                message="Project path does not exist.",
+                message="项目路径不存在。",
             )
         ]
     if not resolved_path.is_dir() or not (resolved_path / "pom.xml").is_file():
         return [
             FieldError(
                 path=["projectPath"],
-                code="not_maven_project",
-                message="Project path must point to a Maven project containing pom.xml.",
+                code="non_maven_repository",
+                message="项目路径必须指向包含 pom.xml 的 Maven 仓库。",
+            )
+        ]
+    return []
+
+
+def _validate_github_repo_url(repo_url: str | None) -> list[FieldError]:
+    if repo_url is None or not repo_url.strip():
+        return []
+
+    parsed = urlparse(repo_url.strip())
+    path_parts = [segment for segment in parsed.path.split("/") if segment]
+    is_valid_host = parsed.netloc.lower() in {"github.com", "www.github.com"}
+    if parsed.scheme != "https" or not is_valid_host or len(path_parts) != 2:
+        return [
+            FieldError(
+                path=["githubRepoUrl"],
+                code="invalid_github_repo_url",
+                message="仓库地址必须是 https://github.com/<owner>/<repo> 或 .git 结尾格式。",
+            )
+        ]
+
+    owner = path_parts[0].strip()
+    repo = path_parts[1].strip()
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    if not owner or not repo:
+        return [
+            FieldError(
+                path=["githubRepoUrl"],
+                code="invalid_github_repo_url",
+                message="仓库地址必须是 https://github.com/<owner>/<repo> 或 .git 结尾格式。",
+            )
+        ]
+    return []
+
+
+def _validate_github_base_branch(
+    github_repo_url: str | None,
+    github_base_branch: str | None,
+) -> list[FieldError]:
+    if github_base_branch is None or not github_base_branch.strip():
+        return []
+    if github_repo_url is None or not github_repo_url.strip():
+        return [
+            FieldError(
+                path=["githubBaseBranch"],
+                code="missing_github_repo_url",
+                message="指定基线分支前必须提供 GitHub 仓库地址。",
+            )
+        ]
+    return []
+
+
+def _validate_selected_java_version(
+    settings: Settings,
+    selected_java_version: str | None,
+) -> list[FieldError]:
+    if selected_java_version is None or not selected_java_version.strip():
+        return []
+
+    available_versions = list(settings.execution.java_version_registry.keys())
+    normalized_version = selected_java_version.strip()
+    if normalized_version not in settings.execution.java_version_registry:
+        return [
+            FieldError(
+                path=["selectedJavaVersion"],
+                code="invalid_java_version",
+                message=(
+                    f"不支持的 Java 版本: {normalized_version}。"
+                    f"可选值: {', '.join(available_versions)}。"
+                ),
+            )
+        ]
+    return []
+
+
+def _validate_github_authorization(
+    settings: Settings,
+    github_repo_url: str | None,
+    github_auth_service: GitHubOAuthService,
+) -> list[FieldError]:
+    if github_repo_url is None or not github_repo_url.strip():
+        return []
+
+    try:
+        status = github_auth_service.get_status(settings.github)
+    except GitHubAuthError:
+        return [
+            FieldError(
+                path=["githubRepoUrl"],
+                code="github_unauthorized",
+                message="GitHub 授权状态异常，请重新授权后重试。",
+            )
+        ]
+
+    if status.connected:
+        return []
+
+    return [
+        FieldError(
+            path=["githubRepoUrl"],
+            code="github_unauthorized",
+            message="未检测到 GitHub 授权，请先完成授权后再启动运行。",
+        )
+    ]
+
+
+def _validate_managed_clone_root_writable(
+    settings: Settings,
+    github_repo_url: str | None,
+) -> list[FieldError]:
+    if github_repo_url is None or not github_repo_url.strip():
+        return []
+
+    clone_root = Path(settings.github.managed_clone_root).expanduser()
+    probe = clone_root
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+
+    if not os.access(probe, os.W_OK):
+        return [
+            FieldError(
+                path=["githubRepoUrl"],
+                code="git_no_write_permission",
+                message=f"无写权限，无法写入受管 clone 目录: {clone_root}",
             )
         ]
     return []
@@ -254,7 +418,9 @@ async def _load_merged_settings(
         )
 
     try:
-        merged_settings = Settings.model_validate(_deep_merge(base_settings, parsed))
+        merged_settings = Settings.model_validate(
+            _deep_merge(base_settings, _strip_uploaded_runtime_overrides(parsed))
+        )
     except ValidationError as exc:
         return _config_error_response(exc)
 
@@ -344,23 +510,77 @@ async def create_run(
     bugReportsDir: str | None = Form(default=None),
     parallel: bool = Form(default=False),
     parallelTargets: int | None = Form(default=None),
+    githubRepoUrl: str | None = Form(default=None),
+    githubBaseBranch: str | None = Form(default=None),
+    selectedJavaVersion: str | None = Form(default=None),
     services: AppServices = Depends(get_app_services),
     run_service: RunLifecycleService = Depends(get_run_service),
+    github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> RunCreateResponse | JSONResponse:
     del request
-    field_errors = _validate_project_path(projectPath)
-    if field_errors:
-        return _error_response(
-            422,
-            code="invalid_project_path",
-            message="Project path validation failed.",
-            field_errors=field_errors,
-        )
+    normalized_github_repo_url = githubRepoUrl.strip() if githubRepoUrl else None
+    if normalized_github_repo_url is None:
+        field_errors = _validate_project_path(projectPath)
+        if field_errors:
+            top_level_code = field_errors[0].code
+            if top_level_code == "non_maven_repository":
+                error_code = "non_maven_repository"
+                message = "项目路径不是 Maven 仓库。"
+            else:
+                error_code = "invalid_project_path"
+                message = "项目路径校验失败。"
+            return _error_response(
+                422,
+                code=error_code,
+                message=message,
+                field_errors=field_errors,
+            )
 
     merged = await _load_merged_settings(services, configFile)
     if isinstance(merged, JSONResponse):
         return merged
     settings, config_label = merged
+
+    github_field_errors = _validate_github_repo_url(githubRepoUrl)
+    github_field_errors.extend(_validate_github_base_branch(githubRepoUrl, githubBaseBranch))
+    if github_field_errors:
+        return _error_response(
+            422,
+            code="invalid_github_repo_url",
+            message="GitHub 仓库参数无效。",
+            field_errors=github_field_errors,
+        )
+
+    java_field_errors = _validate_selected_java_version(settings, selectedJavaVersion)
+    if java_field_errors:
+        return _error_response(
+            422,
+            code="invalid_java_version",
+            message="Java 版本参数无效。",
+            field_errors=java_field_errors,
+        )
+
+    github_auth_errors = _validate_github_authorization(
+        settings,
+        githubRepoUrl,
+        github_auth_service,
+    )
+    if github_auth_errors:
+        return _error_response(
+            401,
+            code="github_unauthorized",
+            message="当前未授权 GitHub，无法处理仓库模式运行请求。",
+            field_errors=github_auth_errors,
+        )
+
+    git_write_errors = _validate_managed_clone_root_writable(settings, githubRepoUrl)
+    if git_write_errors:
+        return _error_response(
+            403,
+            code="git_no_write_permission",
+            message="受管 clone 目录无写权限。",
+            field_errors=git_write_errors,
+        )
 
     try:
         run_session = run_service.create_run(
@@ -375,6 +595,11 @@ async def create_run(
                 bug_reports_dir=bugReportsDir,
                 parallel=parallel,
                 parallel_targets=parallelTargets,
+                github_repo_url=normalized_github_repo_url,
+                github_base_branch=githubBaseBranch.strip() if githubBaseBranch else None,
+                selected_java_version=(
+                    selectedJavaVersion.strip() if selectedJavaVersion else None
+                ),
             ),
             settings_loader=lambda _config_path: settings,
         )
@@ -382,8 +607,97 @@ async def create_run(
         return _error_response(
             409,
             code="active_run_conflict",
-            message="Another run is already active.",
+            message="已有运行任务正在执行，请稍后重试。",
             field_errors=[FieldError(path=[], code="active_run_exists", message=str(exc))],
+        )
+    except InvalidGitHubRepoUrlError as exc:
+        return _error_response(
+            422,
+            code="invalid_github_repo_url",
+            message="GitHub 仓库地址不合法。",
+            field_errors=[
+                FieldError(path=["githubRepoUrl"], code="invalid_github_repo_url", message=str(exc))
+            ],
+        )
+    except InvalidJavaVersionError as exc:
+        return _error_response(
+            422,
+            code="invalid_java_version",
+            message="Java 版本参数无效。",
+            field_errors=[
+                FieldError(
+                    path=["selectedJavaVersion"], code="invalid_java_version", message=str(exc)
+                )
+            ],
+        )
+    except GitHubUnauthorizedError as exc:
+        return _error_response(
+            401,
+            code="github_unauthorized",
+            message="当前未授权 GitHub，请先完成授权。",
+            field_errors=[
+                FieldError(path=["githubRepoUrl"], code="github_unauthorized", message=str(exc))
+            ],
+        )
+    except GitNoWritePermissionError as exc:
+        return _error_response(
+            403,
+            code="git_no_write_permission",
+            message="无写权限，无法写入受管仓库目录。",
+            field_errors=[
+                FieldError(path=["githubRepoUrl"], code="git_no_write_permission", message=str(exc))
+            ],
+        )
+    except GitBranchConflictError as exc:
+        return _error_response(
+            409,
+            code="git_branch_conflict",
+            message="目标分支发生冲突，请先同步后重试。",
+            field_errors=[
+                FieldError(path=["githubBaseBranch"], code="git_branch_conflict", message=str(exc))
+            ],
+        )
+    except GitDefaultBranchResolutionError as exc:
+        return _error_response(
+            422,
+            code="github_default_branch_unresolved",
+            message="默认分支解析失败，请稍后重试或手动指定基线分支。",
+            field_errors=[
+                FieldError(
+                    path=["githubBaseBranch"],
+                    code="github_default_branch_unresolved",
+                    message=str(exc),
+                )
+            ],
+        )
+    except GitCloneError as exc:
+        return _error_response(
+            502,
+            code="git_clone_failed",
+            message="仓库克隆失败，请检查仓库地址、分支和网络后重试。",
+            field_errors=[
+                FieldError(path=["githubRepoUrl"], code="git_clone_failed", message=str(exc))
+            ],
+        )
+    except NonMavenRepositoryError as exc:
+        return _error_response(
+            422,
+            code="non_maven_repository",
+            message="导入仓库不是 Maven 仓库。",
+            field_errors=[
+                FieldError(path=["projectPath"], code="non_maven_repository", message=str(exc))
+            ],
+        )
+    except ReportGenerationError as exc:
+        return _error_response(
+            500,
+            code="report_generation_failed",
+            message="报告生成失败，请检查日志后重试。",
+            field_errors=[
+                FieldError(
+                    path=["reportArtifact"], code="report_generation_failed", message=str(exc)
+                )
+            ],
         )
 
     created_response = RunCreateResponse(
@@ -399,6 +713,135 @@ async def create_run(
         evolution_runner=evolution_runner,
     )
     return created_response
+
+
+@router.get("/github/auth/connect-url", response_model=None)
+def get_github_auth_connect_url(
+    services: AppServices = Depends(get_app_services),
+    github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
+) -> JSONResponse:
+    settings = Settings.from_yaml(str(services.default_config_path))
+    try:
+        connect_url = github_auth_service.build_connect_url(settings.github)
+    except GitHubAuthError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "github_oauth_config_invalid",
+                    "message": str(exc),
+                    "fieldErrors": [],
+                }
+            },
+        )
+    return JSONResponse(status_code=200, content={"connectUrl": connect_url})
+
+
+@router.get("/github/auth/callback", response_model=None)
+def handle_github_auth_callback(
+    request: Request,
+    code: str | None = Query(default=None, min_length=1),
+    state: str | None = Query(default=None, min_length=1),
+    error: str | None = Query(default=None, min_length=1),
+    error_description: str | None = Query(default=None, min_length=1),
+    services: AppServices = Depends(get_app_services),
+    github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
+) -> JSONResponse | RedirectResponse:
+    settings = Settings.from_yaml(str(services.default_config_path))
+    accept_header = request.headers.get("accept", "").lower()
+    accepts_html = "application/json" not in accept_header and "text/html" in accept_header
+
+    if error is not None:
+        message = (
+            "GitHub 授权已取消，请重新发起授权。"
+            if error == "access_denied"
+            else error_description or "GitHub 授权失败，请重试。"
+        )
+        if accepts_html:
+            return _github_oauth_result_redirect("error", message=message)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "code": "github_oauth_callback_failed",
+                    "message": message,
+                    "fieldErrors": [],
+                }
+            },
+        )
+
+    if code is None or state is None:
+        message = "GitHub OAuth 回调缺少必要参数，请重新发起授权。"
+        if accepts_html:
+            return _github_oauth_result_redirect("error", message=message)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "code": "github_oauth_callback_failed",
+                    "message": message,
+                    "fieldErrors": [],
+                }
+            },
+        )
+
+    try:
+        status = github_auth_service.handle_callback(settings.github, code=code, state=state)
+    except GitHubAuthError as exc:
+        if accepts_html:
+            return _github_oauth_result_redirect("error", message=str(exc))
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "code": "github_oauth_callback_failed",
+                    "message": str(exc),
+                    "fieldErrors": [],
+                }
+            },
+        )
+    if accepts_html:
+        return _github_oauth_result_redirect("connected")
+    return JSONResponse(status_code=200, content=status.to_payload())
+
+
+@router.get("/github/auth/status", response_model=None)
+def get_github_auth_status(
+    services: AppServices = Depends(get_app_services),
+    github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
+) -> JSONResponse:
+    settings = Settings.from_yaml(str(services.default_config_path))
+    try:
+        status = github_auth_service.get_status(settings.github)
+    except GitHubAuthError as exc:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "provider": "github-oauth-app",
+                "connected": False,
+                "requiresReauth": True,
+                "message": str(exc),
+            },
+        )
+    return JSONResponse(status_code=200, content=status.to_payload())
+
+
+@router.post("/github/auth/disconnect", response_model=None)
+def disconnect_github_auth(
+    services: AppServices = Depends(get_app_services),
+    github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
+) -> JSONResponse:
+    settings = Settings.from_yaml(str(services.default_config_path))
+    github_auth_service.disconnect(settings.github)
+    return JSONResponse(
+        status_code=200,
+        content={
+            "provider": "github-oauth-app",
+            "connected": False,
+            "requiresReauth": False,
+            "message": "已断开 GitHub 连接。",
+        },
+    )
 
 
 @router.get(
@@ -589,6 +1032,28 @@ def download_run_log_artifact(
         return _run_not_found_response(run_id)
     if not artifact["exists"]:
         return _artifact_not_found_response(run_id, "run-log")
+    return FileResponse(
+        artifact["filePath"],
+        media_type=artifact["contentType"],
+        filename=artifact["filename"],
+    )
+
+
+@router.get(
+    "/runs/{run_id}/artifacts/report",
+    response_model=None,
+    responses={404: {"model": ErrorResponse}},
+)
+def download_report_artifact(
+    run_id: str,
+    run_service: RunLifecycleService = Depends(get_run_service),
+) -> FileResponse | JSONResponse:
+    try:
+        artifact = run_service.get_download_artifact(run_id, "report")
+    except KeyError:
+        return _run_not_found_response(run_id)
+    if not artifact["exists"]:
+        return _artifact_not_found_response(run_id, "report")
     return FileResponse(
         artifact["filePath"],
         media_type=artifact["contentType"],

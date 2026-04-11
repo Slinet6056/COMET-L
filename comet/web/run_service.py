@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+import shutil
 import sqlite3
 import sys
 import threading
@@ -12,8 +13,19 @@ from uuid import uuid4
 
 from comet.agent.state import AgentState, ParallelAgentState
 from comet.config import Settings
+from comet.config.settings import GitHubConfig
 from comet.utils.log_context import ContextFilter
+from comet.web.git_pr_service import GitHubPullRequestService, GitPullRequestError
 from comet.web.log_router import RunLogRouter
+from comet.web.repo_import_service import (
+    GitHubRepoImportService,
+    RepoImportBranchResolutionError,
+    RepoImportCloneError,
+    RepoImportNonMavenError,
+    RepoImportPermissionError,
+    RepoImportUrlError,
+)
+from comet.web.reporting import build_run_report, collect_generated_test_files, resolve_git_metadata
 from comet.web.runtime_protocol import (
     RuntimeEventBus,
     build_run_snapshot,
@@ -82,6 +94,9 @@ class RunRequest:
     bug_reports_dir: Optional[str] = None
     parallel: bool = False
     parallel_targets: Optional[int] = None
+    github_repo_url: Optional[str] = None
+    github_base_branch: Optional[str] = None
+    selected_java_version: Optional[str] = None
     log_file: Optional[str] = None
     runtime_roots: dict[str, str] = field(default_factory=dict)
     observer: Optional[Callable[[dict[str, object]], None]] = None
@@ -108,8 +123,50 @@ class ActiveRunConflictError(RuntimeError):
     pass
 
 
+class GitHubUnauthorizedError(RuntimeError):
+    pass
+
+
+class InvalidGitHubRepoUrlError(ValueError):
+    pass
+
+
+class InvalidJavaVersionError(ValueError):
+    pass
+
+
+class GitNoWritePermissionError(PermissionError):
+    pass
+
+
+class GitBranchConflictError(RuntimeError):
+    pass
+
+
+class ReportGenerationError(RuntimeError):
+    pass
+
+
+class NonMavenRepositoryError(ValueError):
+    pass
+
+
+class GitCloneError(RuntimeError):
+    pass
+
+
+class GitDefaultBranchResolutionError(RuntimeError):
+    pass
+
+
 class RunLifecycleService:
-    def __init__(self, workspace_root: Path | str = ".") -> None:
+    def __init__(
+        self,
+        workspace_root: Path | str = ".",
+        *,
+        repo_import_service: GitHubRepoImportService | None = None,
+        pull_request_service: GitHubPullRequestService | None = None,
+    ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self._lock = threading.RLock()
         self._sessions: dict[str, RunSession] = {}
@@ -119,7 +176,15 @@ class RunLifecycleService:
         self._runtime_snapshots: dict[str, dict[str, Any]] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._active_run_id: Optional[str] = None
+        self._repo_import_service = repo_import_service
+        self._pull_request_service = pull_request_service
         self._load_persisted_sessions()
+
+    def set_repo_import_service(self, repo_import_service: GitHubRepoImportService) -> None:
+        self._repo_import_service = repo_import_service
+
+    def set_pull_request_service(self, pull_request_service: GitHubPullRequestService) -> None:
+        self._pull_request_service = pull_request_service
 
     def create_run(
         self,
@@ -143,6 +208,32 @@ class RunLifecycleService:
             apply_scoped_runtime_paths(config, scoped_paths)
             apply_run_overrides(config, scoped_request)
             config.ensure_directories()
+
+            if scoped_request.github_repo_url is not None:
+                if self._repo_import_service is None:
+                    raise GitCloneError("仓库导入服务未初始化，无法处理 GitHub 仓库请求。")
+                try:
+                    imported = self._repo_import_service.import_repository(
+                        run_id=run_id,
+                        github_repo_url=scoped_request.github_repo_url,
+                        github_config=config.github,
+                        requested_base_branch=scoped_request.github_base_branch,
+                    )
+                except RepoImportUrlError as exc:
+                    raise InvalidGitHubRepoUrlError(str(exc)) from exc
+                except RepoImportPermissionError as exc:
+                    raise GitHubUnauthorizedError(str(exc)) from exc
+                except RepoImportBranchResolutionError as exc:
+                    raise GitDefaultBranchResolutionError(str(exc)) from exc
+                except RepoImportCloneError as exc:
+                    raise GitCloneError(str(exc)) from exc
+                except RepoImportNonMavenError as exc:
+                    raise NonMavenRepositoryError(str(exc)) from exc
+
+                scoped_request.project_path = imported.project_path
+                scoped_request.github_base_branch = imported.base_branch
+                config.github.base_branch = imported.base_branch
+                config.github.repo_url = scoped_request.github_repo_url
 
             self._ensure_scoped_directories(scoped_paths)
             self._write_config_snapshot(config, scoped_paths["resolved_config"])
@@ -232,6 +323,7 @@ class RunLifecycleService:
             merged_phase.update(runtime_phase)
         snapshot["phase"] = merged_phase
         snapshot["status"] = session.status
+        snapshot["selectedJavaVersion"] = self._resolve_selected_java_version(run_id)
         snapshot["artifacts"] = self._build_artifacts(session)
         snapshot["logStreams"] = self.get_log_streams_snapshot(run_id)
         snapshot["isHistorical"] = session.is_historical
@@ -266,6 +358,7 @@ class RunLifecycleService:
                     "iteration": snapshot["iteration"],
                     "llmCalls": snapshot["llmCalls"],
                     "budget": snapshot["budget"],
+                    "selectedJavaVersion": snapshot.get("selectedJavaVersion"),
                     "phase": snapshot["phase"],
                     "metrics": snapshot["metrics"],
                     "artifacts": snapshot["artifacts"],
@@ -370,6 +463,7 @@ class RunLifecycleService:
             snapshot["phase"] = merged_phase
 
             snapshot["status"] = session.status
+            snapshot["selectedJavaVersion"] = self._resolve_selected_java_version(run_id)
             snapshot["artifacts"] = self._build_artifacts(session)
             snapshot["logStreams"] = self.get_log_streams_snapshot(run_id)
 
@@ -389,8 +483,11 @@ class RunLifecycleService:
         )
 
     def build_results(self, run_id: str) -> dict[str, Any]:
-        session = self._sessions[run_id]
         snapshot = self.build_snapshot(run_id)
+        return self._build_results_payload(run_id, snapshot)
+
+    def _build_results_payload(self, run_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+        session = self._sessions[run_id]
         database_summary = self._build_database_summary(Path(session.paths["database"]))
         artifact_summary = {
             "finalState": self._build_download_artifact(
@@ -408,6 +505,27 @@ class RunLifecycleService:
                 artifact_slug="run-log",
             ),
         }
+        report_artifact = self._build_download_artifact(
+            run_id,
+            session.paths["report_artifact"],
+            content_type="text/markdown; charset=utf-8",
+            download_name="report.md",
+            artifact_slug="report",
+        )
+        pull_request_url = snapshot.get("pullRequestUrl")
+        if not isinstance(pull_request_url, str):
+            pull_request_url = None
+        pull_request_error = snapshot.get("pullRequestError")
+        if not isinstance(pull_request_error, str) or not pull_request_error.strip():
+            pull_request_error = None
+        if (
+            pull_request_error is None
+            and pull_request_url is None
+            and report_artifact["exists"]
+            and isinstance(session.error, str)
+            and session.error.strip()
+        ):
+            pull_request_error = session.error.strip()
         return {
             "runId": snapshot["runId"],
             "status": snapshot["status"],
@@ -416,6 +534,7 @@ class RunLifecycleService:
             "iteration": snapshot["iteration"],
             "llmCalls": snapshot["llmCalls"],
             "budget": snapshot["budget"],
+            "selectedJavaVersion": snapshot.get("selectedJavaVersion"),
             "phase": snapshot["phase"],
             "summary": {
                 "metrics": snapshot["metrics"],
@@ -429,6 +548,9 @@ class RunLifecycleService:
                 },
             },
             "artifacts": artifact_summary,
+            "pullRequestUrl": pull_request_url,
+            "pullRequestError": pull_request_error,
+            "reportArtifact": report_artifact,
         }
 
     def get_download_artifact(self, run_id: str, artifact_slug: str) -> dict[str, Any]:
@@ -448,6 +570,14 @@ class RunLifecycleService:
                 content_type="text/plain; charset=utf-8",
                 download_name="run.log",
                 artifact_slug="run-log",
+                include_file_path=True,
+            ),
+            "report": self._build_download_artifact(
+                run_id,
+                session.paths["report_artifact"],
+                content_type="text/markdown; charset=utf-8",
+                download_name="report.md",
+                artifact_slug="report",
                 include_file_path=True,
             ),
         }
@@ -489,11 +619,22 @@ class RunLifecycleService:
             self._persist_session_manifest(session)
         self.publish_runtime_snapshot(run_id)
 
-    def mark_completed(self, run_id: str) -> None:
+    def mark_completed(self, run_id: str, *, completed_at: str | None = None) -> None:
+        completion_time = completed_at or _utc_now_iso()
+        self._generate_report_artifact(run_id, completed_at=completion_time)
+        pull_request_url = self._publish_generated_tests_pull_request(run_id)
+        preserved_snapshot_fields: dict[str, Any] = {}
         with self._lock:
             session = self._sessions[run_id]
+            current_snapshot = self._runtime_snapshots.get(run_id, {})
+            if isinstance(current_snapshot, dict):
+                for key in ("pullRequestUrl",):
+                    if key in current_snapshot:
+                        preserved_snapshot_fields[key] = current_snapshot[key]
+            if pull_request_url is not None:
+                preserved_snapshot_fields["pullRequestUrl"] = pull_request_url
             session.status = "completed"
-            session.completed_at = _utc_now_iso()
+            session.completed_at = completion_time
             duration_seconds: float | None = None
             if session.started_at is not None:
                 duration_seconds = max(
@@ -514,7 +655,11 @@ class RunLifecycleService:
             if self._active_run_id == run_id:
                 self._active_run_id = None
             self._persist_session_manifest(session)
-        self.publish_runtime_snapshot(run_id, state=self._load_state_snapshot(run_id))
+        self.publish_runtime_snapshot(
+            run_id,
+            state=self._load_state_snapshot(run_id),
+            **preserved_snapshot_fields,
+        )
 
     def mark_failed(self, run_id: str, error: str) -> None:
         with self._lock:
@@ -564,15 +709,16 @@ class RunLifecycleService:
                 evolution_runner=evolution_runner,
                 observer=event_bus,
                 log_router=log_router,
+                repo_import_service=self._repo_import_service,
+                source_run_id=run_id,
                 runtime_snapshot_publisher=(
                     lambda **payload: self.publish_runtime_snapshot(run_id, **payload)
                 ),
             )
+            self.mark_completed(run_id)
         except Exception as exc:
             self.mark_failed(run_id, str(exc))
             return
-
-        self.mark_completed(run_id)
 
     def _new_state_for_run(self, run_id: str) -> AgentState:
         if self.run_mode(run_id) == "parallel":
@@ -688,12 +834,14 @@ class RunLifecycleService:
             "resolvedConfig": session.paths["resolved_config"],
             "finalState": session.paths["final_state"],
             "interruptedState": session.paths["interrupted_state"],
+            "reportArtifact": session.paths["report_artifact"],
         }
         artifacts: dict[str, dict[str, object]] = {}
         for name, path in paths.items():
             artifacts[name] = {"exists": Path(path).exists()}
         artifacts["finalState"]["downloadUrl"] = f"/api/runs/{session.run_id}/artifacts/final-state"
         artifacts["log"]["downloadUrl"] = f"/api/runs/{session.run_id}/artifacts/run-log"
+        artifacts["reportArtifact"]["downloadUrl"] = f"/api/runs/{session.run_id}/artifacts/report"
         return artifacts
 
     def _build_download_artifact(
@@ -724,6 +872,78 @@ class RunLifecycleService:
         if include_file_path:
             artifact["filePath"] = str(resolved_path)
         return artifact
+
+    def _generate_report_artifact(self, run_id: str, *, completed_at: str) -> None:
+        session = self._sessions[run_id]
+        request = self._requests[run_id]
+        results = self._build_results_payload(run_id, self._build_runtime_snapshot(run_id))
+        summary = results["summary"]
+        project_path = Path(request.project_path).expanduser()
+        git_branch, git_commit = resolve_git_metadata(project_path)
+
+        try:
+            report_content = build_run_report(
+                run_id=run_id,
+                mode=str(results["mode"]),
+                project_path=str(project_path),
+                repo_url=_normalize_optional_text(
+                    session.config_snapshot.get("github", {}).get("repo_url")
+                ),
+                base_branch=_normalize_optional_text(
+                    session.config_snapshot.get("github", {}).get("base_branch")
+                ),
+                java_version=self._resolve_selected_java_version(run_id),
+                started_at=session.started_at,
+                completed_at=completed_at,
+                metrics=summary["metrics"],
+                mutation_enabled=results.get("mutationEnabled"),
+                sources=summary["sources"],
+                tests_summary=summary["tests"],
+                mutants_summary=summary["mutants"],
+                test_files=collect_generated_test_files(Path(session.paths["database"])),
+                git_branch=git_branch,
+                git_commit=git_commit,
+            )
+            report_path = Path(session.paths["report_artifact"])
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(report_content, encoding="utf-8")
+        except Exception as exc:
+            logger.exception("生成运行报告失败 %s", run_id)
+            raise ReportGenerationError("生成运行报告失败。") from exc
+
+    def _publish_generated_tests_pull_request(self, run_id: str) -> str | None:
+        session = self._sessions[run_id]
+        request = self._requests[run_id]
+
+        github_snapshot = session.config_snapshot.get("github", {})
+        if not isinstance(github_snapshot, dict):
+            raise GitPullRequestError("运行配置中的 GitHub 信息无效，无法自动创建 PR。")
+
+        repo_url = _normalize_optional_text(github_snapshot.get("repo_url"))
+        if repo_url is None:
+            return None
+
+        base_branch = _normalize_optional_text(github_snapshot.get("base_branch"))
+        if base_branch is None:
+            raise GitPullRequestError("缺少基线分支信息，无法自动创建 PR。")
+
+        if self._pull_request_service is None:
+            raise GitPullRequestError("GitHub PR 服务未初始化，无法自动提交并创建 PR。")
+
+        try:
+            github_config = GitHubConfig.model_validate(github_snapshot)
+        except Exception as exc:  # pragma: no cover - 防御分支
+            raise GitPullRequestError("GitHub 配置无效，无法自动创建 PR。") from exc
+
+        result = self._pull_request_service.commit_generated_tests_and_create_pr(
+            run_id=run_id,
+            project_path=Path(request.project_path),
+            report_path=Path(session.paths["report_artifact"]),
+            repo_url=repo_url,
+            base_branch=base_branch,
+            github_config=github_config,
+        )
+        return result.pull_request_url
 
     def _build_database_summary(self, database_path: Path) -> dict[str, Any]:
         empty_summary = {
@@ -957,8 +1177,17 @@ class RunLifecycleService:
             raise ValueError("session manifest must be an object")
 
         session = RunSession(**payload)
+        self._backfill_legacy_session_paths(session)
         self._validate_restored_session_paths(session, manifest_path)
         return session
+
+    def _backfill_legacy_session_paths(self, session: RunSession) -> None:
+        if "report_artifact" in session.paths:
+            return
+
+        session.paths["report_artifact"] = str(
+            self.workspace_root / "output" / "runs" / session.run_id / "report.md"
+        )
 
     def _validate_restored_session_paths(self, session: RunSession, manifest_path: Path) -> None:
         required_paths = {
@@ -970,6 +1199,7 @@ class RunLifecycleService:
             "resolved_config",
             "final_state",
             "interrupted_state",
+            "report_artifact",
         }
         missing_paths = required_paths - set(session.paths)
         if missing_paths:
@@ -1010,6 +1240,11 @@ class RunLifecycleService:
             mutation_enabled=mutation_enabled if isinstance(mutation_enabled, bool) else None,
             parallel=parallel_enabled,
             parallel_targets=parallel_targets if isinstance(parallel_targets, int) else None,
+            github_repo_url=session.config_snapshot.get("github", {}).get("repo_url"),
+            github_base_branch=session.config_snapshot.get("github", {}).get("base_branch"),
+            selected_java_version=session.config_snapshot.get("execution", {}).get(
+                "selected_java_version"
+            ),
             log_file=session.paths.get("log"),
             runtime_roots={
                 "state": session.paths["state"],
@@ -1024,6 +1259,27 @@ class RunLifecycleService:
         if status in {"completed", "failed", "running"}:
             return status
         return "pending"
+
+    def _resolve_selected_java_version(self, run_id: str) -> str | None:
+        request = self._requests.get(run_id)
+        request_value = (
+            getattr(request, "selected_java_version", None) if request is not None else None
+        )
+        if isinstance(request_value, str):
+            normalized = request_value.strip()
+            if normalized:
+                return normalized
+
+        session = self._sessions.get(run_id)
+        if session is None:
+            return None
+
+        config_value = session.config_snapshot.get("execution", {}).get("selected_java_version")
+        if isinstance(config_value, str):
+            normalized = config_value.strip()
+            if normalized:
+                return normalized
+        return None
 
     def _build_scoped_paths(self, run_id: str) -> dict[str, str]:
         state_root = self.workspace_root / "state" / "runs" / run_id
@@ -1041,6 +1297,7 @@ class RunLifecycleService:
             "final_state": str(output_root / "final_state.json"),
             "interrupted_state": str(output_root / "interrupted_state.json"),
             "resolved_config": str(output_root / "resolved_config.json"),
+            "report_artifact": str(output_root / "report.md"),
         }
 
     def _build_scoped_request(
@@ -1057,6 +1314,9 @@ class RunLifecycleService:
             bug_reports_dir=request.bug_reports_dir,
             parallel=request.parallel,
             parallel_targets=request.parallel_targets,
+            github_repo_url=request.github_repo_url,
+            github_base_branch=request.github_base_branch,
+            selected_java_version=request.selected_java_version,
             log_file=scoped_paths["log"],
             runtime_roots={
                 "state": scoped_paths["state"],
@@ -1082,6 +1342,13 @@ class RunLifecycleService:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def emit_event(
@@ -1157,6 +1424,9 @@ def build_run_request(args: Any) -> RunRequest:
         bug_reports_dir=args.bug_reports_dir,
         parallel=args.parallel,
         parallel_targets=args.parallel_targets,
+        github_repo_url=getattr(args, "github_repo_url", None),
+        github_base_branch=getattr(args, "github_base_branch", None),
+        selected_java_version=getattr(args, "selected_java_version", None),
     )
 
 
@@ -1171,6 +1441,12 @@ def apply_run_overrides(config: Settings, request: RunRequest) -> None:
         config.agent.parallel.enabled = True
     if request.parallel_targets is not None:
         config.agent.parallel.max_parallel_targets = request.parallel_targets
+    if request.selected_java_version is not None:
+        config.execution.selected_java_version = request.selected_java_version
+    if request.github_repo_url is not None:
+        config.github.repo_url = request.github_repo_url
+    if request.github_base_branch is not None:
+        config.github.base_branch = request.github_base_branch
 
     if request.log_file:
         config.logging.file = request.log_file
@@ -1225,6 +1501,75 @@ def _validate_project_path(project_path: str, logger: logging.Logger) -> str:
     return str(resolved_project_path)
 
 
+def _is_within_directory(path: Path, root: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
+
+
+def _clear_project_test_directories(project_path: str, logger: logging.Logger) -> None:
+    project_root = Path(project_path).resolve()
+    for relative in [Path("src/test/java"), Path("src/test/resources")]:
+        target = (project_root / relative).resolve()
+        if not _is_within_directory(target, project_root):
+            raise RuntimeError(f"测试目录清理路径越界: {target}")
+        if not target.exists():
+            continue
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            logger.info(f"已清理旧测试目录: {target}")
+        except OSError as exc:
+            raise RuntimeError(f"清理旧测试目录失败: {target}") from exc
+
+
+def _resolve_project_source(
+    request: RunRequest,
+    config: Settings,
+    logger: logging.Logger,
+    repo_import_service: GitHubRepoImportService | None,
+    source_run_id: str | None,
+) -> str:
+    managed_root = Path(config.github.managed_clone_root).expanduser().resolve()
+
+    if request.github_repo_url is not None:
+        current_project_path = Path(request.project_path).expanduser().resolve()
+        imported_within_managed_root = _is_within_directory(current_project_path, managed_root)
+        if not imported_within_managed_root:
+            if repo_import_service is None:
+                raise GitCloneError("仓库导入服务未初始化，无法处理 GitHub 仓库请求。")
+            try:
+                imported = repo_import_service.import_repository(
+                    run_id=source_run_id or "adhoc-run",
+                    github_repo_url=request.github_repo_url,
+                    github_config=config.github,
+                    requested_base_branch=request.github_base_branch,
+                )
+            except RepoImportUrlError as exc:
+                raise InvalidGitHubRepoUrlError(str(exc)) from exc
+            except RepoImportPermissionError as exc:
+                raise GitHubUnauthorizedError(str(exc)) from exc
+            except RepoImportBranchResolutionError as exc:
+                raise GitDefaultBranchResolutionError(str(exc)) from exc
+            except RepoImportCloneError as exc:
+                raise GitCloneError(str(exc)) from exc
+            except RepoImportNonMavenError as exc:
+                raise NonMavenRepositoryError(str(exc)) from exc
+
+            request.project_path = imported.project_path
+            request.github_base_branch = imported.base_branch
+            config.github.base_branch = imported.base_branch
+            config.github.repo_url = request.github_repo_url
+            logger.info(f"已在运行启动阶段导入 GitHub 仓库: {request.project_path}")
+
+    resolved_project_path = _validate_project_path(request.project_path, logger)
+    _clear_project_test_directories(resolved_project_path, logger)
+    return resolved_project_path
+
+
 def run_request(
     request: RunRequest,
     *,
@@ -1235,6 +1580,8 @@ def run_request(
     observer: Optional[Callable[[dict[str, object]], None]] = None,
     log_router: Optional[RunLogRouter] = None,
     runtime_snapshot_publisher: Optional[Callable[..., None]] = None,
+    repo_import_service: GitHubRepoImportService | None = None,
+    source_run_id: str | None = None,
 ) -> int:
     runtime_logger = logger or logging.getLogger(__name__)
     event_sink = observer or request.observer
@@ -1256,7 +1603,13 @@ def run_request(
     if request.debug:
         runtime_logger.info("已启用调试模式 (DEBUG 日志)")
 
-    project_path = _validate_project_path(request.project_path, runtime_logger)
+    project_path = _resolve_project_source(
+        request,
+        config,
+        runtime_logger,
+        repo_import_service,
+        source_run_id,
+    )
     bug_reports_dir = _resolve_bug_reports_dir(request.bug_reports_dir, runtime_logger)
 
     parallel_mode = request.parallel or config.agent.parallel.enabled

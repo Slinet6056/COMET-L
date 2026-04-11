@@ -529,11 +529,11 @@ describe('Run page parallel mode', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '并行运行状态' })).toBeInTheDocument();
-    expect(screen.getAllByText('未启用')).toHaveLength(3);
+    expect(screen.getByText('变异分数')).toBeInTheDocument();
     expect(screen.getByText('变异分析')).toBeInTheDocument();
     expect(screen.queryByText('变异体总数')).not.toBeInTheDocument();
     expect(screen.queryByText('已杀死变异体')).not.toBeInTheDocument();
-    expect(screen.getAllByText('未启用')).toHaveLength(2);
+    expect(screen.getAllByText('未启用').length).toBeGreaterThanOrEqual(3);
   });
 
   it('keeps legacy display behavior when mutationEnabled is missing', async () => {

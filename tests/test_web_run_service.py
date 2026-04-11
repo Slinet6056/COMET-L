@@ -4,10 +4,12 @@ import logging
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 import main
 from comet.config.settings import LLMConfig, LoggingConfig, Settings
+from comet.web.git_pr_service import GitPullRequestError
 from comet.web.run_service import (
     ActiveRunConflictError,
     RunLifecycleService,
@@ -154,6 +156,132 @@ class RunServiceIsolationTests(unittest.TestCase):
             system_initializer=main.initialize_system,
             evolution_runner=main.run_evolution,
         )
+
+    def test_run_request_lifecycle_entry_imports_github_source_and_cleans_old_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            imported_project = root / "managed" / "openai" / "demo" / "run-001"
+            (imported_project / "pom.xml").parent.mkdir(parents=True, exist_ok=True)
+            (imported_project / "pom.xml").write_text("<project/>", encoding="utf-8")
+            (imported_project / "src" / "main" / "java").mkdir(parents=True, exist_ok=True)
+            old_test_file = imported_project / "src" / "test" / "java" / "LegacyTest.java"
+            old_test_file.parent.mkdir(parents=True, exist_ok=True)
+            old_test_file.write_text("class LegacyTest {}", encoding="utf-8")
+
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+            )
+            settings.github.managed_clone_root = str(root / "managed")
+
+            events: list[dict[str, object]] = []
+            captured: dict[str, object] = {}
+
+            class _FakeRepoImportService:
+                def __init__(self) -> None:
+                    self.called = False
+
+                def import_repository(self, **kwargs):
+                    self.called = True
+                    captured["import_kwargs"] = kwargs
+                    return type(
+                        "Imported",
+                        (),
+                        {
+                            "project_path": str(imported_project),
+                            "base_branch": "develop",
+                        },
+                    )()
+
+            fake_import_service = _FakeRepoImportService()
+
+            def fake_initialize(
+                config: Settings,
+                bug_reports_dir: str | None = None,
+                parallel_mode: bool = False,
+            ) -> dict[str, object]:
+                _ = (bug_reports_dir, parallel_mode)
+                captured["repo_url"] = config.github.repo_url
+                captured["base_branch"] = config.github.base_branch
+                return {"config": config}
+
+            def fake_run(
+                project_path: str,
+                components: dict[str, object],
+                resume_state: str | None = None,
+            ) -> None:
+                _ = (components, resume_state)
+                captured["project_path"] = project_path
+                captured["old_test_exists"] = old_test_file.exists()
+
+            exit_code = run_request(
+                RunRequest(
+                    project_path=str(root / "placeholder"),
+                    config_path="config.yaml",
+                    github_repo_url="https://github.com/openai/demo",
+                ),
+                settings_loader=lambda _: settings,
+                system_initializer=fake_initialize,
+                evolution_runner=fake_run,
+                observer=events.append,
+                repo_import_service=cast(Any, fake_import_service),
+                source_run_id="run-001",
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(fake_import_service.called)
+            self.assertEqual(captured["project_path"], str(imported_project.resolve()))
+            self.assertFalse(bool(captured["old_test_exists"]))
+            self.assertEqual(captured["repo_url"], "https://github.com/openai/demo")
+            self.assertEqual(captured["base_branch"], "develop")
+            self.assertEqual([event["type"] for event in events], ["run.started", "run.completed"])
+
+    def test_run_request_aborts_before_runner_when_cleanup_old_tests_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+            )
+
+            called = {"run": False}
+
+            def fake_initialize(
+                config: Settings,
+                bug_reports_dir: str | None = None,
+                parallel_mode: bool = False,
+            ) -> dict[str, object]:
+                _ = (config, bug_reports_dir, parallel_mode)
+                return {"config": settings}
+
+            def fake_run(
+                project_path: str,
+                components: dict[str, object],
+                resume_state: str | None = None,
+            ) -> None:
+                _ = (project_path, components, resume_state)
+                called["run"] = True
+
+            with patch(
+                "comet.web.run_service._clear_project_test_directories",
+                side_effect=RuntimeError("清理旧测试目录失败: denied"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "清理旧测试目录失败"):
+                    run_request(
+                        RunRequest(
+                            project_path=str(project_path),
+                            config_path="config.yaml",
+                        ),
+                        settings_loader=lambda _: settings,
+                        system_initializer=fake_initialize,
+                        evolution_runner=fake_run,
+                    )
+
+            self.assertFalse(called["run"])
 
 
 class RunLifecycleTests(unittest.TestCase):
@@ -369,6 +497,63 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertTrue(restored_final_state.exists())
             self.assertEqual(service.get_session(session.run_id).status, "completed")
 
+    def test_start_run_marks_failed_when_push_or_pr_step_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+            )
+
+            class _FailingPullRequestService:
+                def commit_generated_tests_and_create_pr(self, **kwargs):
+                    del kwargs
+                    raise GitPullRequestError("推送提交到远端失败，请检查 GitHub 权限或网络连接。")
+
+            service = RunLifecycleService(workspace_root=root)
+            service.set_pull_request_service(cast(Any, _FailingPullRequestService()))
+            session = service.create_run(
+                RunRequest(project_path=str(project_path), config_path="config.yaml"),
+                settings_loader=lambda _: settings,
+            )
+            session.config_snapshot.setdefault("github", {})["repo_url"] = (
+                "https://github.com/openai/example-repo"
+            )
+            session.config_snapshot.setdefault("github", {})["base_branch"] = "main"
+
+            def fake_initialize(
+                config: Settings,
+                bug_reports_dir: str | None = None,
+                parallel_mode: bool = False,
+            ) -> dict[str, object]:
+                del bug_reports_dir, parallel_mode
+                return {"config": config}
+
+            def fake_run(
+                project_path: str,
+                components: dict[str, object],
+                resume_state: str | None = None,
+            ) -> None:
+                del project_path, components, resume_state
+
+            service.start_run(
+                session.run_id,
+                settings_loader=lambda _: settings,
+                system_initializer=fake_initialize,
+                evolution_runner=fake_run,
+            )
+            service._threads[session.run_id].join(timeout=5)
+
+            failed_session = service.get_session(session.run_id)
+            self.assertEqual(failed_session.status, "failed")
+            self.assertIsNotNone(failed_session.error)
+            assert failed_session.error is not None
+            self.assertIn("推送提交到远端失败", failed_session.error)
+
     def test_persisted_sessions_are_restored_after_service_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -415,6 +600,58 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(restored_snapshot["iteration"], 3)
             self.assertEqual(restored_snapshot["metrics"]["totalTests"], 5)
             self.assertEqual(restored_service.list_runs()[0]["runId"], run_id)
+
+    def test_legacy_manifest_without_report_artifact_is_backfilled_and_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+            )
+
+            service = RunLifecycleService(workspace_root=root)
+            session = service.create_run(
+                RunRequest(project_path=str(project_path), config_path="config.yaml"),
+                settings_loader=lambda _: settings,
+            )
+            run_id = session.run_id
+
+            final_state_path = Path(session.paths["final_state"])
+            final_state_path.parent.mkdir(parents=True, exist_ok=True)
+            final_state_path.write_text(
+                json.dumps({"iteration": 1, "total_tests": 2}),
+                encoding="utf-8",
+            )
+            service.mark_completed(run_id)
+
+            manifest_path = service._session_manifest_path(run_id)
+            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_payload["paths"].pop("report_artifact", None)
+            manifest_path.write_text(
+                json.dumps(manifest_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            with patch("comet.web.run_service.logger.warning") as warning_mock:
+                restored_service = RunLifecycleService(workspace_root=root)
+
+            restored_session = restored_service.get_session(run_id)
+            self.assertEqual(restored_session.status, "completed")
+            self.assertEqual(
+                restored_session.paths["report_artifact"],
+                str(root / "output" / "runs" / run_id / "report.md"),
+            )
+            self.assertEqual(restored_service.list_runs()[0]["runId"], run_id)
+            warning_messages = [
+                str(call.args[0]) for call in warning_mock.call_args_list if call.args
+            ]
+            self.assertFalse(
+                any("missing paths" in message for message in warning_messages),
+            )
 
     def test_restored_non_terminal_run_is_marked_failed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

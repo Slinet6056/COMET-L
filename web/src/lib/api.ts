@@ -211,6 +211,10 @@ export type RunResultsResponse = {
   phase: RunPhase;
   summary: RunResultsSummary;
   artifacts: Record<string, RunResultsArtifact>;
+  pullRequestUrl?: string | null;
+  pullRequestError?: string | null;
+  reportArtifact?: RunResultsArtifact;
+  selectedJavaVersion?: string | null;
   mutationEnabled?: boolean | null;
 };
 
@@ -218,6 +222,7 @@ export type RunSnapshot = {
   runId: string;
   status: string;
   mode: string;
+  selectedJavaVersion?: string | null;
   iteration: number;
   llmCalls: number;
   budget: number;
@@ -316,12 +321,24 @@ export async function parseConfigFile(file: File): Promise<ConfigPayload> {
 export async function createRun(options: {
   projectPath: string;
   bugReportsDir?: string | null;
+  githubRepoUrl?: string | null;
+  githubBaseBranch?: string | null;
+  selectedJavaVersion?: string | null;
   config: RunConfigPayload;
 }): Promise<RunCreateResponse> {
   const formData = new FormData();
   formData.set('projectPath', options.projectPath);
   if (options.bugReportsDir && options.bugReportsDir.trim().length > 0) {
     formData.set('bugReportsDir', options.bugReportsDir.trim());
+  }
+  if (options.githubRepoUrl && options.githubRepoUrl.trim().length > 0) {
+    formData.set('githubRepoUrl', options.githubRepoUrl.trim());
+  }
+  if (options.githubBaseBranch && options.githubBaseBranch.trim().length > 0) {
+    formData.set('githubBaseBranch', options.githubBaseBranch.trim());
+  }
+  if (options.selectedJavaVersion && options.selectedJavaVersion.trim().length > 0) {
+    formData.set('selectedJavaVersion', options.selectedJavaVersion.trim());
   }
   if (typeof options.config.evolution?.mutation_enabled === 'boolean') {
     formData.set('mutationEnabled', String(options.config.evolution.mutation_enabled));
@@ -393,4 +410,52 @@ export function subscribeToRunEvents(runId: string, handlers: RunEventsSubscript
   return () => {
     eventSource.close();
   };
+}
+
+export type GitHubAuthStatus = {
+  connected: boolean;
+  username?: string | null;
+  requiresReauth?: boolean;
+  message?: string;
+};
+
+export type GitHubAuthConnectUrlResponse = {
+  connectUrl: string;
+};
+
+export type GitHubAuthCallbackResponse = {
+  provider: string;
+  connected: boolean;
+  requiresReauth: boolean;
+  message: string;
+};
+
+export async function fetchGitHubAuthStatus(): Promise<GitHubAuthStatus> {
+  const response = await fetch('/api/github/auth/status');
+  return parseJsonResponse<GitHubAuthStatus>(response);
+}
+
+export async function fetchGitHubAuthConnectUrl(): Promise<GitHubAuthConnectUrlResponse> {
+  const response = await fetch('/api/github/auth/connect-url');
+  return parseJsonResponse<GitHubAuthConnectUrlResponse>(response);
+}
+
+export async function handleGitHubAuthCallback(
+  code: string,
+  state: string,
+): Promise<GitHubAuthCallbackResponse> {
+  const response = await fetch(
+    `/api/github/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
+  );
+  return parseJsonResponse<GitHubAuthCallbackResponse>(response);
+}
+
+export async function disconnectGitHubAuth(): Promise<void> {
+  const response = await fetch('/api/github/auth/disconnect', {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const payload = (await response.json()) as ApiErrorPayload;
+    throw new ApiError(response.status, payload);
+  }
 }

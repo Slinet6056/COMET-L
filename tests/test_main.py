@@ -39,6 +39,36 @@ class _NoopThread:
         _ = timeout
 
 
+class RuntimeJavaSelectionTests(unittest.TestCase):
+    def test_configure_runtime_environment_keeps_runtime_jdk_fixed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            runtime_home = Path(tmp_dir) / "runtime-jdk"
+            runtime_bin = runtime_home / "bin"
+            runtime_bin.mkdir(parents=True)
+            (runtime_bin / "java").write_text("", encoding="utf-8")
+
+            selected_home = Path(tmp_dir) / "target-jdk-17"
+            selected_bin = selected_home / "bin"
+            selected_bin.mkdir(parents=True)
+            (selected_bin / "java").write_text("", encoding="utf-8")
+            (selected_bin / "javac").write_text("", encoding="utf-8")
+
+            settings = Settings(llm=LLMConfig(api_key="test-key"))
+            settings.execution.runtime_java_home = str(runtime_home)
+            settings.execution.selected_java_version = "17"
+            settings.execution.java_version_registry = {"17": str(selected_home)}
+
+            runtime_env = main.configure_runtime_environment(settings)
+
+            self.assertEqual(runtime_env["JAVA_HOME"], str(runtime_home.resolve()))
+            self.assertEqual(
+                settings.execution.get_runtime_java_home(), str(runtime_home.resolve())
+            )
+            self.assertEqual(
+                settings.execution.get_target_java_home(), str(selected_home.resolve())
+            )
+
+
 class _StudyCliFakeDatabase(_FakeDatabase):
     def __init__(self, calculator_source: Path) -> None:
         super().__init__()
@@ -384,6 +414,45 @@ class RunEvolutionPreprocessingExitTests(unittest.TestCase):
         )
         sandbox_manager.export_test_files.assert_called_once_with("workspace", "/tmp/project")
         self.assertEqual(phases, ["preprocessing", "running", "completed"])
+
+    @patch("main.threading.Thread", _NoopThread)
+    def test_run_evolution_uses_managed_clone_as_workspace_in_github_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            managed_root = root / "managed"
+            project_path = managed_root / "openai" / "demo" / "run-001"
+            project_path.mkdir(parents=True, exist_ok=True)
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            config = Settings(llm=LLMConfig(api_key="test-key"))
+            config.github.repo_url = "https://github.com/openai/demo"
+            config.github.managed_clone_root = str(managed_root)
+
+            planner = MagicMock()
+            planner.state = SimpleNamespace(iteration=0)
+            sandbox_manager = MagicMock()
+            sandbox_manager.create_workspace_sandbox.return_value = str(root / "sandbox-workspace")
+            project_scanner = MagicMock()
+            project_scanner.scan_project.return_value = {"total_classes": 1, "total_files": 1}
+
+            components = {
+                "config": config,
+                "sandbox_manager": sandbox_manager,
+                "project_scanner": project_scanner,
+                "planner": planner,
+                "planner_type": "standard",
+            }
+
+            main.run_evolution(str(project_path), components)
+
+            sandbox_manager.create_workspace_sandbox.assert_not_called()
+            planner.run.assert_called_once_with(
+                stop_on_no_improvement_rounds=config.evolution.stop_on_no_improvement_rounds,
+                min_improvement_threshold=config.evolution.min_improvement_threshold,
+            )
+            self.assertEqual(planner.tools.project_path, str(project_path.resolve()))
+            self.assertEqual(planner.tools.original_project_path, str(project_path.resolve()))
+            sandbox_manager.export_test_files.assert_not_called()
 
 
 class StudyCliTests(unittest.TestCase):
@@ -987,7 +1056,7 @@ class StudyCliTests(unittest.TestCase):
                 main.main()
 
             run_cli_mock.assert_not_called()
-            self.assertEqual(len(initializer_output_roots), 6)
+            self.assertEqual(len(initializer_output_roots), 5)
             self.assertEqual(
                 java_executor.public_method_files,
                 [calculator_source],

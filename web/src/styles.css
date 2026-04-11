@@ -219,6 +219,90 @@ code {
   gap: 0.75rem;
 }
 
+.source-mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.source-mode-tab--active {
+  border-color: #0b6e4f;
+  background: #effcf6;
+  color: #0b6e4f;
+}
+
+.github-auth-section {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid #d9e2ec;
+  background: #f8fbff;
+}
+
+.github-auth-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.github-auth-badge--connected {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: #edfdf2;
+  border: 1px solid #b8e6c5;
+  color: #155724;
+  font-weight: 600;
+}
+
+.github-auth-badge--reauth {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  font-weight: 600;
+}
+
+.github-auth-badge--disconnected {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: #f0f4f8;
+  border: 1px solid #d9e2ec;
+  color: #52606d;
+  font-weight: 600;
+}
+
+.github-auth-username {
+  color: #14213d;
+  font-weight: 500;
+}
+
+.github-auth-hint {
+  color: #52606d;
+  font-size: 0.9rem;
+}
+
+.github-auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.feedback-banner--warning {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
 .primary-button,
 .secondary-button {
   border-radius: 999px;

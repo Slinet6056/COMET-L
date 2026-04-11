@@ -14,6 +14,23 @@ config-init:
 runtime-build:
     mvn clean package -f java-runtime/pom.xml
 
+docker-build tag="comet-l:multi-jdk":
+    docker build -t {{tag}} .
+
+docker-self-check tag="comet-l:multi-jdk":
+    docker run --rm {{tag}} comet-docker-self-check
+
+docker-jdk-smoke tag="comet-l:multi-jdk":
+    docker run --rm {{tag}} bash -lc 'for v in 8 11 17 21 25; do /opt/jdks/jdk-${v}/bin/java -version >/tmp/j$v.txt 2>&1 || exit 1; done'
+
+docker-runtime-smoke tag="comet-l:multi-jdk":
+    docker run --rm {{tag}} bash -lc 'uv run python -V && java -version'
+
+docker-verify tag="comet-l:multi-jdk":
+    just docker-self-check {{tag}}
+    just docker-jdk-smoke {{tag}}
+    just docker-runtime-smoke {{tag}}
+
 run project="examples/calculator-demo":
     uv run python main.py --project-path {{project}}
 
@@ -39,7 +56,7 @@ web-dev:
     pnpm --dir web dev
 
 web-serve port="8000":
-    uv run uvicorn comet.web.app:app --reload --host 0.0.0.0 --port {{port}}
+    uv run python -m uvicorn comet.web.app:app --reload --host 0.0.0.0 --port {{port}}
 
 test-web page="ResultsPage.test.tsx":
     pnpm --dir web test -- --run {{page}}

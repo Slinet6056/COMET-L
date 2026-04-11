@@ -62,20 +62,22 @@ just config-init
 
 ```yaml
 llm:
-  base_url: "https://api.openai.com/v1"
-  api_key: "your-api-key"
-  model: "gpt-4"
+  base_url: 'https://api.openai.com/v1'
+  api_key: 'your-api-key'
+  model: 'gpt-4'
 
 # RAG 知识库配置（可选）
 knowledge:
   enabled: true # 启用 RAG
   embedding:
-    model: "text-embedding-3-small"
+    model: 'text-embedding-3-small'
 
 execution:
-  runtime_java_home: "/usr/lib/jvm/java-25-openjdk"
-  target_java_home: "/usr/lib/jvm/java-8-openjdk"
+  runtime_java_home: '/usr/lib/jvm/java-25-openjdk'
+  target_java_home: '/usr/lib/jvm/java-8-openjdk'
 ```
+
+`config.yaml` 只承载运行参数（例如 LLM、执行、演化和知识库设置）。如果你要使用 GitHub 仓库模式，请通过 Docker/进程环境变量提供 GitHub OAuth 和相关部署级设置。
 
 `execution.runtime_java_home` 用于指定 COMET-L 的 `java-runtime` 与格式化器所使用的 JDK，`execution.target_java_home` 用于指定被测项目的 Maven、测试和 `javac` 所使用的 JDK。
 
@@ -209,14 +211,148 @@ just test-web-api
 just format
 just check
 just install-hooks
+
+# Docker 多 JDK 运行时
+just docker-build
+just docker-self-check
+just docker-verify
 ```
+
+### Docker 单镜像（多 JDK）
+
+仓库根目录提供了单镜像多 JDK Docker 构建产物，镜像内固定包含以下稳定路径：
+
+- `/opt/jdks/jdk-8`
+- `/opt/jdks/jdk-11`
+- `/opt/jdks/jdk-17`
+- `/opt/jdks/jdk-21`
+- `/opt/jdks/jdk-25`
+
+构建与自检示例：
+
+```bash
+just docker-build
+just docker-self-check
+just docker-verify
+```
+
+镜像内 `JAVA_HOME` 映射规则如下：
+
+- 若容器启动时显式传入 `JAVA_HOME`，入口脚本会保留该值，并把对应 `bin` 目录加入 `PATH`
+- 若未显式传入，则默认 `JAVA_HOME=/opt/jdks/jdk-25`
+- 入口脚本始终导出 `COMET_JAVA_HOME_8`、`COMET_JAVA_HOME_11`、`COMET_JAVA_HOME_17`、`COMET_JAVA_HOME_21`、`COMET_JAVA_HOME_25`
+
+也可以直接运行镜像内自检命令：
+
+```bash
+docker build -t comet-l:multi-jdk .
+docker run --rm comet-l:multi-jdk comet-docker-self-check
+```
+
+#### Docker Web 控制台运行
+
+推荐把状态、输出、沙箱和日志挂载到宿主机目录。这样 GitHub OAuth token、clone 出来的仓库、运行报告和日志在容器重启后不会丢失。运行配置建议在 Web 控制台里按需上传，不需要在容器启动时固定挂载 `config.yaml`。
+
+```bash
+# 第一次运行前准备宿主机数据目录
+mkdir -p .docker-data/{state,output,sandbox,logs}
+
+docker run --rm -it \
+  --name comet-l \
+  -p 8000:8000 \
+  -v "$PWD/.docker-data/state:/opt/comet-l/state" \
+  -v "$PWD/.docker-data/output:/opt/comet-l/output" \
+  -v "$PWD/.docker-data/sandbox:/opt/comet-l/sandbox" \
+  -v "$PWD/.docker-data/logs:/opt/comet-l/logs" \
+  -e COMET_GITHUB_OAUTH_CLIENT_ID='你的 Client ID' \
+  -e COMET_GITHUB_OAUTH_CLIENT_SECRET='你的 Client Secret' \
+  comet-l:multi-jdk
+```
+
+镜像默认会自动启动 Web 控制台；启动后访问 `http://127.0.0.1:8000`。如果你需要进入容器 shell 或执行其他命令，可以在镜像名后显式追加命令，例如 `docker run --rm -it comet-l:multi-jdk bash`。
+
+推荐的使用方式是：
+
+1. 用 `-e COMET_GITHUB_...` 提供 GitHub 部署级配置。
+2. 打开 Web 控制台后，再上传一份只包含运行参数的 YAML。
+3. 让运行参数和 GitHub 部署级设置分别管理，不要混在同一份启动输入里。
+
+如果你还希望把 OAuth 回调地址、scope 或本地存储路径也做成部署级配置，可以额外传入：
+
+```bash
+-e COMET_GITHUB_OAUTH_REDIRECT_URI='http://127.0.0.1:8000/api/github/auth/callback' \
+-e COMET_GITHUB_OAUTH_SCOPE='repo' \
+-e COMET_GITHUB_ENCRYPTED_TOKEN_STORE_PATH='./state/github/auth/token.enc' \
+-e COMET_GITHUB_ENCRYPTED_KEY_STORE_PATH='./state/github/auth/token.key' \
+-e COMET_GITHUB_MANAGED_CLONE_ROOT='./sandbox/github-managed'
+```
+
+必须挂载的路径取决于使用方式：
+
+| 使用方式               | 需要挂载                                                | 说明                                                                                                              |
+| ---------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 只跑本地路径模式       | 本地 Maven 项目目录（如需跑本地项目）                   | 容器内必须能看到目标项目，例如把宿主机项目挂到 `/workspace/project` 后，在 UI 填 `/workspace/project`。           |
+| 使用 GitHub 仓库模式   | `state/`、`sandbox/`、`output/`、`logs/`                | GitHub token 存在 `state/`，受管 clone 默认在 `sandbox/github-managed`，报告在 `output/runs/{run_id}/report.md`。 |
+| 希望重启后保留历史记录 | `state/`、`output/`、`logs/`                            | `state/` 保存运行会话与数据库，`output/` 保存 artifact，`logs/` 保存运行日志。                                    |
+
+如果要让容器处理宿主机上的本地 Maven 项目，再额外挂载项目目录：
+
+```bash
+docker run --rm -it \
+  -p 8000:8000 \
+  -v "$PWD/.docker-data/state:/opt/comet-l/state" \
+  -v "$PWD/.docker-data/output:/opt/comet-l/output" \
+  -v "$PWD/.docker-data/sandbox:/opt/comet-l/sandbox" \
+  -v "$PWD/.docker-data/logs:/opt/comet-l/logs" \
+  -v "/absolute/path/to/maven-project:/workspace/project" \
+  comet-l:multi-jdk
+```
+
+然后在 Web 首页选择“本地路径”，项目路径填写 `/workspace/project`。
+
+#### GitHub OAuth 配置
+
+只使用本地路径模式时，不需要 GitHub 配置。使用 GitHub 仓库导入、自动 push 和创建 PR 时，需要在 GitHub 创建 OAuth App：
+
+1. 打开 GitHub `Settings` → `Developer settings` → `OAuth Apps` → `New OAuth App`。
+2. `Homepage URL` 可以填 `http://127.0.0.1:8000`。
+3. `Authorization callback URL` 必须与 `COMET_GITHUB_OAUTH_REDIRECT_URI` 一致；如果没有显式传环境变量，默认是 `http://127.0.0.1:8000/api/github/auth/callback`。
+4. 创建后在启动容器时传入 `Client ID` 和 `Client Secret`：
+
+```bash
+docker run --rm -it \
+  -p 8000:8000 \
+  -v "$PWD/.docker-data/state:/opt/comet-l/state" \
+  -v "$PWD/.docker-data/output:/opt/comet-l/output" \
+  -v "$PWD/.docker-data/sandbox:/opt/comet-l/sandbox" \
+  -v "$PWD/.docker-data/logs:/opt/comet-l/logs" \
+  -e COMET_GITHUB_OAUTH_CLIENT_ID='你的 Client ID' \
+  -e COMET_GITHUB_OAUTH_CLIENT_SECRET='你的 Client Secret' \
+  -e COMET_GITHUB_OAUTH_REDIRECT_URI='http://127.0.0.1:8000/api/github/auth/callback' \
+  -e COMET_GITHUB_OAUTH_SCOPE='repo' \
+  -e COMET_GITHUB_ENCRYPTED_TOKEN_STORE_PATH='./state/github/auth/token.enc' \
+  -e COMET_GITHUB_ENCRYPTED_KEY_STORE_PATH='./state/github/auth/token.key' \
+  -e COMET_GITHUB_MANAGED_CLONE_ROOT='./sandbox/github-managed' \
+  comet-l:multi-jdk
+```
+
+运行配置（例如 `llm.api_key`、预算、开关等）建议在 Web 控制台中通过上传 YAML 或表单填写，避免把一次性运行参数和容器部署参数混在同一个 `config.yaml` 里。GitHub OAuth、token 存储路径和受管 clone 目录始终以部署时环境变量或服务端默认值为准。
+
+`oauth_scope: "repo"` 用于访问私有仓库、push 同仓分支并创建 PR。如果只处理公开仓库，可以按你的安全策略收窄 scope，但同仓 push/PR 仍需要 GitHub 授权具备写权限。
+
+token 不会写入 `config.yaml` 或浏览器本地存储。系统会优先使用系统 keyring；容器里通常没有可用 keyring，因此会退回到本地加密文件：
+
+- 加密 token：`state/github/auth/token.enc`
+- fallback 密钥：`state/github/auth/token.key`
+
+因此 Docker 运行时建议持久化挂载 `/opt/comet-l/state`。如果删除该目录，前端会显示未连接，需要重新授权 GitHub。
 
 ### 当前本地限制
 
 - Web 控制台当前按单用户本地场景设计，不包含多用户隔离与权限控制。
 - 同一时刻只允许一个 active run；若已有运行中的任务，新的 `POST /api/runs` 会返回冲突错误。
-- 项目路径输入必须是本机可访问的 Maven 项目绝对路径或可解析本地路径，后端不会代理远程文件系统。
-- 结果页只暴露 `final_state.json` 与 `run.log` 下载入口，不提供原始数据库文件下载。
+- 本地路径模式下，项目路径必须是容器或本机可访问的 Maven 项目路径；GitHub 仓库模式下只支持 `https://github.com/{owner}/{repo}` 或 `.git` 结尾形式。
+- 结果页只暴露 `final_state.json`、`run.log` 与 `report.md` 下载入口，不提供原始数据库文件下载。
 
 ## 使用示例
 

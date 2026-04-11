@@ -38,6 +38,13 @@ class RunCreateResponse(BaseModel):
     mode: str
 
 
+class RunRequestPayload(BaseModel):
+    projectPath: str
+    githubRepoUrl: str | None = None
+    githubBaseBranch: str | None = None
+    selectedJavaVersion: str | None = None
+
+
 class ArtifactSummary(BaseModel):
     exists: bool
     downloadUrl: str | None = None
@@ -77,6 +84,7 @@ class RunSnapshotResponse(BaseModel):
     runId: str
     status: str
     mode: str
+    selectedJavaVersion: str | None = None
     mutationEnabled: bool | None = None
     iteration: int
     llmCalls: int
@@ -96,6 +104,7 @@ class RunHistoryEntry(BaseModel):
     runId: str
     status: str
     mode: str
+    selectedJavaVersion: str | None = None
     mutationEnabled: bool | None = None
     projectPath: str
     configPath: str
@@ -171,6 +180,7 @@ class RunResultsResponse(BaseModel):
     runId: str
     status: str
     mode: str
+    selectedJavaVersion: str | None = None
     mutationEnabled: bool | None = None
     iteration: int
     llmCalls: int
@@ -178,3 +188,6 @@ class RunResultsResponse(BaseModel):
     phase: RunPhase
     summary: RunResultsSummary
     artifacts: dict[str, RunResultsArtifact]
+    pullRequestUrl: str | None = None
+    pullRequestError: str | None = None
+    reportArtifact: RunResultsArtifact

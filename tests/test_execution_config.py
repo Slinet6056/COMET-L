@@ -116,6 +116,30 @@ class ExecutionConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "TARGET_JAVA_HOME"):
             config.resolve_target_java_cmd()
 
+    def test_selected_java_version_maps_to_registry_target_java_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            selected_home = Path(tmp_dir) / "jdk-17"
+            selected_bin = selected_home / "bin"
+            selected_bin.mkdir(parents=True)
+            (selected_bin / "java").write_text("", encoding="utf-8")
+            (selected_bin / "javac").write_text("", encoding="utf-8")
+
+            config = ExecutionConfig(
+                selected_java_version="17",
+                java_version_registry={"17": str(selected_home)},
+            )
+
+            target_env = config.build_target_subprocess_env(base_env={"PATH": "/usr/bin"})
+            self.assertEqual(config.get_target_java_home(), str(selected_home.resolve()))
+            self.assertEqual(config.resolve_target_java_cmd(), str(selected_bin / "java"))
+            self.assertEqual(config.resolve_target_javac_cmd(), str(selected_bin / "javac"))
+            self.assertEqual(target_env["JAVA_HOME"], str(selected_home.resolve()))
+            self.assertEqual(target_env["PATH"], f"{selected_bin.resolve()}:/usr/bin")
+
+    def test_selected_java_version_rejects_unsupported_version(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "不支持的 Java 版本: 99"):
+            _ = ExecutionConfig(selected_java_version="99")
+
 
 if __name__ == "__main__":
     unittest.main()

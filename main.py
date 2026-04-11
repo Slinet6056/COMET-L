@@ -208,6 +208,13 @@ def _add_default_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="并行目标数（覆盖配置文件）",
     )
 
+    parser.add_argument(
+        "--selected-java-version",
+        type=str,
+        default=None,
+        help="目标项目执行使用的 Java 版本（可选: 8/11/17/21/25）",
+    )
+
 
 def parse_args(argv: Optional[list[str]] = None):
     """解析命令行参数"""
@@ -404,6 +411,7 @@ def initialize_system(
     target_javac_cmd = config.execution.resolve_target_javac_cmd()
     mvn_cmd = config.execution.resolve_mvn_cmd()
     target_java_home = config.execution.get_target_java_home()
+    selected_java_version = config.execution.selected_java_version
 
     runtime_java_home = config.execution.get_runtime_java_home()
     if runtime_java_home:
@@ -413,6 +421,9 @@ def initialize_system(
     if target_java_home:
         logger.info(f"使用 target Java: {target_java_home}")
         logger.info(f"使用 target javac 可执行文件: {target_javac_cmd}")
+
+    if selected_java_version:
+        logger.info(f"目标项目 Java 版本选择: {selected_java_version}")
 
     if config.execution.maven_home:
         logger.info(f"使用配置的 MAVEN_HOME: {target_env['MAVEN_HOME']}")
@@ -609,17 +620,29 @@ def run_evolution(
     planner_type = components.get("planner_type", "standard")
     runtime_snapshot_publisher = components.get("runtime_snapshot_publisher")
 
+    resolved_project_path = str(Path(project_path).expanduser().resolve())
+    managed_clone_root = Path(config.github.managed_clone_root).expanduser().resolve()
+    use_managed_workspace = bool(config.github.repo_url) and Path(
+        resolved_project_path
+    ).is_relative_to(managed_clone_root)
+
+    execution_project_path = resolved_project_path
+
     # 扫描项目，建立类到文件的映射
     logger.info("扫描项目，建立类到文件的映射...")
-    scan_result = project_scanner.scan_project(project_path, use_cache=True)
+    scan_result = project_scanner.scan_project(execution_project_path, use_cache=True)
     logger.info(
         f"项目扫描完成: {scan_result['total_classes']} 个类, {scan_result['total_files']} 个文件"
     )
 
     # 创建工作空间沙箱
-    logger.info("创建工作空间沙箱...")
-    workspace_sandbox = sandbox_manager.create_workspace_sandbox(project_path)
-    logger.info(f"工作空间沙箱: {workspace_sandbox}")
+    if use_managed_workspace:
+        workspace_sandbox = execution_project_path
+        logger.info(f"GitHub 受管仓库模式，直接使用 clone 工作目录: {workspace_sandbox}")
+    else:
+        logger.info("创建工作空间沙箱...")
+        workspace_sandbox = sandbox_manager.create_workspace_sandbox(execution_project_path)
+        logger.info(f"工作空间沙箱: {workspace_sandbox}")
 
     # 根据模式创建/获取 planner
     if planner_type == "parallel":
@@ -645,7 +668,7 @@ def run_evolution(
             java_executor=components["java_executor"],
             sandbox_manager=sandbox_manager,
             database=components["db"],
-            project_path=project_path,
+            project_path=workspace_sandbox,
             workspace_path=workspace_sandbox,
             max_parallel_targets=parallel_config.max_parallel_targets,
             max_eval_workers=parallel_config.max_eval_workers,
@@ -660,7 +683,7 @@ def run_evolution(
         # 设置 tools 的状态
         components["tools"].state = planner.state
         components["tools"].project_path = workspace_sandbox
-        components["tools"].original_project_path = project_path
+        components["tools"].original_project_path = workspace_sandbox
 
         logger.info(
             f"并行 Agent 已初始化: "
@@ -674,9 +697,9 @@ def run_evolution(
         # 设置 tools 使用沙箱路径
         if hasattr(planner, "tools") and hasattr(planner.tools, "project_path"):
             planner.tools.project_path = workspace_sandbox  # 工作路径（沙箱）
-            planner.tools.original_project_path = project_path  # 保存原始路径
+            planner.tools.original_project_path = workspace_sandbox
             logger.info(f"已设置沙箱路径到 AgentTools: {workspace_sandbox}")
-            logger.info(f"原始项目路径: {project_path}")
+            logger.info(f"原始项目路径: {workspace_sandbox}")
 
     # 运行主循环（包括预处理）
     snapshot_stop_event = threading.Event()
@@ -718,9 +741,13 @@ def run_evolution(
         planner.save_state(str(state_file))
         logger.info(f"最终状态已保存: {state_file}")
 
+        if use_managed_workspace:
+            logger.info("GitHub 受管仓库模式，无需从 sandbox 回写测试文件")
+            return
+
         logger.info("=" * 60)
         logger.info("导出测试文件到原项目...")
-        sandbox_manager.export_test_files("workspace", project_path)
+        sandbox_manager.export_test_files("workspace", execution_project_path)
         logger.info("=" * 60)
 
     try:
@@ -747,7 +774,7 @@ def run_evolution(
                     from comet.parallel_preprocessing import ParallelPreprocessor
 
                     preprocessor = ParallelPreprocessor(config, components)
-                    preprocess_stats = preprocessor.run(project_path, workspace_sandbox)
+                    preprocess_stats = preprocessor.run(execution_project_path, workspace_sandbox)
 
                     logger.info("=" * 60)
                     logger.info("并行预处理完成")
@@ -876,8 +903,11 @@ def run_evolution(
         publish_runtime_snapshot(phase_key="failed", phase_label="Interrupted")
 
         # 即使中断也导出测试文件
-        logger.info("导出当前测试文件到原项目...")
-        sandbox_manager.export_test_files("workspace", project_path)
+        if use_managed_workspace:
+            logger.info("GitHub 受管仓库模式，跳过中断时 sandbox 回写")
+        else:
+            logger.info("导出当前测试文件到原项目...")
+            sandbox_manager.export_test_files("workspace", execution_project_path)
 
         logger.info("可使用 --resume 参数恢复")
 
@@ -886,8 +916,11 @@ def run_evolution(
         publish_runtime_snapshot(phase_key="failed", phase_label="Failed")
         # 出错时也尝试导出已生成的测试
         try:
-            logger.info("尝试导出已生成的测试文件...")
-            sandbox_manager.export_test_files("workspace", project_path)
+            if use_managed_workspace:
+                logger.info("GitHub 受管仓库模式，失败时跳过 sandbox 回写")
+            else:
+                logger.info("尝试导出已生成的测试文件...")
+                sandbox_manager.export_test_files("workspace", execution_project_path)
         except Exception:
             pass
         raise

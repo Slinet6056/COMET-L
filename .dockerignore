@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.sisyphus/
+state/
+output/
+sandbox/
+logs/
+web/node_modules/
+web/dist/
+java-runtime/target/
+config.yaml

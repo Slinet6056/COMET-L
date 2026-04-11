@@ -7,6 +7,9 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .git_pr_service import GitHubPullRequestService
+from .github_auth_service import GitHubOAuthService
+from .repo_import_service import GitHubRepoImportService
 from .routes import AppServices, router
 from .run_service import RunLifecycleService
 
@@ -14,6 +17,7 @@ from .run_service import RunLifecycleService
 def create_app(
     *,
     run_service: RunLifecycleService | None = None,
+    github_auth_service: GitHubOAuthService | None = None,
     default_config_path: Path | None = None,
     frontend_dist_path: Path | None = None,
     system_initializer: Callable[..., dict[str, object]] | None = None,
@@ -22,8 +26,17 @@ def create_app(
     repo_root = Path(__file__).resolve().parents[2]
     app = FastAPI(title="COMET-L Web API")
     dist_path = frontend_dist_path or repo_root / "web" / "dist"
+    resolved_github_auth_service = github_auth_service or GitHubOAuthService()
+    resolved_run_service = run_service or RunLifecycleService(workspace_root=repo_root)
+    resolved_run_service.set_repo_import_service(
+        GitHubRepoImportService(github_auth_service=resolved_github_auth_service)
+    )
+    resolved_run_service.set_pull_request_service(
+        GitHubPullRequestService(github_auth_service=resolved_github_auth_service)
+    )
     app.state.services = AppServices(
-        run_service=run_service or RunLifecycleService(workspace_root=repo_root),
+        run_service=resolved_run_service,
+        github_auth_service=resolved_github_auth_service,
         default_config_path=default_config_path or repo_root / "config.example.yaml",
         system_initializer=system_initializer,
         evolution_runner=evolution_runner,

@@ -333,4 +333,169 @@ describe('Run results page', () => {
     expectMetricValue('变异体状态', '未启用');
     expect(screen.queryByText('80.0%')).not.toBeInTheDocument();
   });
+
+  it('shows PR link when pullRequestUrl is present', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              pullRequestUrl: 'https://github.com/example/repo/pull/123',
+              reportArtifact: {
+                exists: true,
+                filename: 'report.md',
+                contentType: 'text/markdown',
+                sizeBytes: 512,
+                updatedAt: '2026-03-10T10:05:02Z',
+                downloadUrl: '/api/runs/run-42/artifacts/report',
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Pull Request 链接' })).toBeInTheDocument();
+    const prLink = screen.getByTestId('pr-link');
+    expect(prLink).toHaveAttribute('href', 'https://github.com/example/repo/pull/123');
+    expect(prLink).toHaveAttribute('target', '_blank');
+    expect(prLink).toHaveTextContent('查看 Pull Request');
+  });
+
+  it('shows PR failure message when pullRequestUrl is absent but report exists', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              pullRequestUrl: null,
+              pullRequestError: '创建 GitHub PR 失败: HTTP 422 - Validation Failed',
+              reportArtifact: {
+                exists: true,
+                filename: 'report.md',
+                contentType: 'text/markdown',
+                sizeBytes: 512,
+                updatedAt: '2026-03-10T10:05:02Z',
+                downloadUrl: '/api/runs/run-42/artifacts/report',
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Pull Request 创建失败' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('创建 GitHub PR 失败: HTTP 422 - Validation Failed'),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('pr-link')).not.toBeInTheDocument();
+  });
+
+  it('shows report download link when reportArtifact exists', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              reportArtifact: {
+                exists: true,
+                filename: 'report.md',
+                contentType: 'text/markdown',
+                sizeBytes: 512,
+                updatedAt: '2026-03-10T10:05:02Z',
+                downloadUrl: '/api/runs/run-42/artifacts/report',
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '工件下载' })).toBeInTheDocument();
+    const reportLink = screen.getByTestId('report-download-link');
+    expect(reportLink).toHaveAttribute('href', '/api/runs/run-42/artifacts/report');
+    expect(reportLink).toHaveTextContent('下载 report.md');
+  });
+
+  it('shows Java version badge when selectedJavaVersion is present', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              selectedJavaVersion: '17',
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('java-version-badge')).toBeInTheDocument();
+    expect(screen.getByTestId('java-version-badge')).toHaveTextContent('Java 版本：17');
+  });
+
+  it('hides Java version badge when selectedJavaVersion is absent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(buildResults());
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '最终统计' })).toBeInTheDocument();
+    expect(screen.queryByTestId('java-version-badge')).not.toBeInTheDocument();
+  });
 });

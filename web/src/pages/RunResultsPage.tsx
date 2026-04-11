@@ -177,8 +177,8 @@ function getDisplayMutationScore(results: RunResultsResponse): number | null | u
   return preferredScore;
 }
 
-function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact }) {
-  const { title, artifact } = props;
+function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact; testId?: string }) {
+  const { title, artifact, testId } = props;
 
   if (!artifact) {
     return (
@@ -217,7 +217,7 @@ function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact }) {
       </dl>
 
       {artifact.exists ? (
-        <a className="artifact-link" href={artifact.downloadUrl}>
+        <a className="artifact-link" href={artifact.downloadUrl} data-testid={testId}>
           下载 {artifact.filename}
         </a>
       ) : (
@@ -311,6 +311,11 @@ export function RunResultsPage() {
           <span className="run-badge">阶段：{translatePhaseLabel(results.phase.label)}</span>
           <span className="run-badge">模式：{translateStatus(results.mode)}</span>
           <span className="run-badge">迭代次数：{results.iteration}</span>
+          {results.selectedJavaVersion && (
+            <span className="run-badge" data-testid="java-version-badge">
+              Java 版本：{results.selectedJavaVersion}
+            </span>
+          )}
         </div>
       </div>
 
@@ -442,8 +447,41 @@ export function RunResultsPage() {
         <div className="artifact-grid">
           <ArtifactCard title="最终状态 JSON" artifact={results.artifacts.finalState} />
           <ArtifactCard title="运行日志" artifact={results.artifacts.runLog} />
+          {results.reportArtifact && (
+            <ArtifactCard
+              title="Markdown 报告"
+              artifact={results.reportArtifact}
+              testId="report-download-link"
+            />
+          )}
         </div>
       </section>
+
+      {results.pullRequestUrl ? (
+        <section className="run-card" aria-labelledby="results-pr-link">
+          <p className="eyebrow">Pull Request</p>
+          <h3 id="results-pr-link">Pull Request 链接</h3>
+          <p className="muted-copy">测试文件已提交至 GitHub 仓库并创建 Pull Request。</p>
+          <a
+            className="artifact-link"
+            href={results.pullRequestUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="pr-link"
+          >
+            查看 Pull Request
+          </a>
+        </section>
+      ) : results.reportArtifact?.exists ? (
+        <section className="run-card" aria-labelledby="results-pr-failure">
+          <p className="eyebrow">Pull Request</p>
+          <h3 id="results-pr-failure">Pull Request 创建失败</h3>
+          <p className="muted-copy">
+            {results.pullRequestError?.trim() ||
+              '报告已生成，但 Pull Request 创建失败。请检查 GitHub 授权状态或仓库权限。'}
+          </p>
+        </section>
+      ) : null}
 
       <Link to={`/runs/${runId}`}>返回运行详情</Link>
     </section>

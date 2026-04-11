@@ -1,5 +1,6 @@
 import json
 import logging
+import subprocess
 import tempfile
 import threading
 import time
@@ -8,7 +9,10 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
+import httpx
 from fastapi.testclient import TestClient
 
 from comet.agent.state import AgentState, ParallelAgentState, WorkerResult
@@ -19,6 +23,7 @@ from comet.store.database import Database
 from comet.utils.log_context import log_context
 from comet.utils.method_keys import build_method_key
 from comet.web.app import app, create_app
+from comet.web.github_auth_service import GitHubAuthStatus, GitHubOAuthService, GitHubTokenStorage
 from comet.web.log_router import RunLogRouter
 from comet.web.run_service import RunLifecycleService, RunRequest
 from comet.web.runtime_protocol import RuntimeEventBus, build_run_snapshot
@@ -249,6 +254,611 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "invalid_config")
         self.assertTrue(any(item["path"] == ["paths"] for item in payload["error"]["fieldErrors"]))
 
+    def test_parse_yaml_filters_github_deployment_config(self) -> None:
+        client = TestClient(create_app(run_service=RunLifecycleService()))
+
+        response = client.post(
+            "/api/config/parse",
+            files={
+                "file": (
+                    "config.yaml",
+                    BytesIO(
+                        (
+                            "llm:\n"
+                            "  api_key: test-key\n"
+                            "github:\n"
+                            "  oauth_client_id: uploaded-client-id\n"
+                            "  managed_clone_root: /tmp/uploaded-managed-root\n"
+                        ).encode("utf-8")
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload["config"]["github"]["oauth_client_id"])
+        self.assertEqual(
+            payload["config"]["github"]["managed_clone_root"],
+            "./sandbox/github-managed",
+        )
+
+    def test_defaults_endpoint_prefers_github_oauth_env_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            default_config_path = root / "config.example.yaml"
+            default_config_path.write_text(
+                "llm:\n  api_key: default-key\n",
+                encoding="utf-8",
+            )
+            client = TestClient(
+                create_app(
+                    run_service=RunLifecycleService(workspace_root=root),
+                    default_config_path=default_config_path,
+                )
+            )
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "COMET_GITHUB_OAUTH_CLIENT_ID": "env-client-id",
+                    "COMET_GITHUB_OAUTH_CLIENT_SECRET": "env-client-secret",
+                    "COMET_GITHUB_OAUTH_REDIRECT_URI": "http://127.0.0.1:9000/api/github/auth/callback",
+                    "COMET_GITHUB_OAUTH_SCOPE": "public_repo",
+                },
+                clear=False,
+            ):
+                response = client.get("/api/config/defaults")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()["config"]["github"]
+            self.assertEqual(payload["oauth_client_id"], "env-client-id")
+            self.assertEqual(payload["oauth_client_secret"], "env-client-secret")
+            self.assertEqual(
+                payload["oauth_redirect_uri"],
+                "http://127.0.0.1:9000/api/github/auth/callback",
+            )
+            self.assertEqual(payload["oauth_scope"], "public_repo")
+
+
+class _FailingKeyring:
+    def get_password(self, service_name: str, account_name: str) -> str | None:
+        del service_name, account_name
+        raise RuntimeError("keyring unavailable")
+
+    def set_password(self, service_name: str, account_name: str, password: str) -> None:
+        del service_name, account_name, password
+        raise RuntimeError("keyring unavailable")
+
+    def delete_password(self, service_name: str, account_name: str) -> None:
+        del service_name, account_name
+        raise RuntimeError("keyring unavailable")
+
+
+class _AlwaysAuthorizedGitHubOAuthService(GitHubOAuthService):
+    def get_status(self, github_config: Any) -> GitHubAuthStatus:
+        del github_config
+        return GitHubAuthStatus(
+            connected=True,
+            requires_reauth=False,
+            message="GitHub 已连接。",
+        )
+
+    def get_access_token(self, github_config: Any) -> str:
+        del github_config
+        return "gho-test-valid"
+
+
+class GitHubAuthApiTests(unittest.TestCase):
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    root: Path | None = None
+    project_path: Path | None = None
+    default_config_path: Path | None = None
+    run_service: RunLifecycleService | None = None
+    github_auth_service: GitHubOAuthService | None = None
+    client: TestClient | None = None
+    env_patcher: Any = None
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.project_path = self.root / "project"
+        self.project_path.mkdir(parents=True)
+        (self.project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+        token_path = self.root / "state" / "github" / "auth" / "token.enc"
+        key_path = self.root / "state" / "github" / "auth" / "token.key"
+        self.default_config_path = self.root / "config.example.yaml"
+        self.default_config_path.write_text(
+            "llm:\n  api_key: default-key\n  model: gpt-4\n",
+            encoding="utf-8",
+        )
+        self.env_patcher = patch.dict(
+            "os.environ",
+            {
+                "COMET_GITHUB_OAUTH_CLIENT_ID": "test-client-id",
+                "COMET_GITHUB_OAUTH_CLIENT_SECRET": "test-client-secret",
+                "COMET_GITHUB_OAUTH_REDIRECT_URI": "http://127.0.0.1:8000/api/github/auth/callback",
+                "COMET_GITHUB_OAUTH_SCOPE": "repo",
+                "COMET_GITHUB_ENCRYPTED_TOKEN_STORE_PATH": token_path.as_posix(),
+                "COMET_GITHUB_ENCRYPTED_KEY_STORE_PATH": key_path.as_posix(),
+            },
+            clear=False,
+        )
+        self.env_patcher.start()
+
+        self.run_service = RunLifecycleService(workspace_root=self.root)
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/login/oauth/access_token"):
+                return httpx.Response(200, json={"access_token": "gho-test-valid"})
+
+            if request.url.path.endswith("/applications/test-client-id/token"):
+                body = json.loads(request.content.decode("utf-8"))
+                token = body.get("access_token")
+                if token == "gho-test-valid":
+                    return httpx.Response(200, json={"token": "ok"})
+                if token == "gho-test-expired":
+                    return httpx.Response(404, json={"message": "Not Found"})
+                return httpx.Response(401, json={"message": "Bad credentials"})
+
+            return httpx.Response(404, json={"message": "not implemented"})
+
+        transport = httpx.MockTransport(_handler)
+        storage = GitHubTokenStorage(keyring_backend=_FailingKeyring())
+        self.github_auth_service = GitHubOAuthService(
+            storage=storage,
+            http_client_factory=lambda: httpx.Client(transport=transport, timeout=10.0),
+        )
+        self.client = TestClient(
+            create_app(
+                run_service=self.run_service,
+                default_config_path=self.default_config_path,
+                github_auth_service=self.github_auth_service,
+            )
+        )
+
+    def tearDown(self) -> None:
+        if self.env_patcher is not None:
+            self.env_patcher.stop()
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
+
+    def _github_files(self) -> tuple[Path, Path]:
+        assert self.default_config_path is not None
+        settings = Settings.from_yaml(str(self.default_config_path))
+        token_path = Path(settings.github.encrypted_token_store_path).expanduser()
+        key_path = Path(settings.github.encrypted_key_store_path).expanduser()
+        return token_path, key_path
+
+    def test_github_auth_status_reports_unauthorized_when_never_connected(self) -> None:
+        assert self.client is not None
+        response = self.client.get("/api/github/auth/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["connected"])
+        self.assertFalse(payload["requiresReauth"])
+        self.assertEqual(payload["provider"], "github-oauth-app")
+
+    def test_github_auth_callback_persists_encrypted_token_and_marks_connected(self) -> None:
+        assert self.client is not None
+        connect_response = self.client.get("/api/github/auth/connect-url")
+        self.assertEqual(connect_response.status_code, 200)
+        connect_url = connect_response.json()["connectUrl"]
+        query = parse_qs(urlparse(connect_url).query)
+        state = query["state"][0]
+
+        callback_response = self.client.get(f"/api/github/auth/callback?code=ok-code&state={state}")
+        self.assertEqual(callback_response.status_code, 200)
+        callback_payload = callback_response.json()
+        self.assertTrue(callback_payload["connected"])
+        self.assertFalse(callback_payload["requiresReauth"])
+
+        token_path, key_path = self._github_files()
+        self.assertTrue(token_path.exists())
+        self.assertTrue(key_path.exists())
+        self.assertNotIn("gho-test-valid", token_path.read_text(encoding="utf-8"))
+        self.assertNotIn("gho-test-valid", key_path.read_text(encoding="utf-8"))
+
+        status_response = self.client.get("/api/github/auth/status")
+        self.assertEqual(status_response.status_code, 200)
+        status_payload = status_response.json()
+        self.assertTrue(status_payload["connected"])
+        self.assertFalse(status_payload["requiresReauth"])
+
+    def test_github_auth_callback_redirects_browser_requests_back_to_home(self) -> None:
+        assert self.client is not None
+        connect_response = self.client.get("/api/github/auth/connect-url")
+        state = parse_qs(urlparse(connect_response.json()["connectUrl"]).query)["state"][0]
+
+        callback_response = self.client.get(
+            f"/api/github/auth/callback?code=ok-code&state={state}",
+            headers={"accept": "text/html,application/xhtml+xml"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(callback_response.status_code, 303)
+        self.assertEqual(
+            callback_response.headers["location"],
+            "/?github_oauth=connected",
+        )
+
+        status_response = self.client.get("/api/github/auth/status")
+        self.assertEqual(status_response.status_code, 200)
+        self.assertTrue(status_response.json()["connected"])
+
+    def test_github_auth_callback_redirects_browser_errors_back_to_home(self) -> None:
+        assert self.client is not None
+
+        callback_response = self.client.get(
+            "/api/github/auth/callback?code=ok-code&state=missing-state",
+            headers={"accept": "text/html,application/xhtml+xml"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(callback_response.status_code, 303)
+        self.assertEqual(
+            callback_response.headers["location"],
+            "/?github_oauth=error&message=OAuth+%E5%9B%9E%E8%B0%83%E7%8A%B6%E6%80%81%E6%97%A0%E6%95%88%E6%88%96%E5%B7%B2%E8%BF%87%E6%9C%9F%EF%BC%8C%E8%AF%B7%E9%87%8D%E6%96%B0%E5%8F%91%E8%B5%B7%E6%8E%88%E6%9D%83%E3%80%82",
+        )
+
+    def test_github_auth_callback_returns_json_for_generic_accept_header(self) -> None:
+        assert self.client is not None
+        connect_response = self.client.get("/api/github/auth/connect-url")
+        state = parse_qs(urlparse(connect_response.json()["connectUrl"]).query)["state"][0]
+
+        callback_response = self.client.get(
+            f"/api/github/auth/callback?code=ok-code&state={state}",
+            headers={"accept": "*/*"},
+        )
+
+        self.assertEqual(callback_response.status_code, 200)
+        self.assertTrue(callback_response.json()["connected"])
+
+    def test_github_auth_callback_handles_browser_cancel_redirect(self) -> None:
+        assert self.client is not None
+        connect_response = self.client.get("/api/github/auth/connect-url")
+        state = parse_qs(urlparse(connect_response.json()["connectUrl"]).query)["state"][0]
+
+        callback_response = self.client.get(
+            f"/api/github/auth/callback?error=access_denied&state={state}",
+            headers={"accept": "text/html,application/xhtml+xml"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(callback_response.status_code, 303)
+        self.assertEqual(
+            callback_response.headers["location"],
+            "/?github_oauth=error&message=GitHub+%E6%8E%88%E6%9D%83%E5%B7%B2%E5%8F%96%E6%B6%88%EF%BC%8C%E8%AF%B7%E9%87%8D%E6%96%B0%E5%8F%91%E8%B5%B7%E6%8E%88%E6%9D%83%E3%80%82",
+        )
+
+    def test_github_auth_status_reports_reauth_when_token_expired(self) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        assert self.github_auth_service is not None
+        settings = Settings.from_yaml(str(self.default_config_path))
+        self.github_auth_service._storage.write_token(settings.github, "gho-test-expired")
+
+        response = self.client.get("/api/github/auth/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["connected"])
+        self.assertTrue(payload["requiresReauth"])
+
+    def test_github_auth_status_restores_after_restart_from_local_storage(self) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        assert self.root is not None
+        connect_response = self.client.get("/api/github/auth/connect-url")
+        state = parse_qs(urlparse(connect_response.json()["connectUrl"]).query)["state"][0]
+        callback_response = self.client.get(f"/api/github/auth/callback?code=ok-code&state={state}")
+        self.assertEqual(callback_response.status_code, 200)
+
+        transport = httpx.MockTransport(lambda request: self._restart_mock_handler(request))
+        restarted_service = GitHubOAuthService(
+            storage=GitHubTokenStorage(keyring_backend=_FailingKeyring()),
+            http_client_factory=lambda: httpx.Client(transport=transport, timeout=10.0),
+        )
+        restarted_client = TestClient(
+            create_app(
+                run_service=RunLifecycleService(workspace_root=self.root),
+                default_config_path=self.default_config_path,
+                github_auth_service=restarted_service,
+            )
+        )
+
+        status_response = restarted_client.get("/api/github/auth/status")
+        self.assertEqual(status_response.status_code, 200)
+        self.assertTrue(status_response.json()["connected"])
+
+    def _restart_mock_handler(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/applications/test-client-id/token"):
+            body = json.loads(request.content.decode("utf-8"))
+            if body.get("access_token") == "gho-test-valid":
+                return httpx.Response(200, json={"token": "ok"})
+            return httpx.Response(404, json={"message": "Not Found"})
+        if request.url.path.endswith("/login/oauth/access_token"):
+            return httpx.Response(200, json={"access_token": "gho-test-valid"})
+        return httpx.Response(404, json={"message": "not implemented"})
+
+    def test_github_auth_disconnect_clears_only_github_auth_state(self) -> None:
+        assert self.client is not None
+        connect_response = self.client.get("/api/github/auth/connect-url")
+        state = parse_qs(urlparse(connect_response.json()["connectUrl"]).query)["state"][0]
+        callback_response = self.client.get(f"/api/github/auth/callback?code=ok-code&state={state}")
+        self.assertEqual(callback_response.status_code, 200)
+
+        disconnect_response = self.client.post("/api/github/auth/disconnect")
+        self.assertEqual(disconnect_response.status_code, 200)
+        self.assertFalse(disconnect_response.json()["connected"])
+
+        token_path, key_path = self._github_files()
+        self.assertFalse(token_path.exists())
+        self.assertFalse(key_path.exists())
+
+        status_response = self.client.get("/api/github/auth/status")
+        self.assertEqual(status_response.status_code, 200)
+        self.assertFalse(status_response.json()["connected"])
+
+        config_response = self.client.get("/api/config/defaults")
+        self.assertEqual(config_response.status_code, 200)
+        self.assertEqual(config_response.json()["config"]["llm"]["model"], "gpt-4")
+
+    def test_github_auth_connect_url_prefers_env_oauth_config(self) -> None:
+        assert self.client is not None
+
+        with patch.dict(
+            "os.environ",
+            {
+                "COMET_GITHUB_OAUTH_CLIENT_ID": "env-client-id",
+                "COMET_GITHUB_OAUTH_CLIENT_SECRET": "env-client-secret",
+                "COMET_GITHUB_OAUTH_REDIRECT_URI": "http://127.0.0.1:9000/api/github/auth/callback",
+                "COMET_GITHUB_OAUTH_SCOPE": "public_repo",
+            },
+            clear=False,
+        ):
+            response = self.client.get("/api/github/auth/connect-url")
+
+        self.assertEqual(response.status_code, 200)
+        connect_url = response.json()["connectUrl"]
+        query = parse_qs(urlparse(connect_url).query)
+        self.assertEqual(query["client_id"], ["env-client-id"])
+        self.assertEqual(
+            query["redirect_uri"],
+            ["http://127.0.0.1:9000/api/github/auth/callback"],
+        )
+        self.assertEqual(query["scope"], ["public_repo"])
+
+
+class GitHubRepoImportRunApiTests(unittest.TestCase):
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    root: Path | None = None
+    default_config_path: Path | None = None
+    run_service: RunLifecycleService | None = None
+    github_auth_service: GitHubOAuthService | None = None
+    client: TestClient | None = None
+    env_patcher: Any = None
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        token_path = self.root / "state" / "github" / "auth" / "token.enc"
+        key_path = self.root / "state" / "github" / "auth" / "token.key"
+        managed_clone_root = self.root / "sandbox" / "managed-clones"
+        self.default_config_path = self.root / "config.example.yaml"
+        self.default_config_path.write_text(
+            "llm:\n  api_key: default-key\n  model: gpt-4\n",
+            encoding="utf-8",
+        )
+        self.env_patcher = patch.dict(
+            "os.environ",
+            {
+                "COMET_GITHUB_OAUTH_CLIENT_ID": "test-client-id",
+                "COMET_GITHUB_OAUTH_CLIENT_SECRET": "test-client-secret",
+                "COMET_GITHUB_OAUTH_REDIRECT_URI": "http://127.0.0.1:8000/api/github/auth/callback",
+                "COMET_GITHUB_OAUTH_SCOPE": "repo",
+                "COMET_GITHUB_ENCRYPTED_TOKEN_STORE_PATH": token_path.as_posix(),
+                "COMET_GITHUB_ENCRYPTED_KEY_STORE_PATH": key_path.as_posix(),
+                "COMET_GITHUB_MANAGED_CLONE_ROOT": managed_clone_root.as_posix(),
+            },
+            clear=False,
+        )
+        self.env_patcher.start()
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/applications/test-client-id/token"):
+                body = json.loads(request.content.decode("utf-8"))
+                if body.get("access_token") == "gho-test-valid":
+                    return httpx.Response(200, json={"token": "ok"})
+                return httpx.Response(401, json={"message": "Bad credentials"})
+
+            if request.url.path.endswith("/repos/openai/example-repo"):
+                return httpx.Response(200, json={"default_branch": "develop"})
+
+            if request.url.path.endswith("/repos/openai/non-maven-repo"):
+                return httpx.Response(200, json={"default_branch": "main"})
+
+            if request.url.path.endswith("/repos/openai/no-default-branch"):
+                return httpx.Response(200, json={"default_branch": ""})
+
+            if request.url.path.endswith("/repos/openai/no-permission"):
+                return httpx.Response(403, json={"message": "Forbidden"})
+
+            return httpx.Response(404, json={"message": "not implemented"})
+
+        transport = httpx.MockTransport(_handler)
+        storage = GitHubTokenStorage(keyring_backend=_FailingKeyring())
+        self.github_auth_service = _AlwaysAuthorizedGitHubOAuthService(
+            storage=storage,
+            http_client_factory=lambda: httpx.Client(transport=transport, timeout=10.0),
+        )
+
+        self.run_service = RunLifecycleService(workspace_root=self.root)
+
+        def fake_initialize(
+            config: Settings,
+            bug_reports_dir: str | None = None,
+            parallel_mode: bool = False,
+        ) -> dict[str, object]:
+            return {
+                "config": config,
+                "bug_reports_dir": bug_reports_dir,
+                "parallel_mode": parallel_mode,
+            }
+
+        def fake_run(
+            project_path: str,
+            components: dict[str, object],
+            resume_state: str | None = None,
+        ) -> None:
+            del project_path, components, resume_state
+
+        self.client = TestClient(
+            create_app(
+                run_service=self.run_service,
+                default_config_path=self.default_config_path,
+                github_auth_service=self.github_auth_service,
+                system_initializer=fake_initialize,
+                evolution_runner=fake_run,
+            )
+        )
+
+    def tearDown(self) -> None:
+        if self.env_patcher is not None:
+            self.env_patcher.stop()
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
+
+    def _mock_clone_success(
+        self,
+        command: list[str],
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        env: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del capture_output, text, check
+        self.assertNotIn("AUTHORIZATION", " ".join(command))
+        self.assertIn("AUTHORIZATION: basic", env["GIT_CONFIG_VALUE_0"])
+        clone_path = Path(command[-1])
+        clone_path.mkdir(parents=True, exist_ok=True)
+        (clone_path / ".git").mkdir(parents=True, exist_ok=True)
+        (clone_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+        (clone_path / "src" / "main" / "java").mkdir(parents=True, exist_ok=True)
+        (clone_path / "src" / "test" / "java").mkdir(parents=True, exist_ok=True)
+        (clone_path / "src" / "test" / "resources").mkdir(parents=True, exist_ok=True)
+        (clone_path / "src" / "test" / "java" / "OldTest.java").write_text(
+            "class OldTest {}",
+            encoding="utf-8",
+        )
+        (clone_path / "src" / "test" / "resources" / "fixture.txt").write_text(
+            "fixture",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    def _mock_clone_non_maven(
+        self,
+        command: list[str],
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        env: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del capture_output, text, check, env
+        clone_path = Path(command[-1])
+        clone_path.mkdir(parents=True, exist_ok=True)
+        (clone_path / ".git").mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    def test_post_runs_imports_github_repo_into_managed_root_and_cleans_test_dirs(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        assert self.default_config_path is not None
+
+        with patch(
+            "comet.web.repo_import_service.subprocess.run",
+            side_effect=self._mock_clone_success,
+        ) as mocked_clone:
+            response = self.client.post(
+                "/api/runs",
+                data={
+                    "projectPath": "/not-used-in-github-mode",
+                    "githubRepoUrl": "https://github.com/openai/example-repo.git",
+                },
+            )
+
+        self.assertEqual(response.status_code, 201)
+        run_id = response.json()["runId"]
+        run_request = self.run_service.get_run_request(run_id)
+        imported_path = Path(run_request.project_path)
+        managed_root = (
+            Path(Settings.from_yaml(str(self.default_config_path)).github.managed_clone_root)
+            .expanduser()
+            .resolve()
+        )
+
+        self.assertTrue(imported_path.is_relative_to(managed_root))
+        self.assertTrue((imported_path / ".git").is_dir())
+        self.assertFalse((imported_path / "src" / "test" / "java").exists())
+        self.assertFalse((imported_path / "src" / "test" / "resources").exists())
+        self.assertTrue((imported_path / "src" / "main" / "java").exists())
+        self.assertEqual(run_request.github_base_branch, "develop")
+        self.assertTrue(mocked_clone.called)
+
+    def test_post_runs_rejects_non_maven_github_repo(self) -> None:
+        assert self.client is not None
+
+        with patch(
+            "comet.web.repo_import_service.subprocess.run",
+            side_effect=self._mock_clone_non_maven,
+        ):
+            response = self.client.post(
+                "/api/runs",
+                data={
+                    "projectPath": "/not-used-in-github-mode",
+                    "githubRepoUrl": "https://github.com/openai/non-maven-repo",
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "non_maven_repository")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "non_maven_repository")
+
+    def test_post_runs_reports_default_branch_resolution_failure(self) -> None:
+        assert self.client is not None
+
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectPath": "/not-used-in-github-mode",
+                "githubRepoUrl": "https://github.com/openai/no-default-branch",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "github_default_branch_unresolved")
+
+    def test_post_runs_reports_github_permission_failure_during_import(self) -> None:
+        assert self.client is not None
+
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectPath": "/not-used-in-github-mode",
+                "githubRepoUrl": "https://github.com/openai/no-permission",
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "github_unauthorized")
+
 
 class SnapshotTests(unittest.TestCase):
     def test_standard_snapshot_includes_decision_reasoning(self) -> None:
@@ -448,7 +1058,15 @@ class StreamingApiTests(unittest.TestCase):
         (self.project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
         self.default_config_path = self.root / "config.example.yaml"
         self.default_config_path.write_text(
-            "llm:\n  api_key: default-key\n  model: gpt-4\n",
+            (
+                "llm:\n"
+                "  api_key: default-key\n"
+                "  model: gpt-4\n"
+                "github:\n"
+                "  oauth_client_id: yaml-client-id\n"
+                "  oauth_client_secret: yaml-client-secret\n"
+                "  managed_clone_root: ./sandbox/default-managed-root\n"
+            ),
             encoding="utf-8",
         )
         self.run_service = RunLifecycleService(workspace_root=self.root)
@@ -626,7 +1244,7 @@ class RunApiTests(unittest.TestCase):
         self.non_maven_path.mkdir()
         self.default_config_path = self.root / "config.example.yaml"
         self.default_config_path.write_text(
-            "llm:\n  api_key: default-key\n  model: gpt-4\n",
+            ("llm:\n  api_key: default-key\n  model: gpt-4\n"),
             encoding="utf-8",
         )
         self.release_run = threading.Event()
@@ -725,33 +1343,45 @@ class RunApiTests(unittest.TestCase):
         assert self.run_started is not None
         assert self.run_service is not None
         assert self.release_run is not None
-        response = self.client.post(
-            "/api/runs",
-            data={
-                "projectPath": str(self.project_path),
-                "maxIterations": "7",
-                "budget": "42",
-                "mutationEnabled": "false",
-                "parallel": "true",
+        with patch.dict(
+            "os.environ",
+            {
+                "COMET_GITHUB_OAUTH_CLIENT_ID": "env-client-id",
+                "COMET_GITHUB_OAUTH_CLIENT_SECRET": "env-client-secret",
             },
-            files={
-                "configFile": (
-                    "config.yaml",
-                    BytesIO(
-                        (
-                            "llm:\n"
-                            "  api_key: yaml-key\n"
-                            "evolution:\n"
-                            "  mutation_enabled: true\n"
-                            "agent:\n"
-                            "  parallel:\n"
-                            "    enabled: false\n"
-                        ).encode("utf-8")
-                    ),
-                    "application/x-yaml",
-                )
-            },
-        )
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/runs",
+                data={
+                    "projectPath": str(self.project_path),
+                    "maxIterations": "7",
+                    "budget": "42",
+                    "mutationEnabled": "false",
+                    "parallel": "true",
+                    "selectedJavaVersion": "17",
+                },
+                files={
+                    "configFile": (
+                        "config.yaml",
+                        BytesIO(
+                            (
+                                "llm:\n"
+                                "  api_key: yaml-key\n"
+                                "evolution:\n"
+                                "  mutation_enabled: true\n"
+                                "agent:\n"
+                                "  parallel:\n"
+                                "    enabled: false\n"
+                                "github:\n"
+                                "  oauth_client_id: uploaded-client-id\n"
+                                "  managed_clone_root: /tmp/uploaded-managed-root\n"
+                            ).encode("utf-8")
+                        ),
+                        "application/x-yaml",
+                    )
+                },
+            )
 
         self.assertEqual(response.status_code, 201)
         created = response.json()
@@ -768,6 +1398,7 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(current_payload["runId"], run_id)
         self.assertEqual(current_payload["status"], "running")
         self.assertEqual(current_payload["mode"], "parallel")
+        self.assertEqual(current_payload["selectedJavaVersion"], "17")
         self.assertFalse(current_payload["mutationEnabled"])
         self.assertEqual(current_payload["phase"]["key"], "preprocessing")
         self.assertEqual(current_payload["phase"]["label"], "Preprocessing")
@@ -796,8 +1427,14 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(resolved_config["llm"]["api_key"], "yaml-key")
         self.assertEqual(resolved_config["evolution"]["max_iterations"], 7)
         self.assertEqual(resolved_config["evolution"]["budget_llm_calls"], 42)
+        self.assertEqual(resolved_config["execution"]["selected_java_version"], "17")
         self.assertFalse(resolved_config["evolution"]["mutation_enabled"])
         self.assertTrue(resolved_config["agent"]["parallel"]["enabled"])
+        self.assertEqual(resolved_config["github"]["oauth_client_id"], "env-client-id")
+        self.assertEqual(
+            resolved_config["github"]["managed_clone_root"],
+            "./sandbox/github-managed",
+        )
         self.assertFalse(session.config_snapshot["evolution"]["mutation_enabled"])
 
         conflict = self.client.post("/api/runs", data={"projectPath": str(self.project_path)})
@@ -811,6 +1448,7 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(completed_response.status_code, 200)
         completed_payload = completed_response.json()
         self.assertEqual(completed_payload["status"], "completed")
+        self.assertEqual(completed_payload["selectedJavaVersion"], "17")
         self.assertFalse(completed_payload["mutationEnabled"])
         self.assertEqual(completed_payload["phase"]["key"], "completed")
         self.assertEqual(completed_payload["iteration"], 2)
@@ -890,8 +1528,57 @@ class RunApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         payload = response.json()
-        self.assertEqual(payload["error"]["code"], "invalid_project_path")
-        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "not_maven_project")
+        self.assertEqual(payload["error"]["code"], "non_maven_repository")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "non_maven_repository")
+
+    def test_post_runs_rejects_invalid_github_repo_url(self) -> None:
+        assert self.client is not None
+        assert self.project_path is not None
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectPath": str(self.project_path),
+                "githubRepoUrl": "git@github.com:owner/repo.git",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "invalid_github_repo_url")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "invalid_github_repo_url")
+
+    def test_post_runs_rejects_github_repo_when_unauthorized(self) -> None:
+        assert self.client is not None
+        assert self.project_path is not None
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectPath": str(self.project_path),
+                "githubRepoUrl": "https://github.com/openai/example-repo",
+                "githubBaseBranch": "main",
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "github_unauthorized")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "github_unauthorized")
+
+    def test_post_runs_rejects_invalid_selected_java_version(self) -> None:
+        assert self.client is not None
+        assert self.project_path is not None
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectPath": str(self.project_path),
+                "selectedJavaVersion": "26",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "invalid_java_version")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "invalid_java_version")
 
 
 class ResultsApiTests(unittest.TestCase):
@@ -914,11 +1601,14 @@ class ResultsApiTests(unittest.TestCase):
         if self.temp_dir is not None:
             self.temp_dir.cleanup()
 
-    def _create_run(self) -> str:
+    def _create_run(self, *, selected_java_version: str | None = None) -> str:
         assert self.run_service is not None
         assert self.project_path is not None
         session = self.run_service.create_run(
-            RunRequest(project_path=str(self.project_path)),
+            RunRequest(
+                project_path=str(self.project_path),
+                selected_java_version=selected_java_version,
+            ),
             settings_loader=lambda _config_path: Settings.model_validate(
                 {"llm": {"api_key": "default-key", "model": "gpt-4"}}
             ),
@@ -1029,6 +1719,10 @@ class ResultsApiTests(unittest.TestCase):
         finally:
             database.close()
 
+        self.run_service.publish_runtime_snapshot(
+            run_id,
+            pullRequestUrl="https://github.com/openai/example-repo/pull/42",
+        )
         self.run_service.mark_completed(run_id)
 
     def test_results_endpoint_returns_aggregated_summary_and_artifact_metadata(
@@ -1070,10 +1764,20 @@ class ResultsApiTests(unittest.TestCase):
             payload["artifacts"]["runLog"]["downloadUrl"],
             f"/api/runs/{run_id}/artifacts/run-log",
         )
+        self.assertEqual(
+            payload["reportArtifact"]["downloadUrl"],
+            f"/api/runs/{run_id}/artifacts/report",
+        )
+        self.assertTrue(payload["reportArtifact"]["exists"])
+        self.assertEqual(
+            payload["pullRequestUrl"],
+            "https://github.com/openai/example-repo/pull/42",
+        )
         self.assertNotIn("path", payload["artifacts"]["finalState"])
         self.assertNotIn("path", payload["artifacts"]["runLog"])
         self.assertGreater(payload["artifacts"]["finalState"]["sizeBytes"], 0)
         self.assertGreater(payload["artifacts"]["runLog"]["sizeBytes"], 0)
+        self.assertGreater(payload["reportArtifact"]["sizeBytes"], 0)
 
         final_state_response = self.client.get(f"/api/runs/{run_id}/artifacts/final-state")
         self.assertEqual(final_state_response.status_code, 200)
@@ -1084,6 +1788,61 @@ class ResultsApiTests(unittest.TestCase):
         self.assertEqual(run_log_response.status_code, 200)
         self.assertEqual(run_log_response.headers["content-type"], "text/plain; charset=utf-8")
         self.assertIn("run completed", run_log_response.text)
+
+        report_response = self.client.get(f"/api/runs/{run_id}/artifacts/report")
+        self.assertEqual(report_response.status_code, 200)
+        self.assertEqual(report_response.headers["content-type"], "text/markdown; charset=utf-8")
+        self.assertIn("attachment;", report_response.headers["content-disposition"])
+        self.assertIn("report.md", report_response.headers["content-disposition"])
+        expected_sections = [
+            "## 执行摘要",
+            "## 目标仓库与基线分支",
+            "## 提交/分支信息",
+            "## Java 版本",
+            "## 生成测试文件列表",
+            "## 关键结果指标（覆盖率/变异分数/测试数）",
+            "## 失败与风险说明（若无则写“无”）",
+            "## 后续建议",
+        ]
+        last_index = -1
+        for section in expected_sections:
+            current_index = report_response.text.index(section)
+            self.assertGreater(current_index, last_index)
+            last_index = current_index
+        self.assertIn("- 变异分数: 50.00%", report_response.text)
+        self.assertIn("- 测试数: 7", report_response.text)
+        self.assertIn("- src/test/java/CalculatorAddTest.java", report_response.text)
+
+    def test_results_endpoint_includes_selected_java_version(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        run_id = self._create_run(selected_java_version="17")
+        self._write_completed_run_artifacts(run_id)
+
+        response = self.client.get(f"/api/runs/{run_id}/results")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["selectedJavaVersion"], "17")
+
+    def test_results_endpoint_includes_pull_request_failure_reason(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        session = self.run_service.get_session(run_id)
+        Path(session.paths["report_artifact"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(session.paths["report_artifact"]).write_text("# report\n", encoding="utf-8")
+        self.run_service.mark_failed(run_id, "创建 GitHub PR 失败: HTTP 422 - Validation Failed")
+
+        response = self.client.get(f"/api/runs/{run_id}/results")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload["pullRequestUrl"])
+        self.assertEqual(
+            payload["pullRequestError"],
+            "创建 GitHub PR 失败: HTTP 422 - Validation Failed",
+        )
 
     def test_results_endpoint_gracefully_degrades_when_database_is_missing(
         self,
@@ -1154,6 +1913,26 @@ class ResultsApiTests(unittest.TestCase):
         self.assertIsNone(payload["summary"]["metrics"]["globalTotalMutants"])
         self.assertEqual(payload["summary"]["metrics"]["totalTests"], 3)
         self.assertEqual(payload["summary"]["metrics"]["lineCoverage"], 0.7)
+
+    def test_report_download_uses_placeholders_when_metrics_are_missing(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        session = self.run_service.get_session(run_id)
+
+        Path(session.paths["log"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(session.paths["log"]).write_text("run completed\n", encoding="utf-8")
+        self.run_service.mark_completed(run_id)
+
+        response = self.client.get(f"/api/runs/{run_id}/artifacts/report")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("- 行覆盖率: 未提供", response.text)
+        self.assertIn("- 分支覆盖率: 未提供", response.text)
+        self.assertIn("- 变异分数: 未提供", response.text)
+        self.assertIn("- 测试数: 未提供", response.text)
+        self.assertIn("- 未生成测试文件", response.text)
+        self.assertIn("无", response.text)
 
 
 class RunHistoryApiTests(unittest.TestCase):
