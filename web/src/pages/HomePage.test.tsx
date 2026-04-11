@@ -364,6 +364,80 @@ describe('HomePage GitHub auth flow', () => {
     });
   });
 
+  it('allows manual target java home to replace selected Java version', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({
+      connected: true,
+      username: 'testuser',
+      requiresReauth: false,
+    });
+    const createRunSpy = vi.spyOn(api, 'createRun').mockResolvedValue({
+      runId: 'run-123',
+      status: 'created',
+      mode: 'github',
+    });
+    vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue({
+      runId: 'run-123',
+      status: 'created',
+      mode: 'github',
+      iteration: 0,
+      llmCalls: 0,
+      budget: 1000,
+      decisionReasoning: null,
+      currentTarget: null,
+      previousTarget: null,
+      recentImprovements: [],
+      improvementSummary: { count: 0, latest: null },
+      metrics: {
+        mutationScore: 0,
+        globalMutationScore: 0,
+        lineCoverage: 0,
+        branchCoverage: 0,
+        totalTests: 0,
+        totalMutants: 0,
+        globalTotalMutants: 0,
+        killedMutants: 0,
+        globalKilledMutants: 0,
+        survivedMutants: 0,
+        globalSurvivedMutants: 0,
+        currentMethodCoverage: null,
+      },
+      phase: { key: 'queued', label: 'Queued' },
+      artifacts: {},
+    });
+    vi.spyOn(api, 'subscribeToRunEvents').mockReturnValue(() => {});
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('项目路径');
+
+    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    await user.click(githubTab);
+
+    await user.type(screen.getByTestId('repo-url-input'), 'https://github.com/test/repo');
+    await user.type(screen.getByLabelText('目标项目 Java 目录'), '/custom/jdk');
+
+    await user.click(screen.getByRole('button', { name: '启动运行' }));
+
+    await waitFor(() => {
+      expect(createRunSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          selectedJavaVersion: null,
+          config: expect.objectContaining({
+            execution: expect.objectContaining({
+              target_java_home: '/custom/jdk',
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
   it('handles OAuth callback success and updates auth status', async () => {
     vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
     vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({

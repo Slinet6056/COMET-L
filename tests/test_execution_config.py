@@ -28,20 +28,27 @@ class ExecutionConfigTests(unittest.TestCase):
 
         self.assertIn("evolution.mutation_enabled", str(context.exception))
 
-    def test_defaults_use_system_commands(self) -> None:
-        config = ExecutionConfig()
+    def test_runtime_defaults_to_java_25_when_unspecified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            default_runtime_home = Path(tmp_dir) / "jdk-25"
+            default_runtime_bin = default_runtime_home / "bin"
+            default_runtime_bin.mkdir(parents=True)
+            (default_runtime_bin / "java").write_text("", encoding="utf-8")
 
-        runtime_env = config.build_runtime_subprocess_env(base_env={})
-        target_env = config.build_target_subprocess_env(base_env={})
+            config = ExecutionConfig(java_version_registry={"25": str(default_runtime_home)})
 
-        self.assertEqual(config.resolve_runtime_java_cmd(), "java")
-        self.assertEqual(config.resolve_target_java_cmd(), "java")
-        self.assertEqual(config.resolve_target_javac_cmd(), "javac")
-        self.assertEqual(config.resolve_mvn_cmd(), "mvn")
-        self.assertNotIn("JAVA_HOME", runtime_env)
-        self.assertNotIn("JAVA_HOME", target_env)
-        self.assertNotIn("MAVEN_HOME", runtime_env)
-        self.assertNotIn("MAVEN_HOME", target_env)
+            runtime_env = config.build_runtime_subprocess_env(base_env={})
+            target_env = config.build_target_subprocess_env(base_env={})
+
+            self.assertEqual(config.resolve_runtime_java_cmd(), str(default_runtime_bin / "java"))
+            self.assertEqual(config.resolve_target_java_cmd(), "java")
+            self.assertEqual(config.resolve_target_javac_cmd(), "javac")
+            self.assertEqual(config.resolve_mvn_cmd(), "mvn")
+            self.assertEqual(runtime_env["JAVA_HOME"], str(default_runtime_home.resolve()))
+            self.assertEqual(runtime_env["PATH"], str(default_runtime_bin.resolve()))
+            self.assertNotIn("JAVA_HOME", target_env)
+            self.assertNotIn("MAVEN_HOME", runtime_env)
+            self.assertNotIn("MAVEN_HOME", target_env)
 
     def test_runtime_and_target_java_home_are_independent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -135,6 +142,30 @@ class ExecutionConfigTests(unittest.TestCase):
             self.assertEqual(config.resolve_target_javac_cmd(), str(selected_bin / "javac"))
             self.assertEqual(target_env["JAVA_HOME"], str(selected_home.resolve()))
             self.assertEqual(target_env["PATH"], f"{selected_bin.resolve()}:/usr/bin")
+
+    def test_target_java_home_overrides_selected_java_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            selected_home = Path(tmp_dir) / "jdk-17"
+            selected_bin = selected_home / "bin"
+            selected_bin.mkdir(parents=True)
+            (selected_bin / "java").write_text("", encoding="utf-8")
+            (selected_bin / "javac").write_text("", encoding="utf-8")
+
+            target_home = Path(tmp_dir) / "target-java-home"
+            target_bin = target_home / "bin"
+            target_bin.mkdir(parents=True)
+            (target_bin / "java").write_text("", encoding="utf-8")
+            (target_bin / "javac").write_text("", encoding="utf-8")
+
+            config = ExecutionConfig(
+                target_java_home=str(target_home),
+                selected_java_version="17",
+                java_version_registry={"17": str(selected_home), "25": str(selected_home)},
+            )
+
+            self.assertEqual(config.get_target_java_home(), str(target_home.resolve()))
+            self.assertEqual(config.resolve_target_java_cmd(), str(target_bin / "java"))
+            self.assertEqual(config.resolve_target_javac_cmd(), str(target_bin / "javac"))
 
     def test_selected_java_version_rejects_unsupported_version(self) -> None:
         with self.assertRaisesRegex(ValidationError, "不支持的 Java 版本: 99"):

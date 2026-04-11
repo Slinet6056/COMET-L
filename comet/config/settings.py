@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 STATE_ROOT = Path("./state")
 OUTPUT_ROOT = Path("./output")
 SANDBOX_ROOT = Path("./sandbox")
+DEFAULT_RUNTIME_JAVA_VERSION = "25"
 
 
 def _default_java_version_registry() -> dict[str, str | None]:
@@ -123,14 +124,35 @@ class ExecutionConfig(BaseModel):
             raise ValueError(f"未找到 {command} 可执行文件: {command_path}")
         return str(command_path)
 
+    def _resolve_registry_java_home(self, version: str, env_name: str) -> Optional[Path]:
+        mapped_home = self.java_version_registry.get(version)
+        if mapped_home is None:
+            return None
+        return self._resolve_home(mapped_home, env_name)
+
+    def _resolve_default_runtime_java_home(self) -> Optional[Path]:
+        try:
+            return self._resolve_registry_java_home(
+                DEFAULT_RUNTIME_JAVA_VERSION,
+                f"JAVA_VERSION_{DEFAULT_RUNTIME_JAVA_VERSION}_HOME",
+            )
+        except ValueError:
+            return None
+
     def _resolve_runtime_java_home(self) -> Optional[Path]:
-        return self._resolve_home(self.runtime_java_home, "RUNTIME_JAVA_HOME")
+        runtime_home = self._resolve_home(self.runtime_java_home, "RUNTIME_JAVA_HOME")
+        if runtime_home is not None:
+            return runtime_home
+        return self._resolve_default_runtime_java_home()
 
     def _resolve_target_java_home(self) -> Optional[Path]:
+        explicit_target_home = self._resolve_home(self.target_java_home, "TARGET_JAVA_HOME")
+        if explicit_target_home is not None:
+            return explicit_target_home
         selected_home = self._resolve_selected_target_java_home()
         if selected_home is not None:
             return selected_home
-        return self._resolve_home(self.target_java_home, "TARGET_JAVA_HOME")
+        return None
 
     def _build_subprocess_env(
         self,

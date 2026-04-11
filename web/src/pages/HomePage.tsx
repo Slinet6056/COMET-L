@@ -345,6 +345,10 @@ export function HomePage() {
       return;
     }
 
+    const targetJavaHome = getNestedValue(config, ['execution', 'target_java_home']);
+    const hasManualTargetJavaHome =
+      typeof targetJavaHome === 'string' && targetJavaHome.trim().length > 0;
+
     if (sourceMode === 'github') {
       if (!githubAuthStatus?.connected || githubAuthStatus.requiresReauth) {
         setPageError('请先连接 GitHub 账户后再使用仓库模式。');
@@ -356,7 +360,7 @@ export function HomePage() {
         return;
       }
 
-      if (!selectedJavaVersion) {
+      if (!selectedJavaVersion && !hasManualTargetJavaHome) {
         setFieldErrors({ selectedJavaVersion: '请选择目标 Java 版本。' });
         return;
       }
@@ -372,7 +376,7 @@ export function HomePage() {
         bugReportsDir: sourceMode === 'local' ? bugReportsDir : null,
         githubRepoUrl: sourceMode === 'github' ? githubRepoUrl : null,
         githubBaseBranch: sourceMode === 'github' ? githubBaseBranch : null,
-        selectedJavaVersion: sourceMode === 'github' ? selectedJavaVersion : null,
+        selectedJavaVersion: sourceMode === 'github' ? selectedJavaVersion || null : null,
         config,
       });
       navigate(`/runs/${response.runId}`);
@@ -679,7 +683,8 @@ export function HomePage() {
                 ))}
               </select>
               <span className="field__hint">
-                选择目标项目使用的 Java 版本，会映射到容器内固定 JDK 路径。
+                选择目标项目使用的 Java 版本，会映射到容器内固定 JDK 路径；若手动填写目标项目 Java
+                目录，则以手填路径为准。
               </span>
               {fieldErrors.selectedJavaVersion ? (
                 <span className="field__error" role="alert">

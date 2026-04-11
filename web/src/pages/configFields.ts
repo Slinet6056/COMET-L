@@ -120,13 +120,14 @@ export const CONFIG_SECTIONS: ConfigSectionDefinition[] = [
       {
         path: ['execution', 'runtime_java_home'],
         label: '运行时 Java 目录',
-        description: 'COMET-L 运行时使用的 JDK。',
+        description:
+          'COMET-L 运行时使用的 JDK。留空时默认使用容器内 Java 25；手动填写时优先使用该路径。',
         kind: 'text',
       },
       {
         path: ['execution', 'target_java_home'],
         label: '目标项目 Java 目录',
-        description: '目标项目使用的 JDK。',
+        description: '目标项目使用的 JDK。手动填写时会覆盖首页选择的目标 Java 版本及默认映射。',
         kind: 'text',
       },
       {
