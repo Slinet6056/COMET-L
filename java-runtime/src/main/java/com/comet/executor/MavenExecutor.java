@@ -29,20 +29,27 @@ public class MavenExecutor {
     this.invoker = new DefaultInvoker();
     this.javaHome = javaHomePath == null || javaHomePath.isBlank() ? null : new File(javaHomePath);
 
-    // 尝试找到 Maven 安装路径
-    String mavenHome = System.getenv("M2_HOME");
-    if (mavenHome == null) {
-      mavenHome = System.getenv("MAVEN_HOME");
-    }
-
-    // 如果环境变量未设置，尝试通过 which 命令查找 mvn
-    if (mavenHome == null) {
-      mavenHome = findMavenHomeByWhich();
-    }
+    String mavenHome = resolveConfiguredMavenHome();
 
     if (mavenHome != null) {
       invoker.setMavenHome(new File(mavenHome));
     }
+  }
+
+  String resolveConfiguredMavenHome() {
+    String mavenHome = resolveMavenHomeFromEnvironment();
+    if (mavenHome != null) {
+      return mavenHome;
+    }
+    return findMavenHomeByWhich();
+  }
+
+  String resolveMavenHomeFromEnvironment() {
+    String m2Home = sanitizeMavenHomeCandidate(System.getenv("M2_HOME"));
+    if (m2Home != null) {
+      return m2Home;
+    }
+    return sanitizeMavenHomeCandidate(System.getenv("MAVEN_HOME"));
   }
 
   /** 通过 which 命令查找 Maven 安装路径 */
@@ -65,7 +72,7 @@ public class MavenExecutor {
           // mvn 通常在 $MAVEN_HOME/bin/mvn
           File binDir = mvnFile.getParentFile();
           if (binDir != null && binDir.getName().equals("bin")) {
-            String mavenHome = binDir.getParent();
+            String mavenHome = sanitizeMavenHomeCandidate(binDir.getParent());
             if (mavenHome != null) {
               return mavenHome;
             }
@@ -94,8 +101,8 @@ public class MavenExecutor {
       while ((line = reader.readLine()) != null) {
         // 查找 "Maven home: /path/to/maven"
         if (line.startsWith("Maven home:")) {
-          String mavenHome = line.substring("Maven home:".length()).trim();
-          if (new File(mavenHome).exists()) {
+          String mavenHome = sanitizeMavenHomeCandidate(line.substring("Maven home:".length()).trim());
+          if (mavenHome != null) {
             return mavenHome;
           }
         }
@@ -106,6 +113,28 @@ public class MavenExecutor {
       System.err.println("Warning: Failed to get Maven home from mvn --version: " + e.getMessage());
     }
     return null;
+  }
+
+  String sanitizeMavenHomeCandidate(String candidate) {
+    if (candidate == null || candidate.isBlank()) {
+      return null;
+    }
+
+    try {
+      File resolvedHome = new File(candidate).getCanonicalFile();
+      File mvnBinary = new File(new File(resolvedHome, "bin"), "mvn");
+      File confDir = new File(resolvedHome, "conf");
+      File libDir = new File(resolvedHome, "lib");
+      if (!resolvedHome.isDirectory()
+          || !mvnBinary.isFile()
+          || !confDir.isDirectory()
+          || !libDir.isDirectory()) {
+        return null;
+      }
+      return resolvedHome.getPath();
+    } catch (Exception e) {
+      return null;
+    }
   }
 
   /** 编译项目 */

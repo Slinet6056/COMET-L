@@ -756,13 +756,15 @@ class ParallelPlannerAgent:
             if existing_tests:
                 # 已有测试，读取测试文件内容
                 test_files = {}
+                test_root = Path(sandbox_path) / "src" / "test" / "java"
                 for tc in existing_tests:
-                    test_file_path = Path(sandbox_path) / "src" / "test" / "java"
+                    test_file_path = test_root
                     if tc.package_name:
                         test_file_path = test_file_path / tc.package_name.replace(".", "/")
                     test_file_path = test_file_path / f"{tc.class_name}.java"
                     if test_file_path.exists():
-                        test_files[str(test_file_path)] = test_file_path.read_text()
+                        relative_test_path = test_file_path.relative_to(test_root)
+                        test_files[str(relative_test_path)] = test_file_path.read_text()
 
                 return {
                     "generated": sum(len(tc.methods) for tc in existing_tests),
@@ -984,7 +986,12 @@ class ParallelPlannerAgent:
 
         # 写入去重后的文件
         for rel_path, content in files_to_merge.items():
-            target_path = test_dir / rel_path
+            normalized_rel_path = self._normalize_workspace_test_path(rel_path)
+            if normalized_rel_path is None:
+                logger.warning(f"跳过无法归一化的测试文件路径: {rel_path}")
+                continue
+
+            target_path = test_dir / normalized_rel_path
             target_path.parent.mkdir(parents=True, exist_ok=True)
 
             if target_path.exists():
@@ -1000,7 +1007,7 @@ class ParallelPlannerAgent:
             try:
                 target_path.write_text(content)
                 merged_count += 1
-                logger.debug(f"合并测试文件: {rel_path}")
+                logger.debug(f"合并测试文件: {normalized_rel_path}")
             except Exception as e:
                 logger.warning(f"写入测试文件失败: {rel_path}: {e}")
 
@@ -1009,6 +1016,22 @@ class ParallelPlannerAgent:
             f"{skipped_identical} 个相同跳过, {conflict_count} 个冲突"
         )
         return merged_count
+
+    def _normalize_workspace_test_path(self, rel_path: str) -> Path | None:
+        candidate = Path(rel_path)
+        if not candidate.is_absolute():
+            return candidate
+
+        parts = candidate.parts
+        marker = ("src", "test", "java")
+        marker_len = len(marker)
+        for index in range(len(parts) - marker_len + 1):
+            if parts[index : index + marker_len] == marker:
+                suffix = parts[index + marker_len :]
+                if suffix:
+                    return Path(*suffix)
+                return None
+        return None
 
     def _validate_and_fix_conflicts(self) -> bool:
         """

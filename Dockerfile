@@ -56,9 +56,12 @@ FROM eclipse-temurin:25.0.2_10-jdk-noble AS jdk25
 FROM runtime-base AS runtime
 
 ENV COMET_HOME=/opt/comet-l
+ENV COMET_MAVEN_HOME=/opt/maven
 ENV JAVA_HOME=/opt/jdks/jdk-25
 ENV UV_PYTHON=python3.12
-ENV PATH=/opt/comet-l/.venv/bin:/opt/jdks/jdk-25/bin:${PATH}
+ENV MAVEN_HOME=/opt/maven
+ENV M2_HOME=/opt/maven
+ENV PATH=/opt/comet-l/.venv/bin:/opt/maven/bin:/opt/jdks/jdk-25/bin:${PATH}
 
 WORKDIR /opt/comet-l
 
@@ -66,6 +69,7 @@ COPY . /opt/comet-l
 COPY --from=python-builder /usr/local/bin/uv /usr/local/bin/uv
 COPY --from=python-builder /src/.venv /opt/comet-l/.venv
 COPY --from=java-builder /src/java-runtime/target /opt/comet-l/java-runtime/target
+COPY --from=java-builder /usr/share/maven /opt/maven
 COPY --from=web-builder /src/web/dist /opt/comet-l/web/dist
 COPY --from=jdk8 /opt/java/openjdk /opt/jdks/jdk-8
 COPY --from=jdk11 /opt/java/openjdk /opt/jdks/jdk-11

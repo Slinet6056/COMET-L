@@ -103,6 +103,73 @@ class ParallelPlannerCoverageSyncTest(unittest.TestCase):
             self.assertEqual(fake_db.saved, [])
 
 
+class ParallelPlannerTestFilePathNormalizationTests(unittest.TestCase):
+    def test_generate_tests_in_sandbox_uses_relative_paths_for_existing_tests(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sandbox_path = Path(tmp_dir)
+            test_file = (
+                sandbox_path / "src" / "test" / "java" / "org" / "example" / "ExampleTest.java"
+            )
+            test_file.parent.mkdir(parents=True, exist_ok=True)
+            test_file.write_text("class ExampleTest {}", encoding="utf-8")
+
+            planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+            planner.db = Mock()
+            planner.db.get_tests_by_target_method.return_value = [
+                SimpleNamespace(
+                    package_name="org.example",
+                    class_name="ExampleTest",
+                    methods=["testOne"],
+                )
+            ]
+
+            result = planner._generate_tests_in_sandbox(str(sandbox_path), "Example", "doWork")
+
+            self.assertIsNotNone(result)
+            assert result is not None
+            self.assertEqual(result["generated"], 1)
+            self.assertEqual(
+                result["test_files"],
+                {"org/example/ExampleTest.java": "class ExampleTest {}"},
+            )
+
+    def test_merge_test_files_normalizes_absolute_paths_into_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            workspace = root / "workspace"
+            sandbox = root / "sandbox" / "run-1"
+            absolute_test_path = (
+                sandbox / "src" / "test" / "java" / "org" / "example" / "ExampleTest.java"
+            )
+            absolute_test_path.parent.mkdir(parents=True, exist_ok=True)
+
+            planner = ParallelPlannerAgent.__new__(ParallelPlannerAgent)
+            planner.workspace_path = str(workspace)
+            planner.state = ParallelAgentState()
+
+            merged_count = planner._merge_test_files(
+                [
+                    WorkerResult(
+                        target_id="org.example.Example#doWork:void doWork()",
+                        class_name="org.example.Example",
+                        method_name="doWork",
+                        success=True,
+                        test_files={str(absolute_test_path): "class ExampleTest {}"},
+                    )
+                ]
+            )
+
+            workspace_test_file = (
+                workspace / "src" / "test" / "java" / "org" / "example" / "ExampleTest.java"
+            )
+            self.assertEqual(merged_count, 1)
+            self.assertTrue(workspace_test_file.exists())
+            self.assertEqual(
+                workspace_test_file.read_text(encoding="utf-8"), "class ExampleTest {}"
+            )
+            self.assertFalse(absolute_test_path.exists())
+
+
 class CoverageParserSignatureTests(unittest.TestCase):
     def test_build_method_signature_from_jacoco_descriptor(self):
         parser = CoverageParser()

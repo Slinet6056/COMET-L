@@ -411,6 +411,7 @@ describe('Run results page', () => {
       screen.getByText('创建 GitHub PR 失败: HTTP 422 - Validation Failed'),
     ).toBeInTheDocument();
     expect(screen.queryByTestId('pr-link')).not.toBeInTheDocument();
+    expect(screen.queryByText(/以失败结束/)).not.toBeInTheDocument();
   });
 
   it('shows report download link when reportArtifact exists', async () => {

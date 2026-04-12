@@ -622,19 +622,28 @@ class RunLifecycleService:
     def mark_completed(self, run_id: str, *, completed_at: str | None = None) -> None:
         completion_time = completed_at or _utc_now_iso()
         self._generate_report_artifact(run_id, completed_at=completion_time)
-        pull_request_url = self._publish_generated_tests_pull_request(run_id)
+        pull_request_url: str | None = None
+        pull_request_error: str | None = None
+        try:
+            pull_request_url = self._publish_generated_tests_pull_request(run_id)
+        except GitPullRequestError as exc:
+            pull_request_error = str(exc)
         preserved_snapshot_fields: dict[str, Any] = {}
         with self._lock:
             session = self._sessions[run_id]
             current_snapshot = self._runtime_snapshots.get(run_id, {})
             if isinstance(current_snapshot, dict):
-                for key in ("pullRequestUrl",):
+                for key in ("pullRequestUrl", "pullRequestError"):
                     if key in current_snapshot:
                         preserved_snapshot_fields[key] = current_snapshot[key]
             if pull_request_url is not None:
                 preserved_snapshot_fields["pullRequestUrl"] = pull_request_url
+                preserved_snapshot_fields.pop("pullRequestError", None)
+            if pull_request_error is not None:
+                preserved_snapshot_fields["pullRequestError"] = pull_request_error
             session.status = "completed"
             session.completed_at = completion_time
+            session.error = pull_request_error
             duration_seconds: float | None = None
             if session.started_at is not None:
                 duration_seconds = max(

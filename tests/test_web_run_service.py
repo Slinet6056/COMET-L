@@ -497,7 +497,7 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertTrue(restored_final_state.exists())
             self.assertEqual(service.get_session(session.run_id).status, "completed")
 
-    def test_start_run_marks_failed_when_push_or_pr_step_fails(self) -> None:
+    def test_start_run_keeps_completed_status_when_push_or_pr_step_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             project_path = root / "project"
@@ -548,11 +548,18 @@ class RunLifecycleTests(unittest.TestCase):
             )
             service._threads[session.run_id].join(timeout=5)
 
-            failed_session = service.get_session(session.run_id)
-            self.assertEqual(failed_session.status, "failed")
-            self.assertIsNotNone(failed_session.error)
-            assert failed_session.error is not None
-            self.assertIn("推送提交到远端失败", failed_session.error)
+            completed_session = service.get_session(session.run_id)
+            self.assertEqual(completed_session.status, "completed")
+            self.assertIsNotNone(completed_session.completed_at)
+            self.assertIsNone(completed_session.failed_at)
+            self.assertIsNotNone(completed_session.error)
+            assert completed_session.error is not None
+            self.assertIn("推送提交到远端失败", completed_session.error)
+
+            results = service.build_results(session.run_id)
+            self.assertEqual(results["status"], "completed")
+            self.assertIsNone(results["pullRequestUrl"])
+            self.assertIn("推送提交到远端失败", results["pullRequestError"])
 
     def test_persisted_sessions_are_restored_after_service_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
