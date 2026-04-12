@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import secrets
 import subprocess
@@ -113,8 +114,11 @@ class GitHubPullRequestService:
             error_message="创建 Git 提交失败。",
         )
 
+        authed_remote_url = (
+            f"https://x-access-token:{token}@github.com/{identity.owner}/{identity.repo}.git"
+        )
         _ = self._run_git_command(
-            ["push", "-u", "origin", branch_name],
+            ["push", "-u", authed_remote_url, branch_name],
             cwd=resolved_project_path,
             error_message="推送提交到远端失败，请检查 GitHub 权限或网络连接。",
         )
@@ -311,6 +315,7 @@ class GitHubPullRequestService:
                 capture_output=True,
                 text=True,
                 check=False,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise GitPullRequestError(error_message) from exc
