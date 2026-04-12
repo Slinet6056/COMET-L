@@ -131,7 +131,7 @@ class GitHubPullRequestService:
 
     def _collect_git_status_lines(self, project_path: Path) -> list[str]:
         result = self._run_git_command(
-            ["status", "--porcelain"],
+            ["status", "--porcelain", "-uall"],
             cwd=project_path,
             error_message="检查仓库 Git 状态失败。",
         )
