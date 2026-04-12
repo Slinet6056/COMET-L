@@ -34,12 +34,13 @@ class _FakeGitRunner:
         capture_output: bool,
         text: bool,
         check: bool,
+        **kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
-        del cwd, capture_output, text, check
+        del cwd, capture_output, text, check, kwargs
         self.commands.append(command)
         git_args = command[1:]
 
-        if git_args == ["status", "--porcelain"]:
+        if git_args[:2] == ["status", "--porcelain"]:
             return subprocess.CompletedProcess(command, 0, stdout=self.status_output, stderr="")
 
         if git_args[:3] == ["show-ref", "--verify", "--quiet"]:
@@ -65,7 +66,7 @@ class _FakeGitRunner:
         if git_args[:2] == ["commit", "-m"]:
             return subprocess.CompletedProcess(command, 0, stdout="[test] commit ok", stderr="")
 
-        if git_args[:3] == ["push", "-u", "origin"]:
+        if git_args[:2] == ["push", "-u"]:
             if self.fail_push:
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr="push denied")
             return subprocess.CompletedProcess(command, 0, stdout="push ok", stderr="")
