@@ -679,7 +679,11 @@ export function HomePage() {
                             repo.name.toLowerCase().includes(repoFilterQuery.toLowerCase()),
                       )
                       .map((repo) => (
-                        <li key={repo.fullName} role="option" aria-selected={githubRepoUrl === repo.url}>
+                        <li
+                          key={repo.fullName}
+                          role="option"
+                          aria-selected={githubRepoUrl === repo.url}
+                        >
                           <button
                             type="button"
                             className={`repo-picker__item ${githubRepoUrl === repo.url ? 'repo-picker__item--selected' : ''}`}
@@ -692,7 +696,9 @@ export function HomePage() {
                                 return nextErrors;
                               });
                             }}
-                            disabled={!githubAuthStatus?.connected || githubAuthStatus.requiresReauth}
+                            disabled={
+                              !githubAuthStatus?.connected || githubAuthStatus.requiresReauth
+                            }
                           >
                             <span className="repo-picker__item-name">{repo.fullName}</span>
                             {repo.private ? (
@@ -709,9 +715,7 @@ export function HomePage() {
                   </ul>
                 )}
               </div>
-              <span className="field__hint">
-                从已授权的 GitHub 账户仓库中选择目标仓库。
-              </span>
+              <span className="field__hint">从已授权的 GitHub 账户仓库中选择目标仓库。</span>
               {fieldErrors.githubRepoUrl ? (
                 <span className="field__error" role="alert">
                   {fieldErrors.githubRepoUrl}

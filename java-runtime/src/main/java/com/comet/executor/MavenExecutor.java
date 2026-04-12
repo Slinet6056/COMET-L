@@ -101,7 +101,8 @@ public class MavenExecutor {
       while ((line = reader.readLine()) != null) {
         // 查找 "Maven home: /path/to/maven"
         if (line.startsWith("Maven home:")) {
-          String mavenHome = sanitizeMavenHomeCandidate(line.substring("Maven home:".length()).trim());
+          String mavenHome =
+              sanitizeMavenHomeCandidate(line.substring("Maven home:".length()).trim());
           if (mavenHome != null) {
             return mavenHome;
           }

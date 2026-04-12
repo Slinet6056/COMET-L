@@ -86,12 +86,15 @@ class GitHubPullRequestService:
             raise GitPullRequestError("缺少基线分支信息，无法创建 PR。")
 
         token = self._load_access_token(github_config)
+        authed_remote_url = (
+            f"https://x-access-token:{token}@github.com/{identity.owner}/{identity.repo}.git"
+        )
         status_lines = self._collect_git_status_lines(resolved_project_path)
         stage_candidates = self._collect_stage_candidates(status_lines)
         if not stage_candidates:
             raise GitPullRequestError("未检测到可提交的测试源码或测试资源文件，已跳过自动 PR。")
 
-        branch_name = self._create_unique_branch(run_id, resolved_project_path)
+        branch_name = self._create_unique_branch(run_id, resolved_project_path, authed_remote_url)
         _ = self._run_git_command(
             ["checkout", "-b", branch_name],
             cwd=resolved_project_path,
@@ -114,9 +117,6 @@ class GitHubPullRequestService:
             error_message="创建 Git 提交失败。",
         )
 
-        authed_remote_url = (
-            f"https://x-access-token:{token}@github.com/{identity.owner}/{identity.repo}.git"
-        )
         _ = self._run_git_command(
             ["push", "-u", authed_remote_url, branch_name],
             cwd=resolved_project_path,
@@ -167,13 +167,13 @@ class GitHubPullRequestService:
                 unique_candidates.append(path)
         return unique_candidates
 
-    def _create_unique_branch(self, run_id: str, project_path: Path) -> str:
+    def _create_unique_branch(self, run_id: str, project_path: Path, authed_remote_url: str) -> str:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         base_name = f"comet-l/{run_id}-{timestamp}"
         candidate = base_name
 
         for attempt in range(8):
-            if not self._branch_exists(project_path, candidate):
+            if not self._branch_exists(project_path, candidate, authed_remote_url):
                 return candidate
             if attempt == 0:
                 candidate = f"{base_name}-{secrets.token_hex(2)}"
@@ -182,7 +182,7 @@ class GitHubPullRequestService:
 
         raise GitPullRequestError("分支名冲突过多，无法生成可用分支名。")
 
-    def _branch_exists(self, project_path: Path, branch_name: str) -> bool:
+    def _branch_exists(self, project_path: Path, branch_name: str, authed_remote_url: str) -> bool:
         local_exists = (
             self._run_git_command(
                 ["show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
@@ -196,7 +196,7 @@ class GitHubPullRequestService:
             return True
 
         remote_check = self._run_git_command(
-            ["ls-remote", "--heads", "origin", f"refs/heads/{branch_name}"],
+            ["ls-remote", "--heads", authed_remote_url, f"refs/heads/{branch_name}"],
             cwd=project_path,
             error_message="检查远端分支失败。",
             check=False,
