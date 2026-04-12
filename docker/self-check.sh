@@ -13,3 +13,4 @@ done
 
 uv run python -V
 java -version
+git --version

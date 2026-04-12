@@ -165,6 +165,7 @@ describe('HomePage GitHub auth flow', () => {
       connected: false,
       requiresReauth: false,
     });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({ repositories: [] });
 
     render(
       <MemoryRouter initialEntries={['/']}>
@@ -177,7 +178,7 @@ describe('HomePage GitHub auth flow', () => {
     const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
-    expect(screen.getByTestId('repo-url-input')).toBeDisabled();
+    expect(screen.getByTestId('repo-picker-filter')).toBeDisabled();
     expect(screen.getByTestId('java-version-select')).toBeDisabled();
     expect(screen.getByRole('button', { name: '请先连接 GitHub' })).toBeDisabled();
   });
@@ -188,6 +189,18 @@ describe('HomePage GitHub auth flow', () => {
       connected: true,
       username: 'testuser',
       requiresReauth: false,
+    });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({
+      repositories: [
+        {
+          name: 'test-repo',
+          fullName: 'testuser/test-repo',
+          url: 'https://github.com/testuser/test-repo',
+          description: 'A test repository',
+          private: false,
+          updatedAt: '2024-01-15T10:30:00Z',
+        },
+      ],
     });
 
     render(
@@ -201,7 +214,8 @@ describe('HomePage GitHub auth flow', () => {
     const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
-    expect(screen.getByTestId('repo-url-input')).not.toBeDisabled();
+    await screen.findByTestId('repo-picker-filter');
+    expect(screen.getByTestId('repo-picker-filter')).not.toBeDisabled();
     expect(screen.getByTestId('java-version-select')).not.toBeDisabled();
     expect(screen.getByRole('button', { name: '启动运行' })).not.toBeDisabled();
   });
@@ -214,6 +228,7 @@ describe('HomePage GitHub auth flow', () => {
       requiresReauth: false,
     });
     vi.spyOn(api, 'disconnectGitHubAuth').mockResolvedValue();
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({ repositories: [] });
 
     const user = userEvent.setup();
     render(
@@ -243,6 +258,18 @@ describe('HomePage GitHub auth flow', () => {
       username: 'testuser',
       requiresReauth: false,
     });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({
+      repositories: [
+        {
+          name: 'test-repo',
+          fullName: 'testuser/test-repo',
+          url: 'https://github.com/testuser/test-repo',
+          description: 'A test repository',
+          private: false,
+          updatedAt: '2024-01-15T10:30:00Z',
+        },
+      ],
+    });
     const createRunSpy = vi.spyOn(api, 'createRun').mockResolvedValue({
       runId: 'run-123',
       status: 'created',
@@ -291,7 +318,8 @@ describe('HomePage GitHub auth flow', () => {
     const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
-    await user.type(screen.getByTestId('repo-url-input'), 'https://github.com/test/repo');
+    await screen.findByTestId('repo-item-testuser/test-repo');
+    await user.click(screen.getByTestId('repo-item-testuser/test-repo'));
     await user.selectOptions(screen.getByTestId('java-version-select'), '17');
 
     await user.click(screen.getByRole('button', { name: '启动运行' }));
@@ -300,7 +328,7 @@ describe('HomePage GitHub auth flow', () => {
       expect(createRunSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           projectPath: '',
-          githubRepoUrl: 'https://github.com/test/repo',
+          githubRepoUrl: 'https://github.com/testuser/test-repo',
           selectedJavaVersion: '17',
           config: expect.any(Object),
         }),
@@ -315,6 +343,18 @@ describe('HomePage GitHub auth flow', () => {
       username: 'testuser',
       requiresReauth: false,
     });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({
+      repositories: [
+        {
+          name: 'test-repo',
+          fullName: 'testuser/test-repo',
+          url: 'https://github.com/testuser/test-repo',
+          description: 'A test repository',
+          private: false,
+          updatedAt: '2024-01-15T10:30:00Z',
+        },
+      ],
+    });
 
     const user = userEvent.setup();
     render(
@@ -328,6 +368,7 @@ describe('HomePage GitHub auth flow', () => {
     const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
+    await screen.findByTestId('repo-picker-filter');
     await user.selectOptions(screen.getByTestId('java-version-select'), '17');
     await user.click(screen.getByRole('button', { name: '启动运行' }));
 
@@ -343,6 +384,18 @@ describe('HomePage GitHub auth flow', () => {
       username: 'testuser',
       requiresReauth: false,
     });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({
+      repositories: [
+        {
+          name: 'test-repo',
+          fullName: 'testuser/test-repo',
+          url: 'https://github.com/testuser/test-repo',
+          description: 'A test repository',
+          private: false,
+          updatedAt: '2024-01-15T10:30:00Z',
+        },
+      ],
+    });
 
     const user = userEvent.setup();
     render(
@@ -356,7 +409,8 @@ describe('HomePage GitHub auth flow', () => {
     const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
-    await user.type(screen.getByTestId('repo-url-input'), 'https://github.com/test/repo');
+    await screen.findByTestId('repo-item-testuser/test-repo');
+    await user.click(screen.getByTestId('repo-item-testuser/test-repo'));
     await user.click(screen.getByRole('button', { name: '启动运行' }));
 
     await waitFor(() => {
@@ -370,6 +424,18 @@ describe('HomePage GitHub auth flow', () => {
       connected: true,
       username: 'testuser',
       requiresReauth: false,
+    });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({
+      repositories: [
+        {
+          name: 'test-repo',
+          fullName: 'testuser/test-repo',
+          url: 'https://github.com/testuser/test-repo',
+          description: 'A test repository',
+          private: false,
+          updatedAt: '2024-01-15T10:30:00Z',
+        },
+      ],
     });
     const createRunSpy = vi.spyOn(api, 'createRun').mockResolvedValue({
       runId: 'run-123',
@@ -419,7 +485,8 @@ describe('HomePage GitHub auth flow', () => {
     const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
-    await user.type(screen.getByTestId('repo-url-input'), 'https://github.com/test/repo');
+    await screen.findByTestId('repo-item-testuser/test-repo');
+    await user.click(screen.getByTestId('repo-item-testuser/test-repo'));
     await user.type(screen.getByLabelText('目标项目 Java 目录'), '/custom/jdk');
 
     await user.click(screen.getByRole('button', { name: '启动运行' }));
@@ -616,5 +683,230 @@ describe('HomePage GitHub auth flow', () => {
 
     expect(screen.queryByLabelText('目标项目 Java 版本')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('8 | 11 | 17 | 21 | 25')).not.toBeInTheDocument();
+  });
+
+  it('shows loading state while fetching repositories', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({
+      connected: true,
+      username: 'testuser',
+      requiresReauth: false,
+    });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve({ repositories: [] }), 100)),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('项目路径');
+
+    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    await userEvent.click(githubTab);
+
+    expect(screen.getByText('正在加载仓库列表...')).toBeInTheDocument();
+  });
+
+  it('shows empty state when no repositories available', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({
+      connected: true,
+      username: 'testuser',
+      requiresReauth: false,
+    });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({ repositories: [] });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('项目路径');
+
+    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    await userEvent.click(githubTab);
+
+    await waitFor(() => {
+      expect(screen.getByText('暂无可用仓库')).toBeInTheDocument();
+    });
+  });
+
+  it('filters repositories by search query', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({
+      connected: true,
+      username: 'testuser',
+      requiresReauth: false,
+    });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({
+      repositories: [
+        {
+          name: 'alpha-project',
+          fullName: 'testuser/alpha-project',
+          url: 'https://github.com/testuser/alpha-project',
+          description: 'Alpha project',
+          private: false,
+          updatedAt: '2024-01-15T10:30:00Z',
+        },
+        {
+          name: 'beta-project',
+          fullName: 'testuser/beta-project',
+          url: 'https://github.com/testuser/beta-project',
+          description: 'Beta project',
+          private: true,
+          updatedAt: '2024-01-16T10:30:00Z',
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('项目路径');
+
+    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    await user.click(githubTab);
+
+    await screen.findByTestId('repo-item-testuser/alpha-project');
+    await screen.findByTestId('repo-item-testuser/beta-project');
+
+    await user.type(screen.getByTestId('repo-picker-filter'), 'alpha');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('repo-item-testuser/alpha-project')).toBeInTheDocument();
+      expect(screen.queryByTestId('repo-item-testuser/beta-project')).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows private badge for private repositories', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({
+      connected: true,
+      username: 'testuser',
+      requiresReauth: false,
+    });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({
+      repositories: [
+        {
+          name: 'private-repo',
+          fullName: 'testuser/private-repo',
+          url: 'https://github.com/testuser/private-repo',
+          description: 'A private repository',
+          private: true,
+          updatedAt: '2024-01-15T10:30:00Z',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('项目路径');
+
+    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    await userEvent.click(githubTab);
+
+    await screen.findByTestId('repo-item-testuser/private-repo');
+    expect(screen.getByText('私有')).toBeInTheDocument();
+  });
+
+  it('highlights selected repository', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({
+      connected: true,
+      username: 'testuser',
+      requiresReauth: false,
+    });
+    vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({
+      repositories: [
+        {
+          name: 'test-repo',
+          fullName: 'testuser/test-repo',
+          url: 'https://github.com/testuser/test-repo',
+          description: 'A test repository',
+          private: false,
+          updatedAt: '2024-01-15T10:30:00Z',
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('项目路径');
+
+    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    await user.click(githubTab);
+
+    const repoItem = await screen.findByTestId('repo-item-testuser/test-repo');
+    await user.click(repoItem);
+
+    expect(repoItem).toHaveClass('repo-picker__item--selected');
+  });
+
+  it('fetches repositories after OAuth callback success', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'fetchGitHubAuthStatus')
+      .mockResolvedValueOnce({
+        connected: false,
+        requiresReauth: false,
+      })
+      .mockResolvedValueOnce({
+        connected: true,
+        requiresReauth: false,
+      });
+    vi.spyOn(api, 'handleGitHubAuthCallback').mockResolvedValue({
+      provider: 'github-oauth-app',
+      connected: true,
+      requiresReauth: false,
+      message: 'GitHub 已连接。',
+    });
+    const fetchReposSpy = vi.spyOn(api, 'fetchGitHubRepositories').mockResolvedValue({
+      repositories: [
+        {
+          name: 'test-repo',
+          fullName: 'testuser/test-repo',
+          url: 'https://github.com/testuser/test-repo',
+          description: 'A test repository',
+          private: false,
+          updatedAt: '2024-01-15T10:30:00Z',
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/?code=test-code&state=test-state']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('项目路径');
+
+    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    await user.click(githubTab);
+
+    await waitFor(() => {
+      expect(screen.getByText('已连接')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(fetchReposSpy).toHaveBeenCalled();
+    });
   });
 });

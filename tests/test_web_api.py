@@ -403,6 +403,32 @@ class GitHubAuthApiTests(unittest.TestCase):
                     return httpx.Response(404, json={"message": "Not Found"})
                 return httpx.Response(401, json={"message": "Bad credentials"})
 
+            if request.url.path.endswith("/user/repos"):
+                authorization = request.headers.get("Authorization", "")
+                if authorization != "Bearer gho-test-valid":
+                    return httpx.Response(401, json={"message": "Bad credentials"})
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "name": "beta-repo",
+                            "full_name": "testuser/beta-repo",
+                            "html_url": "https://github.com/testuser/beta-repo",
+                            "description": "Beta repository",
+                            "private": True,
+                            "updated_at": "2026-04-12T09:30:00Z",
+                        },
+                        {
+                            "name": "alpha-repo",
+                            "full_name": "testuser/alpha-repo",
+                            "html_url": "https://github.com/testuser/alpha-repo",
+                            "description": None,
+                            "private": False,
+                            "updated_at": "2026-04-11T10:00:00Z",
+                        },
+                    ],
+                )
+
             return httpx.Response(404, json={"message": "not implemented"})
 
         transport = httpx.MockTransport(_handler)
@@ -441,6 +467,35 @@ class GitHubAuthApiTests(unittest.TestCase):
         self.assertFalse(payload["connected"])
         self.assertFalse(payload["requiresReauth"])
         self.assertEqual(payload["provider"], "github-oauth-app")
+
+    def test_github_repositories_requires_authorization(self) -> None:
+        assert self.client is not None
+
+        response = self.client.get("/api/github/repositories")
+
+        self.assertEqual(response.status_code, 401)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "github_auth_required")
+
+    def test_github_repositories_returns_authorized_repository_list(self) -> None:
+        assert self.client is not None
+
+        connect_response = self.client.get("/api/github/auth/connect-url")
+        state = parse_qs(urlparse(connect_response.json()["connectUrl"]).query)["state"][0]
+        callback_response = self.client.get(f"/api/github/auth/callback?code=ok-code&state={state}")
+        self.assertEqual(callback_response.status_code, 200)
+
+        response = self.client.get("/api/github/repositories")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload["repositories"]), 2)
+        self.assertEqual(payload["repositories"][0]["fullName"], "testuser/beta-repo")
+        self.assertTrue(payload["repositories"][0]["private"])
+        self.assertEqual(
+            payload["repositories"][1]["url"],
+            "https://github.com/testuser/alpha-repo",
+        )
 
     def test_github_auth_callback_persists_encrypted_token_and_marks_connected(self) -> None:
         assert self.client is not None
@@ -809,6 +864,26 @@ class GitHubRepoImportRunApiTests(unittest.TestCase):
         self.assertEqual(run_request.github_base_branch, "develop")
         self.assertTrue(mocked_clone.called)
 
+    def test_post_runs_imports_github_repo_without_project_path_field(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+
+        with patch(
+            "comet.web.repo_import_service.subprocess.run",
+            side_effect=self._mock_clone_success,
+        ):
+            response = self.client.post(
+                "/api/runs",
+                data={
+                    "githubRepoUrl": "https://github.com/openai/example-repo.git",
+                },
+            )
+
+        self.assertEqual(response.status_code, 201)
+        run_id = response.json()["runId"]
+        run_request = self.run_service.get_run_request(run_id)
+        self.assertTrue(run_request.project_path)
+
     def test_post_runs_rejects_non_maven_github_repo(self) -> None:
         assert self.client is not None
 
@@ -858,6 +933,27 @@ class GitHubRepoImportRunApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         payload = response.json()
         self.assertEqual(payload["error"]["code"], "github_unauthorized")
+
+    def test_post_runs_reports_missing_git_binary_during_import(self) -> None:
+        assert self.client is not None
+
+        with patch(
+            "comet.web.repo_import_service.subprocess.run",
+            side_effect=FileNotFoundError(2, "No such file or directory", "git"),
+        ):
+            response = self.client.post(
+                "/api/runs",
+                data={
+                    "projectPath": "/not-used-in-github-mode",
+                    "githubRepoUrl": "https://github.com/openai/example-repo.git",
+                },
+            )
+
+        self.assertEqual(response.status_code, 502)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "git_clone_failed")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "git_clone_failed")
+        self.assertIn("缺少 git", payload["error"]["fieldErrors"][0]["message"])
 
 
 class SnapshotTests(unittest.TestCase):
@@ -1517,6 +1613,16 @@ class RunApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["error"]["code"], "invalid_project_path")
         self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "path_not_found")
+
+    def test_post_runs_rejects_omitted_project_path_in_local_mode(self) -> None:
+        assert self.client is not None
+
+        response = self.client.post("/api/runs", data={})
+
+        self.assertEqual(response.status_code, 422)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "invalid_project_path")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "missing_project_path")
 
     def test_post_runs_rejects_non_maven_project(self) -> None:
         assert self.client is not None

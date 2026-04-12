@@ -239,13 +239,16 @@ class GitHubRepoImportService:
             str(clone_path),
         ]
         subprocess_runner = self._subprocess_runner or subprocess.run
-        result = subprocess_runner(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=clone_env,
-        )
+        try:
+            result = subprocess_runner(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=clone_env,
+            )
+        except FileNotFoundError as exc:
+            raise RepoImportCloneError("系统缺少 git 可执行文件，无法克隆仓库。") from exc
         if result.returncode == 0:
             return
 

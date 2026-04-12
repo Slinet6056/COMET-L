@@ -1,3 +1,4 @@
+import errno
 import subprocess
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ from unittest.mock import patch
 
 from comet.config.settings import GitHubConfig
 from comet.web.github_auth_service import GitHubOAuthService
-from comet.web.repo_import_service import GitHubRepoImportService
+from comet.web.repo_import_service import GitHubRepoImportService, RepoImportCloneError
 
 
 class _AlwaysAuthorizedGitHubOAuthService(GitHubOAuthService):
@@ -119,6 +120,34 @@ class GitHubRepoImportServiceTests(unittest.TestCase):
 
         self.assertEqual(Path(imported.project_path).name, "run-002")
         self.assertEqual(captured_command[0], "git")
+
+    def test_clone_reports_missing_git_binary_as_clone_error(self) -> None:
+        def fake_subprocess_runner(
+            command: list[str],
+            capture_output: bool,
+            text: bool,
+            check: bool,
+            env: dict[str, str],
+        ) -> subprocess.CompletedProcess[str]:
+            del command, capture_output, text, check, env
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory", "git")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            managed_root = Path(tmp_dir) / "managed"
+            service = GitHubRepoImportService(
+                github_auth_service=_AlwaysAuthorizedGitHubOAuthService(),
+                subprocess_runner=fake_subprocess_runner,
+            )
+
+            with self.assertRaises(RepoImportCloneError) as exc_context:
+                service.import_repository(
+                    run_id="run-003",
+                    github_repo_url="https://github.com/openai/demo",
+                    github_config=self._build_github_config(str(managed_root)),
+                    requested_base_branch="main",
+                )
+
+        self.assertEqual(str(exc_context.exception), "系统缺少 git 可执行文件，无法克隆仓库。")
 
 
 if __name__ == "__main__":

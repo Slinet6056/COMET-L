@@ -61,6 +61,9 @@ web-serve port="8000":
 test-web page="ResultsPage.test.tsx":
     pnpm --dir web test -- --run {{page}}
 
+test-python target="":
+    uv run python -m pytest {{target}}
+
 test-web-api:
     uv run python -m unittest tests.test_web_api
 

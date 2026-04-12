@@ -37,6 +37,8 @@ from .schemas import (
     ConfigPayload,
     ErrorResponse,
     FieldError,
+    GitHubRepositoriesResponse,
+    GitHubRepositoryEntry,
     HealthResponse,
     RunCreateResponse,
     RunHistoryEntry,
@@ -209,8 +211,18 @@ def _resolve_runtime_hooks(
     return main.initialize_system, main.run_evolution
 
 
-def _validate_project_path(project_path: str) -> list[FieldError]:
-    resolved_path = Path(project_path).expanduser()
+def _validate_project_path(project_path: str | None) -> list[FieldError]:
+    normalized_path = project_path.strip() if project_path is not None else ""
+    if not normalized_path:
+        return [
+            FieldError(
+                path=["projectPath"],
+                code="missing_project_path",
+                message="项目路径不能为空。",
+            )
+        ]
+
+    resolved_path = Path(normalized_path).expanduser()
     if not resolved_path.exists():
         return [
             FieldError(
@@ -500,7 +512,7 @@ async def parse_config(
 )
 async def create_run(
     request: Request,
-    projectPath: str = Form(...),
+    projectPath: str | None = Form(default=None),
     configFile: UploadFile | None = File(default=None),
     maxIterations: int | None = Form(default=None),
     budget: int | None = Form(default=None),
@@ -582,10 +594,16 @@ async def create_run(
             field_errors=git_write_errors,
         )
 
+    normalized_project_path = (
+        str(Path(projectPath).expanduser().resolve())
+        if projectPath is not None and projectPath.strip()
+        else ""
+    )
+
     try:
         run_session = run_service.create_run(
             RunRequest(
-                project_path=str(Path(projectPath).expanduser().resolve()),
+                project_path=normalized_project_path,
                 config_path=config_label,
                 max_iterations=maxIterations,
                 budget=budget,
@@ -841,6 +859,33 @@ def disconnect_github_auth(
             "requiresReauth": False,
             "message": "已断开 GitHub 连接。",
         },
+    )
+
+
+@router.get(
+    "/github/repositories",
+    response_model=GitHubRepositoriesResponse,
+    responses={401: {"model": ErrorResponse}},
+)
+def get_github_repositories(
+    services: AppServices = Depends(get_app_services),
+    github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
+) -> GitHubRepositoriesResponse | JSONResponse:
+    settings = Settings.from_yaml(str(services.default_config_path))
+    try:
+        repositories = github_auth_service.list_repositories(settings.github)
+    except GitHubAuthError as exc:
+        return _error_response(
+            401,
+            code="github_auth_required",
+            message=str(exc),
+            field_errors=[],
+        )
+    return GitHubRepositoriesResponse(
+        repositories=[
+            GitHubRepositoryEntry.model_validate(repository.to_payload())
+            for repository in repositories
+        ]
     )
 
 

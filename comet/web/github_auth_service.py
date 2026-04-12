@@ -37,6 +37,26 @@ class GitHubAuthStatus:
         }
 
 
+@dataclass(slots=True)
+class GitHubRepository:
+    name: str
+    full_name: str
+    url: str
+    description: str | None
+    private: bool
+    updated_at: str | None
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "fullName": self.full_name,
+            "url": self.url,
+            "description": self.description,
+            "private": self.private,
+            "updatedAt": self.updated_at,
+        }
+
+
 class KeyringBackend(Protocol):
     def get_password(self, service_name: str, account_name: str) -> str | None: ...
 
@@ -312,6 +332,51 @@ class GitHubOAuthService:
         if validation == "invalid":
             raise GitHubAuthError("GitHub 授权已失效，请重新授权。")
         raise GitHubAuthError("GitHub 状态检查失败，请稍后重试。")
+
+    def list_repositories(self, github_config: GitHubConfig) -> list[GitHubRepository]:
+        token = self.get_access_token(github_config)
+        with self._http_client_factory() as http_client:
+            response = http_client.get(
+                f"{github_config.oauth_api_base_url}/user/repos",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                params={
+                    "sort": "updated",
+                    "direction": "desc",
+                    "per_page": 100,
+                },
+            )
+
+        if response.status_code == 200:
+            payload = cast(list[dict[str, object]], response.json())
+            repositories: list[GitHubRepository] = []
+            for item in payload:
+                name = str(item.get("name", "")).strip()
+                full_name = str(item.get("full_name", "")).strip()
+                url = str(item.get("html_url", "")).strip()
+                if not name or not full_name or not url:
+                    continue
+                repositories.append(
+                    GitHubRepository(
+                        name=name,
+                        full_name=full_name,
+                        url=url,
+                        description=str(item["description"])
+                        if item.get("description") is not None
+                        else None,
+                        private=bool(item.get("private", False)),
+                        updated_at=(
+                            str(item["updated_at"]) if item.get("updated_at") is not None else None
+                        ),
+                    )
+                )
+            return repositories
+
+        if response.status_code in {401, 403}:
+            raise GitHubAuthError("GitHub 授权已失效，请重新授权。")
+        raise GitHubAuthError("无法获取 GitHub 仓库列表，请稍后重试。")
 
     def _validate_state(self, github_config: GitHubConfig, state: str) -> None:
         now = time.time()

@@ -8,9 +8,11 @@ import {
   fetchConfigDefaults,
   fetchGitHubAuthConnectUrl,
   fetchGitHubAuthStatus,
+  fetchGitHubRepositories,
   handleGitHubAuthCallback,
   parseConfigFile,
   type GitHubAuthStatus,
+  type GitHubRepository,
 } from '../lib/api';
 import { CONFIG_SECTIONS, EXAMPLE_PROJECTS, type ConfigFieldDefinition } from './configFields';
 
@@ -115,6 +117,9 @@ export function HomePage() {
   const [githubAuthStatus, setGithubAuthStatus] = useState<GitHubAuthStatus | null>(null);
   const [isConnectingGithub, setIsConnectingGithub] = useState(false);
   const [isDisconnectingGithub, setIsDisconnectingGithub] = useState(false);
+  const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>([]);
+  const [isLoadingRepositories, setIsLoadingRepositories] = useState(false);
+  const [repoFilterQuery, setRepoFilterQuery] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [pageError, setPageError] = useState<string | null>(null);
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
@@ -174,6 +179,41 @@ export function HomePage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadRepositories() {
+      if (!githubAuthStatus?.connected || githubAuthStatus.requiresReauth) {
+        setGithubRepositories([]);
+        return;
+      }
+
+      setIsLoadingRepositories(true);
+      try {
+        const response = await fetchGitHubRepositories();
+        if (!active) {
+          return;
+        }
+        setGithubRepositories(response.repositories);
+      } catch {
+        if (!active) {
+          return;
+        }
+        setGithubRepositories([]);
+      } finally {
+        if (active) {
+          setIsLoadingRepositories(false);
+        }
+      }
+    }
+
+    void loadRepositories();
+
+    return () => {
+      active = false;
+    };
+  }, [githubAuthStatus]);
 
   useEffect(() => {
     const githubOAuthResult = searchParams.get('github_oauth');
@@ -598,28 +638,79 @@ export function HomePage() {
               </div>
             </div>
 
-            <label className="field" htmlFor="github-repo-url">
-              <span className="field__label">仓库 URL</span>
-              <input
-                id="github-repo-url"
-                name="githubRepoUrl"
-                type="text"
-                aria-label="GitHub 仓库 URL"
-                data-testid="repo-url-input"
-                value={githubRepoUrl}
-                placeholder="https://github.com/owner/repo"
-                onChange={(event) => {
-                  setGithubRepoUrl(event.target.value);
-                  setFieldErrors((current) => {
-                    const nextErrors = { ...current };
-                    delete nextErrors.githubRepoUrl;
-                    return nextErrors;
-                  });
-                }}
-                disabled={!githubAuthStatus?.connected || githubAuthStatus.requiresReauth}
-              />
+            <label className="field" htmlFor="github-repo-picker">
+              <span className="field__label">选择仓库</span>
+              <div className="repo-picker">
+                <input
+                  id="github-repo-picker"
+                  name="githubRepoFilter"
+                  type="text"
+                  aria-label="搜索 GitHub 仓库"
+                  data-testid="repo-picker-filter"
+                  value={repoFilterQuery}
+                  placeholder="搜索仓库名称..."
+                  onChange={(event) => {
+                    setRepoFilterQuery(event.target.value);
+                    setFieldErrors((current) => {
+                      const nextErrors = { ...current };
+                      delete nextErrors.githubRepoUrl;
+                      return nextErrors;
+                    });
+                  }}
+                  disabled={!githubAuthStatus?.connected || githubAuthStatus.requiresReauth}
+                />
+                {isLoadingRepositories ? (
+                  <div className="repo-picker__loading" role="status">
+                    正在加载仓库列表...
+                  </div>
+                ) : githubRepositories.length === 0 &&
+                  githubAuthStatus?.connected &&
+                  !githubAuthStatus.requiresReauth ? (
+                  <div className="repo-picker__empty" role="status">
+                    暂无可用仓库
+                  </div>
+                ) : (
+                  <ul className="repo-picker__list" role="listbox" aria-label="GitHub 仓库列表">
+                    {githubRepositories
+                      .filter((repo) =>
+                        repoFilterQuery.trim() === ''
+                          ? true
+                          : repo.fullName.toLowerCase().includes(repoFilterQuery.toLowerCase()) ||
+                            repo.name.toLowerCase().includes(repoFilterQuery.toLowerCase()),
+                      )
+                      .map((repo) => (
+                        <li key={repo.fullName} role="option" aria-selected={githubRepoUrl === repo.url}>
+                          <button
+                            type="button"
+                            className={`repo-picker__item ${githubRepoUrl === repo.url ? 'repo-picker__item--selected' : ''}`}
+                            data-testid={`repo-item-${repo.fullName}`}
+                            onClick={() => {
+                              setGithubRepoUrl(repo.url);
+                              setFieldErrors((current) => {
+                                const nextErrors = { ...current };
+                                delete nextErrors.githubRepoUrl;
+                                return nextErrors;
+                              });
+                            }}
+                            disabled={!githubAuthStatus?.connected || githubAuthStatus.requiresReauth}
+                          >
+                            <span className="repo-picker__item-name">{repo.fullName}</span>
+                            {repo.private ? (
+                              <span className="repo-picker__item-badge repo-picker__item-badge--private">
+                                私有
+                              </span>
+                            ) : null}
+                            {repo.description ? (
+                              <span className="repo-picker__item-desc">{repo.description}</span>
+                            ) : null}
+                          </button>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
               <span className="field__hint">
-                输入 GitHub 仓库 URL，格式为 https://github.com/owner/repo。
+                从已授权的 GitHub 账户仓库中选择目标仓库。
               </span>
               {fieldErrors.githubRepoUrl ? (
                 <span className="field__error" role="alert">

@@ -45,6 +45,19 @@ class RunRequestPayload(BaseModel):
     selectedJavaVersion: str | None = None
 
 
+class GitHubRepositoryEntry(BaseModel):
+    name: str
+    fullName: str
+    url: str
+    description: str | None = None
+    private: bool
+    updatedAt: str | None = None
+
+
+class GitHubRepositoriesResponse(BaseModel):
+    repositories: list[GitHubRepositoryEntry] = Field(default_factory=list)
+
+
 class ArtifactSummary(BaseModel):
     exists: bool
     downloadUrl: str | None = None

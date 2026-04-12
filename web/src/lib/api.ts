@@ -327,7 +327,9 @@ export async function createRun(options: {
   config: RunConfigPayload;
 }): Promise<RunCreateResponse> {
   const formData = new FormData();
-  formData.set('projectPath', options.projectPath);
+  if (options.projectPath.trim().length > 0) {
+    formData.set('projectPath', options.projectPath);
+  }
   if (options.bugReportsDir && options.bugReportsDir.trim().length > 0) {
     formData.set('bugReportsDir', options.bugReportsDir.trim());
   }
@@ -458,4 +460,22 @@ export async function disconnectGitHubAuth(): Promise<void> {
     const payload = (await response.json()) as ApiErrorPayload;
     throw new ApiError(response.status, payload);
   }
+}
+
+export type GitHubRepository = {
+  name: string;
+  fullName: string;
+  url: string;
+  description?: string | null;
+  private: boolean;
+  updatedAt?: string | null;
+};
+
+export type GitHubRepositoriesResponse = {
+  repositories: GitHubRepository[];
+};
+
+export async function fetchGitHubRepositories(): Promise<GitHubRepositoriesResponse> {
+  const response = await fetch('/api/github/repositories');
+  return parseJsonResponse<GitHubRepositoriesResponse>(response);
 }
