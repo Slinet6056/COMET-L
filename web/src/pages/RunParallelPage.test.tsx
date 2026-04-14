@@ -533,7 +533,7 @@ describe('Run page parallel mode', () => {
     expect(screen.getByText('变异分析')).toBeInTheDocument();
     expect(screen.queryByText('变异体总数')).not.toBeInTheDocument();
     expect(screen.queryByText('已杀死变异体')).not.toBeInTheDocument();
-    expect(screen.getAllByText('未启用').length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByText('未启用').length).toBeGreaterThanOrEqual(2);
   });
 
   it('keeps legacy display behavior when mutationEnabled is missing', async () => {

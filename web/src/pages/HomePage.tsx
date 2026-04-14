@@ -1,6 +1,20 @@
 import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   ApiError,
   createRun,
@@ -434,214 +448,260 @@ export function HomePage() {
 
   if (isLoadingDefaults) {
     return (
-      <section className="panel">
-        <p className="eyebrow">配置</p>
-        <h2>运行配置首页</h2>
-        <p>正在从后端加载默认设置...</p>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>运行配置</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">正在从后端加载默认设置...</p>
+        </CardContent>
+      </Card>
     );
   }
 
   if (config === null) {
     return (
-      <section className="panel">
-        <p className="eyebrow">配置</p>
-        <h2>运行配置首页</h2>
-        <p role="alert">{pageError ?? '默认配置当前不可用。'}</p>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>运行配置</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p role="alert" className="text-sm text-destructive">
+            {pageError ?? '默认配置当前不可用。'}
+          </p>
+        </CardContent>
+      </Card>
     );
   }
 
+  const githubConnected = githubAuthStatus?.connected && !githubAuthStatus.requiresReauth;
+
   return (
-    <section className="panel config-page">
-      <div className="config-hero">
+    <div className="space-y-4">
+      {/* 顶部：标题 + YAML 上传 */}
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="eyebrow">配置</p>
-          <h2>运行配置首页</h2>
-          <p>
-            上传 YAML 配置后，后端会进行规范化并回填表单。上传文件只用于本次运行参数；GitHub
-            授权使用单独的连接流程。你可以继续调整分组设置，然后使用本地 Maven
-            项目路径启动一次运行。
+          <p className="text-xs font-mono text-muted-foreground tracking-widest uppercase mb-1">
+            配置
+          </p>
+          <h1 className="text-xl font-semibold">运行配置首页</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            上传 YAML 后端规范化并回填表单。你可以继续调整参数，然后用本地路径或 GitHub
+            仓库启动运行。
           </p>
         </div>
-
-        <label className="upload-card" htmlFor="config-upload">
-          <span className="upload-card__title">上传 YAML</span>
-          <span className="upload-card__body">
-            使用 <code>/api/config/parse</code> 规范化运行配置并回填表单。
-          </span>
+        <label
+          className="flex-shrink-0 cursor-pointer border border-dashed border-border rounded-lg px-4 py-3 text-sm hover:bg-accent transition-colors text-center"
+          htmlFor="config-upload"
+        >
+          <div className="font-medium">上传 YAML</div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            使用 <code>/api/config/parse</code> 规范化
+          </div>
           <input
             id="config-upload"
             name="config-upload"
             type="file"
             aria-label="上传 YAML"
             accept=".yaml,.yml,application/x-yaml,text/yaml,text/x-yaml"
+            className="hidden"
             onChange={handleConfigUpload}
           />
         </label>
       </div>
 
       {pageError ? (
-        <div className="feedback-banner feedback-banner--error" role="alert">
-          {pageError}
-        </div>
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>{pageError}</AlertDescription>
+        </Alert>
       ) : null}
 
       {uploadNotice ? (
-        <div className="feedback-banner feedback-banner--success">{uploadNotice}</div>
+        <Alert>
+          <AlertDescription>{uploadNotice}</AlertDescription>
+        </Alert>
       ) : null}
 
-      <div className="panel project-panel">
-        <div>
-          <p className="eyebrow">项目</p>
-          <h3>目标来源</h3>
-          <p>选择本地 Maven 项目路径或 GitHub 仓库作为运行目标。</p>
-        </div>
-
-        <div className="source-mode-tabs">
-          <button
-            type="button"
-            className={`secondary-button ${sourceMode === 'local' ? 'source-mode-tab--active' : ''}`}
-            onClick={() => setSourceMode('local')}
+      {/* 目标来源 */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">目标来源</CardTitle>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            选择本地 Maven 项目路径或 GitHub 仓库作为运行目标。
+          </p>
+        </CardHeader>
+        <CardContent>
+          <Tabs
+            value={sourceMode}
+            onValueChange={(value) => setSourceMode(value as SourceMode)}
+            className="space-y-4"
           >
-            本地路径
-          </button>
-          <button
-            type="button"
-            className={`secondary-button ${sourceMode === 'github' ? 'source-mode-tab--active' : ''}`}
-            onClick={() => setSourceMode('github')}
-          >
-            GitHub 仓库
-          </button>
-        </div>
+            <TabsList className="h-8">
+              <TabsTrigger value="local" className="text-xs h-6">
+                本地路径
+              </TabsTrigger>
+              <TabsTrigger value="github" className="text-xs h-6">
+                GitHub 仓库
+              </TabsTrigger>
+            </TabsList>
 
-        {sourceMode === 'local' ? (
-          <>
-            <label className="field" htmlFor="project-path">
-              <span className="field__label">项目路径</span>
-              <input
-                id="project-path"
-                name="projectPath"
-                type="text"
-                aria-label="项目路径"
-                value={projectPath}
-                placeholder="/path/to/project 或 examples/calculator-demo"
-                onChange={(event) => {
-                  setProjectPath(event.target.value);
-                  setFieldErrors((current) => {
-                    const nextErrors = { ...current };
-                    delete nextErrors.projectPath;
-                    return nextErrors;
-                  });
-                }}
-              />
-              <span className="field__hint">接受的路径会在后端所在主机上解析。</span>
-              {fieldErrors.projectPath ? (
-                <span className="field__error" role="alert">
-                  {fieldErrors.projectPath}
-                </span>
-              ) : null}
-            </label>
-
-            <label className="field" htmlFor="bug-reports-dir">
-              <span className="field__label">缺陷报告目录</span>
-              <input
-                id="bug-reports-dir"
-                name="bugReportsDir"
-                type="text"
-                aria-label="缺陷报告目录"
-                value={bugReportsDir}
-                placeholder="examples/calculator-demo/bug-reports"
-                onChange={(event) => {
-                  setBugReportsDir(event.target.value);
-                  setFieldErrors((current) => {
-                    const nextErrors = { ...current };
-                    delete nextErrors.bugReportsDir;
-                    return nextErrors;
-                  });
-                }}
-              />
-              <span className="field__hint">
-                可选的 Markdown 缺陷报告目录，会为本次运行的知识库建立索引。
-              </span>
-              {fieldErrors.bugReportsDir ? (
-                <span className="field__error" role="alert">
-                  {fieldErrors.bugReportsDir}
-                </span>
-              ) : null}
-            </label>
-
-            <div>
-              <p className="eyebrow">示例</p>
-              <div className="example-shortcuts">
-                {EXAMPLE_PROJECTS.map((example) => (
-                  <button
-                    key={example.path}
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => setProjectPath(example.path)}
-                  >
-                    {example.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="github-auth-section">
-              <div className="github-auth-status">
-                {githubAuthStatus?.connected && !githubAuthStatus.requiresReauth ? (
-                  <div className="github-auth-connected">
-                    <span className="github-auth-badge github-auth-badge--connected">已连接</span>
-                    {githubAuthStatus.username ? (
-                      <span className="github-auth-username">{githubAuthStatus.username}</span>
-                    ) : null}
-                  </div>
-                ) : githubAuthStatus?.requiresReauth ? (
-                  <div className="github-auth-reauth">
-                    <span className="github-auth-badge github-auth-badge--reauth">需重新授权</span>
-                    <span className="github-auth-hint">授权已过期或失效，请重新连接。</span>
-                  </div>
-                ) : (
-                  <div className="github-auth-disconnected">
-                    <span className="github-auth-badge github-auth-badge--disconnected">
-                      未连接
-                    </span>
-                    <span className="github-auth-hint">请连接 GitHub 账户以使用仓库模式。</span>
-                  </div>
-                )}
+            <TabsContent value="local" className="space-y-3 mt-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="project-path" className="text-xs">
+                  项目路径
+                </Label>
+                <Input
+                  id="project-path"
+                  name="projectPath"
+                  type="text"
+                  aria-label="项目路径"
+                  value={projectPath}
+                  placeholder="/path/to/project 或 examples/calculator-demo"
+                  className="h-8 text-sm"
+                  onChange={(event) => {
+                    setProjectPath(event.target.value);
+                    setFieldErrors((current) => {
+                      const nextErrors = { ...current };
+                      delete nextErrors.projectPath;
+                      return nextErrors;
+                    });
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">接受的路径会在后端所在主机上解析。</p>
+                {fieldErrors.projectPath ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    {fieldErrors.projectPath}
+                  </p>
+                ) : null}
               </div>
 
-              <div className="github-auth-actions">
-                {!githubAuthStatus?.connected || githubAuthStatus.requiresReauth ? (
-                  <button
-                    type="button"
-                    className="primary-button"
-                    data-testid="github-connect-button"
-                    onClick={handleConnectGithub}
-                    disabled={isConnectingGithub}
-                  >
-                    {isConnectingGithub ? '正在连接...' : '连接 GitHub'}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    data-testid="disconnect-github-button"
-                    onClick={handleDisconnectGithub}
-                    disabled={isDisconnectingGithub}
-                  >
-                    {isDisconnectingGithub ? '正在断开...' : '断开连接'}
-                  </button>
-                )}
+              <div className="space-y-1.5">
+                <Label htmlFor="bug-reports-dir" className="text-xs">
+                  缺陷报告目录
+                </Label>
+                <Input
+                  id="bug-reports-dir"
+                  name="bugReportsDir"
+                  type="text"
+                  aria-label="缺陷报告目录"
+                  value={bugReportsDir}
+                  placeholder="examples/calculator-demo/bug-reports"
+                  className="h-8 text-sm"
+                  onChange={(event) => {
+                    setBugReportsDir(event.target.value);
+                    setFieldErrors((current) => {
+                      const nextErrors = { ...current };
+                      delete nextErrors.bugReportsDir;
+                      return nextErrors;
+                    });
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  可选的 Markdown 缺陷报告目录，会为本次运行的知识库建立索引。
+                </p>
+                {fieldErrors.bugReportsDir ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    {fieldErrors.bugReportsDir}
+                  </p>
+                ) : null}
               </div>
-            </div>
 
-            <label className="field" htmlFor="github-repo-picker">
-              <span className="field__label">选择仓库</span>
-              <div className="repo-picker">
-                <input
+              <div>
+                <p className="text-xs text-muted-foreground mb-1.5">示例项目</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {EXAMPLE_PROJECTS.map((example) => (
+                    <Button
+                      key={example.path}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setProjectPath(example.path)}
+                    >
+                      {example.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="github" className="space-y-3 mt-3">
+              {/* GitHub 授权状态 */}
+              <div className="flex items-center justify-between py-2 px-3 rounded-md bg-muted/50">
+                <div className="flex items-center gap-2">
+                  {githubConnected ? (
+                    <>
+                      <Badge
+                        variant="outline"
+                        className="text-xs bg-green-50 text-green-700 border-green-200"
+                      >
+                        已连接
+                      </Badge>
+                      {githubAuthStatus?.username ? (
+                        <span className="text-sm text-muted-foreground">
+                          {githubAuthStatus.username}
+                        </span>
+                      ) : null}
+                    </>
+                  ) : githubAuthStatus?.requiresReauth ? (
+                    <>
+                      <Badge
+                        variant="outline"
+                        className="text-xs bg-yellow-50 text-yellow-700 border-yellow-200"
+                      >
+                        需重新授权
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        授权已过期或失效，请重新连接。
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Badge variant="outline" className="text-xs">
+                        未连接
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        请连接 GitHub 账户以使用仓库模式。
+                      </span>
+                    </>
+                  )}
+                </div>
+                <div>
+                  {!githubConnected ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-7 text-xs"
+                      data-testid="github-connect-button"
+                      onClick={handleConnectGithub}
+                      disabled={isConnectingGithub}
+                    >
+                      {isConnectingGithub ? '连接中...' : '连接 GitHub'}
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      data-testid="disconnect-github-button"
+                      onClick={handleDisconnectGithub}
+                      disabled={isDisconnectingGithub}
+                    >
+                      {isDisconnectingGithub ? '断开中...' : '断开连接'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {/* 仓库选择 */}
+              <div className="space-y-1.5">
+                <Label htmlFor="github-repo-picker" className="text-xs">
+                  选择仓库
+                </Label>
+                <Input
                   id="github-repo-picker"
                   name="githubRepoFilter"
                   type="text"
@@ -649,6 +709,7 @@ export function HomePage() {
                   data-testid="repo-picker-filter"
                   value={repoFilterQuery}
                   placeholder="搜索仓库名称..."
+                  className="h-8 text-sm"
                   onChange={(event) => {
                     setRepoFilterQuery(event.target.value);
                     setFieldErrors((current) => {
@@ -657,20 +718,22 @@ export function HomePage() {
                       return nextErrors;
                     });
                   }}
-                  disabled={!githubAuthStatus?.connected || githubAuthStatus.requiresReauth}
+                  disabled={!githubConnected}
                 />
                 {isLoadingRepositories ? (
-                  <div className="repo-picker__loading" role="status">
+                  <p className="text-xs text-muted-foreground" role="status">
                     正在加载仓库列表...
-                  </div>
-                ) : githubRepositories.length === 0 &&
-                  githubAuthStatus?.connected &&
-                  !githubAuthStatus.requiresReauth ? (
-                  <div className="repo-picker__empty" role="status">
+                  </p>
+                ) : githubRepositories.length === 0 && githubConnected ? (
+                  <p className="text-xs text-muted-foreground" role="status">
                     暂无可用仓库
-                  </div>
+                  </p>
                 ) : (
-                  <ul className="repo-picker__list" role="listbox" aria-label="GitHub 仓库列表">
+                  <ul
+                    className="max-h-48 overflow-y-auto rounded-md border border-border divide-y divide-border"
+                    role="listbox"
+                    aria-label="GitHub 仓库列表"
+                  >
                     {githubRepositories
                       .filter((repo) =>
                         repoFilterQuery.trim() === ''
@@ -686,7 +749,7 @@ export function HomePage() {
                         >
                           <button
                             type="button"
-                            className={`repo-picker__item ${githubRepoUrl === repo.url ? 'repo-picker__item--selected' : ''}`}
+                            className={`w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors ${githubRepoUrl === repo.url ? 'bg-accent repo-picker__item--selected' : ''}`}
                             data-testid={`repo-item-${repo.fullName}`}
                             onClick={() => {
                               setGithubRepoUrl(repo.url);
@@ -696,117 +759,127 @@ export function HomePage() {
                                 return nextErrors;
                               });
                             }}
-                            disabled={
-                              !githubAuthStatus?.connected || githubAuthStatus.requiresReauth
-                            }
+                            disabled={!githubConnected}
                           >
-                            <span className="repo-picker__item-name">{repo.fullName}</span>
-                            {repo.private ? (
-                              <span className="repo-picker__item-badge repo-picker__item-badge--private">
-                                私有
-                              </span>
-                            ) : null}
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{repo.fullName}</span>
+                              {repo.private ? (
+                                <Badge variant="secondary" className="text-xs h-4 px-1">
+                                  私有
+                                </Badge>
+                              ) : null}
+                            </div>
                             {repo.description ? (
-                              <span className="repo-picker__item-desc">{repo.description}</span>
+                              <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                                {repo.description}
+                              </p>
                             ) : null}
                           </button>
                         </li>
                       ))}
                   </ul>
                 )}
+                <p className="text-xs text-muted-foreground">
+                  从已授权的 GitHub 账户仓库中选择目标仓库。
+                </p>
+                {fieldErrors.githubRepoUrl ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    {fieldErrors.githubRepoUrl}
+                  </p>
+                ) : null}
               </div>
-              <span className="field__hint">从已授权的 GitHub 账户仓库中选择目标仓库。</span>
-              {fieldErrors.githubRepoUrl ? (
-                <span className="field__error" role="alert">
-                  {fieldErrors.githubRepoUrl}
-                </span>
-              ) : null}
-            </label>
 
-            <label className="field" htmlFor="github-base-branch">
-              <span className="field__label">基线分支</span>
-              <input
-                id="github-base-branch"
-                name="githubBaseBranch"
-                type="text"
-                aria-label="基线分支"
-                value={githubBaseBranch}
-                placeholder="main 或 master"
-                onChange={(event) => {
-                  setGithubBaseBranch(event.target.value);
-                  setFieldErrors((current) => {
-                    const nextErrors = { ...current };
-                    delete nextErrors.githubBaseBranch;
-                    return nextErrors;
-                  });
-                }}
-                disabled={!githubAuthStatus?.connected || githubAuthStatus.requiresReauth}
-              />
-              <span className="field__hint">
-                可选的基线分支名称，留空时后端会尝试解析默认分支。
-              </span>
-              {fieldErrors.githubBaseBranch ? (
-                <span className="field__error" role="alert">
-                  {fieldErrors.githubBaseBranch}
-                </span>
-              ) : null}
-            </label>
-
-            <label className="field" htmlFor="selected-java-version">
-              <span className="field__label">目标 Java 版本</span>
-              <select
-                id="selected-java-version"
-                name="selectedJavaVersion"
-                aria-label="目标 Java 版本"
-                data-testid="java-version-select"
-                value={selectedJavaVersion}
-                onChange={(event) => {
-                  setSelectedJavaVersion(event.target.value);
-                  setFieldErrors((current) => {
-                    const nextErrors = { ...current };
-                    delete nextErrors.selectedJavaVersion;
-                    return nextErrors;
-                  });
-                }}
-                disabled={!githubAuthStatus?.connected || githubAuthStatus.requiresReauth}
-              >
-                <option value="">请选择版本</option>
-                {JAVA_VERSION_OPTIONS.map((version) => (
-                  <option key={version} value={version}>
-                    Java {version}
-                  </option>
-                ))}
-              </select>
-              <span className="field__hint">
-                选择目标项目使用的 Java 版本，会映射到容器内固定 JDK 路径；若手动填写目标项目 Java
-                目录，则以手填路径为准。
-              </span>
-              {fieldErrors.selectedJavaVersion ? (
-                <span className="field__error" role="alert">
-                  {fieldErrors.selectedJavaVersion}
-                </span>
-              ) : null}
-            </label>
-
-            {!githubAuthStatus?.connected || githubAuthStatus.requiresReauth ? (
-              <div className="feedback-banner feedback-banner--warning">
-                请先连接 GitHub 账户后再使用仓库模式运行。
+              <div className="space-y-1.5">
+                <Label htmlFor="github-base-branch" className="text-xs">
+                  基线分支
+                </Label>
+                <Input
+                  id="github-base-branch"
+                  name="githubBaseBranch"
+                  type="text"
+                  aria-label="基线分支"
+                  value={githubBaseBranch}
+                  placeholder="main 或 master"
+                  className="h-8 text-sm"
+                  onChange={(event) => {
+                    setGithubBaseBranch(event.target.value);
+                    setFieldErrors((current) => {
+                      const nextErrors = { ...current };
+                      delete nextErrors.githubBaseBranch;
+                      return nextErrors;
+                    });
+                  }}
+                  disabled={!githubConnected}
+                />
+                <p className="text-xs text-muted-foreground">
+                  可选，留空时后端会尝试解析默认分支。
+                </p>
+                {fieldErrors.githubBaseBranch ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    {fieldErrors.githubBaseBranch}
+                  </p>
+                ) : null}
               </div>
-            ) : null}
-          </>
-        )}
-      </div>
 
-      <div className="config-sections">
-        {groupedSections.map((section) => (
-          <section key={section.key} className="panel config-section">
-            <div className="section-heading">
-              <p className="eyebrow">分组</p>
-              <h3>{section.title}</h3>
-              <p>{section.description}</p>
-            </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="selected-java-version" className="text-xs">
+                  目标 Java 版本
+                </Label>
+                <select
+                  id="selected-java-version"
+                  data-testid="java-version-select"
+                  aria-label="目标 Java 版本"
+                  value={selectedJavaVersion}
+                  onChange={(e) => {
+                    setSelectedJavaVersion(e.target.value);
+                    setFieldErrors((current) => {
+                      const nextErrors = { ...current };
+                      delete nextErrors.selectedJavaVersion;
+                      return nextErrors;
+                    });
+                  }}
+                  disabled={!githubConnected}
+                  className="h-8 w-full text-sm rounded-lg border border-input bg-transparent px-2.5 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="">请选择版本</option>
+                  {JAVA_VERSION_OPTIONS.map((version) => (
+                    <option key={version} value={version}>
+                      Java {version}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  选择目标项目使用的 Java 版本，映射到容器内固定 JDK 路径；若手动填写 Java
+                  目录则以手填路径为准。
+                </p>
+                {fieldErrors.selectedJavaVersion ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    {fieldErrors.selectedJavaVersion}
+                  </p>
+                ) : null}
+              </div>
 
-            <div className="field-grid">
+              {!githubConnected ? (
+                <Alert>
+                  <AlertDescription className="text-xs">
+                    请先连接 GitHub 账户后再使用仓库模式运行。
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
+
+      {/* 配置分组 */}
+      {groupedSections.map((section) => (
+        <Card key={section.key}>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">{section.title}</CardTitle>
+            <p className="text-xs text-muted-foreground">{section.description}</p>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
               {section.fields.map((field) => {
                 const fieldKey = getFieldKey(field.path);
                 const fieldId = `field-${fieldKey.replaceAll('.', '-')}`;
@@ -815,78 +888,88 @@ export function HomePage() {
                 const error = fieldErrors[fieldKey];
 
                 return (
-                  <div key={fieldKey} className="field">
-                    <label className="field__label" htmlFor={fieldId}>
+                  <div key={fieldKey} className="space-y-1">
+                    <Label className="text-xs" htmlFor={fieldId}>
                       {field.label}
-                    </label>
+                    </Label>
                     {field.kind === 'boolean' ? (
-                      <span className="checkbox-field">
+                      <div className="flex items-center gap-2">
                         <input
                           id={fieldId}
                           type="checkbox"
                           aria-describedby={hintId}
                           checked={Boolean(value)}
+                          className="h-3.5 w-3.5 rounded"
                           onChange={(event) =>
                             handleFieldChange(field, event.target.value, event.target.checked)
                           }
                         />
-                        <span>启用</span>
-                      </span>
+                        <span className="text-xs">启用</span>
+                      </div>
                     ) : field.kind === 'nullable-boolean' ? (
-                      <select
-                        id={fieldId}
-                        aria-describedby={hintId}
+                      <Select
                         value={value === null || value === undefined ? '' : String(value)}
-                        onChange={(event) => handleFieldChange(field, event.target.value, false)}
+                        onValueChange={(val) => handleFieldChange(field, val ?? '', false)}
                       >
-                        <option value="">继承默认值</option>
-                        <option value="true">是</option>
-                        <option value="false">否</option>
-                      </select>
+                        <SelectTrigger
+                          id={fieldId}
+                          aria-describedby={hintId}
+                          className="h-7 text-xs"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="" className="text-xs">
+                            继承默认值
+                          </SelectItem>
+                          <SelectItem value="true" className="text-xs">
+                            是
+                          </SelectItem>
+                          <SelectItem value="false" className="text-xs">
+                            否
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
                     ) : (
-                      <input
+                      <Input
                         id={fieldId}
                         type={field.kind === 'number' ? 'number' : field.kind}
                         aria-describedby={hintId}
                         value={valueToInputString(value)}
                         step={field.step}
                         placeholder={field.placeholder}
+                        className="h-7 text-xs"
                         onChange={(event) =>
                           handleFieldChange(field, event.target.value, event.target.checked)
                         }
                       />
                     )}
-                    <span id={hintId} className="field__hint">
+                    <p id={hintId} className="text-xs text-muted-foreground leading-tight">
                       {field.description}
-                    </span>
-                    {error ? <span className="field__error">{error}</span> : null}
+                    </p>
+                    {error ? <p className="text-xs text-destructive">{error}</p> : null}
                   </div>
                 );
               })}
             </div>
-          </section>
-        ))}
-      </div>
+          </CardContent>
+        </Card>
+      ))}
 
-      <div className="action-row">
-        <button
+      {/* 提交按钮 */}
+      <div className="flex justify-end pt-2">
+        <Button
           type="button"
-          className="primary-button"
           onClick={handleSubmit}
-          disabled={
-            isSubmitting ||
-            (sourceMode === 'github' &&
-              (!githubAuthStatus?.connected || githubAuthStatus.requiresReauth))
-          }
+          disabled={isSubmitting || (sourceMode === 'github' && !githubConnected)}
         >
           {isSubmitting
             ? '正在启动运行...'
-            : sourceMode === 'github' &&
-                (!githubAuthStatus?.connected || githubAuthStatus.requiresReauth)
+            : sourceMode === 'github' && !githubConnected
               ? '请先连接 GitHub'
               : '启动运行'}
-        </button>
+        </Button>
       </div>
-    </section>
+    </div>
   );
 }

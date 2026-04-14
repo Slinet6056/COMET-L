@@ -43,18 +43,12 @@ class GitHubPullRequestService:
         self,
         github_auth_service: GitHubOAuthService,
         *,
-        subprocess_runner: Callable[
-            ..., subprocess.CompletedProcess[str]
-        ] = subprocess.run,
+        subprocess_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
         http_client_factory: Callable[[], httpx.Client] | None = None,
     ) -> None:
         self._github_auth_service: GitHubOAuthService = github_auth_service
-        self._subprocess_runner: Callable[..., subprocess.CompletedProcess[str]] = (
-            subprocess_runner
-        )
-        fallback_http_client_factory = getattr(
-            github_auth_service, "_http_client_factory", None
-        )
+        self._subprocess_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess_runner
+        fallback_http_client_factory = getattr(github_auth_service, "_http_client_factory", None)
         self._http_client_factory: Callable[[], httpx.Client]
         if http_client_factory is not None:
             self._http_client_factory = http_client_factory
@@ -92,17 +86,15 @@ class GitHubPullRequestService:
             raise GitPullRequestError("缺少基线分支信息，无法创建 PR。")
 
         token = self._load_access_token(github_config)
-        authed_remote_url = f"https://x-access-token:{token}@github.com/{identity.owner}/{identity.repo}.git"
+        authed_remote_url = (
+            f"https://x-access-token:{token}@github.com/{identity.owner}/{identity.repo}.git"
+        )
         status_lines = self._collect_git_status_lines(resolved_project_path)
         stage_candidates = self._collect_stage_candidates(status_lines)
         if not stage_candidates:
-            raise GitPullRequestError(
-                "未检测到可提交的测试源码或测试资源文件，已跳过自动 PR。"
-            )
+            raise GitPullRequestError("未检测到可提交的测试源码或测试资源文件，已跳过自动 PR。")
 
-        branch_name = self._create_unique_branch(
-            run_id, resolved_project_path, authed_remote_url
-        )
+        branch_name = self._create_unique_branch(run_id, resolved_project_path, authed_remote_url)
         _ = self._run_git_command(
             ["checkout", "-b", branch_name],
             cwd=resolved_project_path,
@@ -149,9 +141,7 @@ class GitHubPullRequestService:
             token=token,
             github_config=github_config,
         )
-        return GitPullRequestResult(
-            branch_name=branch_name, pull_request_url=pull_request_url
-        )
+        return GitPullRequestResult(branch_name=branch_name, pull_request_url=pull_request_url)
 
     def _collect_git_status_lines(self, project_path: Path) -> list[str]:
         result = self._run_git_command(
@@ -159,9 +149,7 @@ class GitHubPullRequestService:
             cwd=project_path,
             error_message="检查仓库 Git 状态失败。",
         )
-        lines = [
-            line.rstrip("\n") for line in result.stdout.splitlines() if line.strip()
-        ]
+        lines = [line.rstrip("\n") for line in result.stdout.splitlines() if line.strip()]
         return lines
 
     def _collect_stage_candidates(self, status_lines: list[str]) -> list[str]:
@@ -189,9 +177,7 @@ class GitHubPullRequestService:
                 unique_candidates.append(path)
         return unique_candidates
 
-    def _create_unique_branch(
-        self, run_id: str, project_path: Path, authed_remote_url: str
-    ) -> str:
+    def _create_unique_branch(self, run_id: str, project_path: Path, authed_remote_url: str) -> str:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         base_name = f"comet-l/{run_id}-{timestamp}"
         candidate = base_name
@@ -206,9 +192,7 @@ class GitHubPullRequestService:
 
         raise GitPullRequestError("分支名冲突过多，无法生成可用分支名。")
 
-    def _branch_exists(
-        self, project_path: Path, branch_name: str, authed_remote_url: str
-    ) -> bool:
+    def _branch_exists(self, project_path: Path, branch_name: str, authed_remote_url: str) -> bool:
         local_exists = (
             self._run_git_command(
                 ["show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
@@ -298,9 +282,7 @@ class GitHubPullRequestService:
         }:
             raise GitPullRequestError("仓库地址必须是 GitHub HTTPS 地址。")
         if len(path_parts) != 2:
-            raise GitPullRequestError(
-                "仓库地址必须是 https://github.com/<owner>/<repo> 格式。"
-            )
+            raise GitPullRequestError("仓库地址必须是 https://github.com/<owner>/<repo> 格式。")
 
         owner = path_parts[0].strip()
         repo = path_parts[1].strip()
@@ -309,9 +291,9 @@ class GitHubPullRequestService:
 
         if not owner or not repo:
             raise GitPullRequestError("仓库地址缺少 owner 或 repo。")
-        if not _GITHUB_SEGMENT_PATTERN.fullmatch(
-            owner
-        ) or not _GITHUB_SEGMENT_PATTERN.fullmatch(repo):
+        if not _GITHUB_SEGMENT_PATTERN.fullmatch(owner) or not _GITHUB_SEGMENT_PATTERN.fullmatch(
+            repo
+        ):
             raise GitPullRequestError("仓库地址包含非法字符。")
         return _RepoIdentity(owner=owner, repo=repo)
 

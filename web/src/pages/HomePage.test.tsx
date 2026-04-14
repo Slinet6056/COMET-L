@@ -104,7 +104,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
     expect(screen.getByTestId('github-connect-button')).toBeInTheDocument();
@@ -128,7 +128,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
     expect(screen.getByTestId('disconnect-github-button')).toBeInTheDocument();
@@ -151,7 +151,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
     expect(screen.getByText('需重新授权')).toBeInTheDocument();
@@ -175,7 +175,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
     expect(screen.getByTestId('repo-picker-filter')).toBeDisabled();
@@ -211,7 +211,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
     await screen.findByTestId('repo-picker-filter');
@@ -239,7 +239,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     const disconnectButton = screen.getByTestId('disconnect-github-button');
@@ -315,7 +315,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await screen.findByTestId('repo-item-testuser/test-repo');
@@ -365,7 +365,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await screen.findByTestId('repo-picker-filter');
@@ -406,7 +406,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await screen.findByTestId('repo-item-testuser/test-repo');
@@ -482,7 +482,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await screen.findByTestId('repo-item-testuser/test-repo');
@@ -527,7 +527,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await waitFor(() => {
@@ -558,7 +558,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await waitFor(() => {
@@ -588,7 +588,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await waitFor(() => {
@@ -623,7 +623,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await waitFor(() => {
@@ -658,7 +658,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await waitFor(() => {
@@ -704,7 +704,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
     expect(screen.getByText('正在加载仓库列表...')).toBeInTheDocument();
@@ -727,7 +727,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
     await waitFor(() => {
@@ -772,7 +772,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await screen.findByTestId('repo-item-testuser/alpha-project');
@@ -814,7 +814,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
 
     await screen.findByTestId('repo-item-testuser/private-repo');
@@ -850,7 +850,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     const repoItem = await screen.findByTestId('repo-item-testuser/test-repo');
@@ -898,7 +898,7 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByLabelText('项目路径');
 
-    const githubTab = screen.getByRole('button', { name: 'GitHub 仓库' });
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
 
     await waitFor(() => {

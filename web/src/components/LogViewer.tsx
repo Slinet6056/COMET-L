@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   fetchRunLogs,
   fetchRunLogsForTask,
@@ -302,6 +306,14 @@ function isRunningStream(stream: RunLogStream, runStatus: string): boolean {
 
 function isFinishedStream(stream: RunLogStream, runStatus: string): boolean {
   return stream.taskId !== 'main' && !isRunningStream(stream, runStatus);
+}
+
+function statusToneToVariant(
+  tone: 'success' | 'error' | 'running',
+): 'default' | 'destructive' | 'outline' {
+  if (tone === 'success') return 'default';
+  if (tone === 'error') return 'destructive';
+  return 'outline';
 }
 
 export function LogViewer({ runId, runStatus }: LogViewerProps) {
@@ -640,12 +652,17 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
     return (
       <section
         id={panelId}
-        className="run-log-viewer__detail"
         aria-label={`${displayStream.taskId} 的日志`}
         aria-labelledby={labelledBy}
       >
-        {isEntriesLoading ? <p className="muted-copy">正在加载日志条目...</p> : null}
-        {!isEntriesLoading && entryError ? <p role="alert">{entryError}</p> : null}
+        {isEntriesLoading ? (
+          <p className="text-xs text-muted-foreground">正在加载日志条目...</p>
+        ) : null}
+        {!isEntriesLoading && entryError ? (
+          <p role="alert" className="text-xs text-destructive">
+            {entryError}
+          </p>
+        ) : null}
         {!isEntriesLoading && !entryError ? (
           entries.length > 0 ? (
             <div
@@ -663,17 +680,21 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
               }}
             >
               {entries.map((entry) => (
-                <div key={`${entry.taskId}-${entry.sequence}`} className="run-log-line">
-                  <span className="run-log-line__time">{formatTimestamp(entry.timestamp)}</span>
-                  <span className="run-log-line__level">{entry.level}</span>
-                  <code>{entry.message}</code>
+                <div key={`${entry.taskId}-${entry.sequence}`} className="flex gap-2">
+                  <span className="text-gray-500 flex-shrink-0">
+                    {formatTimestamp(entry.timestamp)}
+                  </span>
+                  <span className="text-gray-400 flex-shrink-0 uppercase text-xs">
+                    {entry.level}
+                  </span>
+                  <code className="flex-1">{entry.message}</code>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="run-log-terminal run-log-terminal--empty">
-              <strong>{emptyState.title}</strong>
-              <p className="muted-copy">{emptyState.detail}</p>
+            <div className="run-log-terminal">
+              <strong className="text-gray-300">{emptyState.title}</strong>
+              <p className="text-gray-500 text-sm mt-1">{emptyState.detail}</p>
             </div>
           )
         ) : null}
@@ -691,18 +712,18 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
     const axisMid = axisRange.min === null ? null : axisRange.min + axisRange.span / 2;
 
     return (
-      <div className="run-log-timeline">
-        <div className="run-log-timeline__axis" aria-hidden="true">
-          <span className="run-log-timeline__axis-spacer" />
-          <span className="run-log-timeline__axis-labels">
-            <span>{formatAxisTimestamp(axisRange.min)}</span>
-            <span>{formatAxisTimestamp(axisMid)}</span>
-            <span>{formatAxisTimestamp(axisRange.max)}</span>
-          </span>
-          <span className="run-log-timeline__axis-spacer" />
+      <div className="space-y-1">
+        {/* 时间轴标注 */}
+        <div
+          className="flex text-xs text-muted-foreground pl-[308px] pr-[152px]"
+          aria-hidden="true"
+        >
+          <span className="flex-1 text-left">{formatAxisTimestamp(axisRange.min)}</span>
+          <span className="flex-1 text-center">{formatAxisTimestamp(axisMid)}</span>
+          <span className="flex-1 text-right">{formatAxisTimestamp(axisRange.max)}</span>
         </div>
 
-        <ul className="run-log-timeline__rows">
+        <ul className="space-y-1">
           {streamList.map((stream) => {
             const isSelected = selectedTaskId === stream.taskId;
             const detailPanelId = `${view}-log-panel-${stream.taskId}`;
@@ -713,54 +734,65 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
             const hasBar = axisStart !== null && start !== null && end !== null;
             const offset = hasBar ? ((start - axisStart) / axisRange.span) * 100 : 0;
             const width = hasBar ? Math.max(((end - start) / axisRange.span) * 100, 0.6) : 0;
+            const tone = getStreamStatusTone(stream.status);
 
             return (
-              <li key={stream.taskId} className="run-log-row-group">
+              <li key={stream.taskId} className="run-log-row">
                 <button
                   type="button"
                   id={buttonId}
-                  className={isSelected ? 'run-log-row run-log-row--expanded' : 'run-log-row'}
+                  className={`w-full text-left rounded-md border px-3 py-2 text-xs hover:bg-accent transition-colors ${isSelected ? 'bg-accent border-border' : 'border-transparent'}`}
                   aria-expanded={isSelected}
                   aria-controls={detailPanelId}
                   onClick={() => onSelectTaskId(isSelected ? null : stream.taskId)}
                 >
-                  <span className="run-log-row__info">
-                    <span className="run-log-row__title">
-                      <strong title={stream.taskId}>{formatTaskLabel(stream.taskId)}</strong>
-                      <span
-                        className={`worker-pill worker-pill--${getStreamStatusTone(stream.status)}`}
+                  <div className="flex items-center gap-2">
+                    {/* 任务信息 */}
+                    <div className="w-72 flex-shrink-0 flex items-center justify-between gap-1.5 min-w-0">
+                      <span className="font-mono truncate min-w-0 flex-1" title={stream.taskId}>
+                        {formatTaskLabel(stream.taskId)}
+                      </span>
+                      <Badge
+                        variant={statusToneToVariant(tone)}
+                        className="text-xs h-4 px-1 flex-shrink-0"
                       >
                         {formatStatusLabel(stream.status)}
-                      </span>
-                    </span>
-                    <span className="run-log-row__stats">
+                      </Badge>
+                    </div>
+
+                    {/* 时间轴条 */}
+                    <div className="flex-1 relative h-4 flex items-center" aria-hidden="true">
+                      <div className="absolute inset-0 bg-muted rounded-full" />
+                      {hasBar ? (
+                        <div
+                          className={`run-log-row__bar absolute h-3 rounded-full ${tone === 'success' ? 'bg-primary' : tone === 'error' ? 'bg-destructive' : 'bg-primary/60'}`}
+                          style={{
+                            left: `${offset}%`,
+                            width: `${Math.min(width, 100 - offset)}%`,
+                          }}
+                        />
+                      ) : (
+                        <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+                          暂无时间数据
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 统计信息 */}
+                    <div className="w-32 flex-shrink-0 flex items-center justify-between gap-2 text-muted-foreground">
                       <span>{getStreamLogStateLabel(stream, runStatus)}</span>
                       <span>{formatStreamDuration(stream, runStatus)}</span>
-                      <span>工作线程</span>
+                    </div>
+
+                    <span className="text-muted-foreground text-xs ml-1">
+                      {isSelected ? '收起' : '查看'}
                     </span>
-                  </span>
-
-                  <span className="run-log-row__timeline" aria-hidden="true">
-                    <span className="run-log-row__track" />
-                    {hasBar ? (
-                      <span
-                        className="run-log-row__bar"
-                        style={{
-                          left: `${offset}%`,
-                          width: `${Math.min(width, 100 - offset)}%`,
-                        }}
-                      />
-                    ) : (
-                      <span className="run-log-row__idle">暂无时间数据</span>
-                    )}
-                  </span>
-
-                  <span className="run-log-row__toggle">
-                    {isSelected ? '收起日志' : '查看日志'}
-                  </span>
+                  </div>
                 </button>
 
-                {isSelected ? renderLogPanel(stream, detailPanelId, buttonId) : null}
+                {isSelected ? (
+                  <div className="mt-1 pl-2">{renderLogPanel(stream, detailPanelId, buttonId)}</div>
+                ) : null}
               </li>
             );
           })}
@@ -776,157 +808,132 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
     ...(streamByTaskId.main ?? mainStream),
     status: normalizeStreamStatus(streamByTaskId.main ?? mainStream, runStatus),
   };
-  const activeTabId = `run-log-tab-${currentView}`;
-  const activePanelId = `run-log-tabpanel-${currentView}`;
 
   return (
-    <section className="run-card" aria-labelledby="run-logs-panel">
-      <div className="run-card__header run-card__header--compact">
-        <div>
-          <p className="eyebrow">日志</p>
-          <h3 id="run-logs-panel">日志查看器</h3>
-        </div>
-      </div>
-
-      <p className="muted-copy run-log-viewer__hint">
-        一次只显示一个视图，可在主日志、运行中和已结束之间切换。
-      </p>
-
-      <div className="run-log-viewer__toolbar-row">
-        <div className="run-log-viewer__toolbar" role="tablist" aria-label="日志视图切换">
-          <button
-            type="button"
-            id="run-log-tab-main"
-            role="tab"
-            aria-controls="run-log-tabpanel-main"
-            aria-selected={currentView === 'main'}
-            className={
-              currentView === 'main'
-                ? 'secondary-button run-log-viewer__tab run-log-viewer__tab--active'
-                : 'secondary-button run-log-viewer__tab'
-            }
-            onClick={() => setCurrentView('main')}
-          >
-            {mainButtonLabel}
-          </button>
-          <button
-            type="button"
-            id="run-log-tab-running"
-            role="tab"
-            aria-controls="run-log-tabpanel-running"
-            aria-selected={currentView === 'running'}
-            className={
-              currentView === 'running'
-                ? 'secondary-button run-log-viewer__tab run-log-viewer__tab--active'
-                : 'secondary-button run-log-viewer__tab'
-            }
-            onClick={() => setCurrentView('running')}
-          >
-            {runningButtonLabel}
-          </button>
-          <button
-            type="button"
-            id="run-log-tab-finished"
-            role="tab"
-            aria-controls="run-log-tabpanel-finished"
-            aria-selected={currentView === 'finished'}
-            className={
-              currentView === 'finished'
-                ? 'secondary-button run-log-viewer__tab run-log-viewer__tab--active'
-                : 'secondary-button run-log-viewer__tab'
-            }
-            onClick={() => setCurrentView('finished')}
-          >
-            {finishedButtonLabel}
-          </button>
-        </div>
-
-        {currentView === 'finished' && finishedStreams.length > 0 ? (
-          <div className="run-log-viewer__pagination">
-            <button
-              type="button"
-              className="run-log-viewer__pager-button"
-              onClick={() => setFinishedPage((current) => Math.max(current - 1, 0))}
-              disabled={finishedPage === 0}
-            >
-              上一页
-            </button>
-            <span className="muted-copy">
-              第 {finishedPage + 1} / {finishedPageCount} 页
-            </span>
-            <button
-              type="button"
-              className="run-log-viewer__pager-button"
-              onClick={() =>
-                setFinishedPage((current) => Math.min(current + 1, finishedPageCount - 1))
-              }
-              disabled={finishedPage >= finishedPageCount - 1}
-            >
-              下一页
-            </button>
-          </div>
-        ) : null}
-      </div>
-
-      {isSummaryLoading ? <p className="muted-copy">正在加载日志流...</p> : null}
-      {!isSummaryLoading && summaryError ? <p role="alert">{summaryError}</p> : null}
-
-      {!isSummaryLoading && streams ? (
-        <div
-          id={activePanelId}
-          className="run-log-viewer__content"
-          role="tabpanel"
-          aria-labelledby={activeTabId}
-        >
-          {currentView === 'main'
-            ? renderLogPanel(activeMainStream, 'main-log-panel', 'run-log-tab-main')
-            : null}
-
-          {currentView === 'running'
-            ? runningStreams.length > 0
-              ? renderTimelineRows(
-                  'running',
-                  runningStreams,
-                  runningAxisRange,
-                  selectedRunningTaskId,
-                  setSelectedRunningTaskId,
-                )
-              : (() => {
-                  const emptyState = getViewEmptyState('running');
-                  return (
-                    <div className="run-log-terminal run-log-terminal--empty">
-                      <strong>{emptyState.title}</strong>
-                      <p className="muted-copy">{emptyState.detail}</p>
-                    </div>
-                  );
-                })()
-            : null}
-
-          {currentView === 'finished' ? (
-            finishedStreams.length > 0 ? (
-              <>
-                {renderTimelineRows(
-                  'finished',
-                  visibleFinishedStreams,
-                  finishedAxisRange,
-                  selectedFinishedTaskId,
-                  setSelectedFinishedTaskId,
-                )}
-              </>
-            ) : (
-              (() => {
-                const emptyState = getViewEmptyState('finished');
-                return (
-                  <div className="run-log-terminal run-log-terminal--empty">
-                    <strong>{emptyState.title}</strong>
-                    <p className="muted-copy">{emptyState.detail}</p>
-                  </div>
-                );
-              })()
-            )
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">日志查看器</CardTitle>
+          {currentView === 'finished' && finishedStreams.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-xs px-2"
+                onClick={() => setFinishedPage((current) => Math.max(current - 1, 0))}
+                disabled={finishedPage === 0}
+              >
+                上一页
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                第 {finishedPage + 1} / {finishedPageCount} 页
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-xs px-2"
+                onClick={() =>
+                  setFinishedPage((current) => Math.min(current + 1, finishedPageCount - 1))
+                }
+                disabled={finishedPage >= finishedPageCount - 1}
+              >
+                下一页
+              </Button>
+            </div>
           ) : null}
         </div>
-      ) : null}
-    </section>
+        <p className="text-xs text-muted-foreground">
+          一次只显示一个视图，可在主日志、运行中和已结束之间切换。
+        </p>
+      </CardHeader>
+      <CardContent className="pt-0">
+        {isSummaryLoading ? (
+          <p className="text-xs text-muted-foreground">正在加载日志条目...</p>
+        ) : null}
+        {!isSummaryLoading && summaryError ? (
+          <p role="alert" className="text-xs text-destructive">
+            {summaryError}
+          </p>
+        ) : null}
+
+        {!isSummaryLoading && streams ? (
+          <Tabs
+            value={currentView}
+            onValueChange={(value) => setCurrentView(value as LogViewerView)}
+          >
+            <TabsList className="h-8 mb-3" aria-label="日志视图切换">
+              <TabsTrigger
+                value="main"
+                id="run-log-tab-main"
+                className="text-xs h-6"
+                aria-controls="run-log-tabpanel-main"
+              >
+                {mainButtonLabel}
+              </TabsTrigger>
+              <TabsTrigger
+                value="running"
+                id="run-log-tab-running"
+                className="text-xs h-6"
+                aria-controls="run-log-tabpanel-running"
+              >
+                {runningButtonLabel}
+              </TabsTrigger>
+              <TabsTrigger
+                value="finished"
+                id="run-log-tab-finished"
+                className="text-xs h-6"
+                aria-controls="run-log-tabpanel-finished"
+              >
+                {finishedButtonLabel}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="main" id="run-log-tabpanel-main">
+              {renderLogPanel(activeMainStream, 'main-log-panel', 'run-log-tab-main')}
+            </TabsContent>
+
+            <TabsContent value="running" id="run-log-tabpanel-running">
+              {runningStreams.length > 0
+                ? renderTimelineRows(
+                    'running',
+                    runningStreams,
+                    runningAxisRange,
+                    selectedRunningTaskId,
+                    setSelectedRunningTaskId,
+                  )
+                : (() => {
+                    const emptyState = getViewEmptyState('running');
+                    return (
+                      <div className="run-log-terminal">
+                        <strong className="text-gray-300">{emptyState.title}</strong>
+                        <p className="text-gray-500 text-sm mt-1">{emptyState.detail}</p>
+                      </div>
+                    );
+                  })()}
+            </TabsContent>
+
+            <TabsContent value="finished" id="run-log-tabpanel-finished">
+              {finishedStreams.length > 0
+                ? renderTimelineRows(
+                    'finished',
+                    visibleFinishedStreams,
+                    finishedAxisRange,
+                    selectedFinishedTaskId,
+                    setSelectedFinishedTaskId,
+                  )
+                : (() => {
+                    const emptyState = getViewEmptyState('finished');
+                    return (
+                      <div className="run-log-terminal">
+                        <strong className="text-gray-300">{emptyState.title}</strong>
+                        <p className="text-gray-500 text-sm mt-1">{emptyState.detail}</p>
+                      </div>
+                    );
+                  })()}
+            </TabsContent>
+          </Tabs>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }

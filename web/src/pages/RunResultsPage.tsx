@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
 import { fetchRunResults, type RunResultsArtifact, type RunResultsResponse } from '../lib/api';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -16,7 +21,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
-    return '暂无';
+    return '—';
   }
 
   return `${(value * 100).toFixed(1)}%`;
@@ -24,7 +29,7 @@ function formatPercent(value: number | null | undefined): string {
 
 function formatCount(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
-    return '暂无';
+    return '—';
   }
 
   return value.toLocaleString();
@@ -182,48 +187,58 @@ function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact; tes
 
   if (!artifact) {
     return (
-      <article className="artifact-card">
-        <h4>{title}</h4>
-        <p className="muted-copy">工件元数据当前不可用。</p>
-      </article>
+      <div className="rounded-lg border border-border p-3">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-xs text-muted-foreground mt-1">工件元数据当前不可用。</p>
+      </div>
     );
   }
 
   return (
-    <article className="artifact-card">
-      <div className="artifact-card__header">
-        <div>
-          <h4>{title}</h4>
-          <p className="muted-copy">{artifact.filename}</p>
+    <div className="rounded-lg border border-border p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{title}</p>
+          <p className="text-xs text-muted-foreground truncate">{artifact.filename}</p>
         </div>
-        <span
-          className={
-            artifact.exists ? 'worker-pill worker-pill--success' : 'worker-pill worker-pill--error'
-          }
+        <Badge
+          variant={artifact.exists ? 'default' : 'destructive'}
+          className="text-xs flex-shrink-0 h-5 px-1.5"
         >
           {artifact.exists ? '可用' : '缺失'}
-        </span>
+        </Badge>
       </div>
 
-      <dl className="detail-grid artifact-card__details">
+      <div className="grid grid-cols-2 gap-2 text-xs">
         <div>
-          <dt>更新时间</dt>
-          <dd>{formatDate(artifact.updatedAt)}</dd>
+          <span className="text-muted-foreground">更新时间</span>
+          <p>{formatDate(artifact.updatedAt)}</p>
         </div>
         <div>
-          <dt>大小</dt>
-          <dd>{formatBytes(artifact.sizeBytes)}</dd>
+          <span className="text-muted-foreground">大小</span>
+          <p>{formatBytes(artifact.sizeBytes)}</p>
         </div>
-      </dl>
+      </div>
 
       {artifact.exists ? (
-        <a className="artifact-link" href={artifact.downloadUrl} data-testid={testId}>
-          下载 {artifact.filename}
-        </a>
+        <Button variant="outline" size="sm" className="w-full h-7 text-xs" asChild>
+          <a href={artifact.downloadUrl} data-testid={testId}>
+            下载 {artifact.filename}
+          </a>
+        </Button>
       ) : (
-        <p className="muted-copy">本次运行未生成该工件。</p>
+        <p className="text-xs text-muted-foreground">本次运行未生成该工件。</p>
       )}
-    </article>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between py-1.5">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium">{value}</span>
+    </div>
   );
 }
 
@@ -273,217 +288,244 @@ export function RunResultsPage() {
 
   if (isLoading) {
     return (
-      <section className="panel run-page">
-        <p className="eyebrow">结果</p>
-        <h2>运行结果</h2>
-        <p>
-          正在加载 <code>{runId}</code> 的最终摘要...
-        </p>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>运行结果</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            正在加载 <code>{runId}</code> 的最终摘要...
+          </p>
+        </CardContent>
+      </Card>
     );
   }
 
   if (pageError || results === null) {
     return (
-      <section className="panel run-page">
-        <p className="eyebrow">结果</p>
-        <h2>运行结果</h2>
-        <p role="alert">{pageError ?? '运行结果当前不可用。'}</p>
-        <Link to={`/runs/${runId}`}>返回运行详情</Link>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>运行结果</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p role="alert" className="text-sm text-destructive">
+            {pageError ?? '运行结果当前不可用。'}
+          </p>
+          <Button variant="ghost" size="sm" asChild>
+            <Link to={`/runs/${runId}`}>返回运行详情</Link>
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <section className="panel run-page results-page">
-      <div className="run-page__hero">
-        <div>
-          <p className="eyebrow">结果</p>
-          <h2>运行结果</h2>
-          <p className="run-page__lead">
-            <code>{results.runId}</code> 的终态摘要。此页面汇总最终运行快照、数据库聚合结果，
-            以及可下载的工件。
-          </p>
-        </div>
-
-        <div className="run-status-badges">
-          <span className="run-badge">状态：{translateStatus(results.status)}</span>
-          <span className="run-badge">阶段：{translatePhaseLabel(results.phase.label)}</span>
-          <span className="run-badge">模式：{translateStatus(results.mode)}</span>
-          <span className="run-badge">迭代次数：{results.iteration}</span>
+    <div className="space-y-4">
+      {/* 标题区 */}
+      <div>
+        <p className="text-xs font-mono text-muted-foreground tracking-widest uppercase mb-1">
+          结果
+        </p>
+        <h1 className="text-xl font-semibold">运行结果</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          <code className="text-xs bg-muted px-1 rounded">{results.runId}</code> 的终态摘要。
+        </p>
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            状态：{translateStatus(results.status)}
+          </Badge>
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            阶段：{translatePhaseLabel(results.phase.label)}
+          </Badge>
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            模式：{translateStatus(results.mode)}
+          </Badge>
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            迭代：{results.iteration}
+          </Badge>
           {results.selectedJavaVersion && (
-            <span className="run-badge" data-testid="java-version-badge">
+            <Badge
+              variant="outline"
+              className="text-xs h-5 px-1.5"
+              data-testid="java-version-badge"
+            >
               Java 版本：{results.selectedJavaVersion}
-            </span>
+            </Badge>
           )}
         </div>
       </div>
 
-      <section
-        className={`feedback-banner ${results.status === 'failed' ? 'feedback-banner--error' : 'feedback-banner--success'}`}
-        aria-live="polite"
-      >
-        {buildTerminalMessage(results)}
-      </section>
+      <Alert variant={results.status === 'failed' ? 'destructive' : 'default'} aria-live="polite">
+        <AlertDescription className="text-xs">{buildTerminalMessage(results)}</AlertDescription>
+      </Alert>
 
-      <section className="run-card" aria-labelledby="results-final-stats">
-        <p className="eyebrow">最终统计</p>
-        <h3 id="results-final-stats">最终统计</h3>
-        <div className="metric-grid metric-grid--hero">
-          <article>
-            <span>{getMutationScoreLabel(results)}</span>
-            <strong>{getMutationScoreDisplay(results)}</strong>
-          </article>
-          <article>
-            <span>行覆盖率</span>
-            <strong>{formatPercent(results.summary.metrics.lineCoverage)}</strong>
-          </article>
-          <article>
-            <span>分支覆盖率</span>
-            <strong>{formatPercent(results.summary.metrics.branchCoverage)}</strong>
-          </article>
-          <article>
-            <span>{isMutationDisabled(results.mutationEnabled) ? '变异体状态' : '变异体总数'}</span>
-            <strong>
-              {isMutationDisabled(results.mutationEnabled)
-                ? '未启用'
-                : formatCount(displayTotalMutants)}
-            </strong>
-          </article>
-          <article>
-            <span>测试总数</span>
-            <strong>{formatCount(results.summary.metrics.totalTests)}</strong>
-          </article>
-          <article>
-            <span>LLM 调用次数</span>
-            <strong>
-              {formatCount(results.llmCalls)} / {formatCount(results.budget)}
-            </strong>
-          </article>
-        </div>
-      </section>
+      {/* 最终统计 */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">最终统计</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {[
+              { label: getMutationScoreLabel(results), value: getMutationScoreDisplay(results) },
+              { label: '行覆盖率', value: formatPercent(results.summary.metrics.lineCoverage) },
+              { label: '分支覆盖率', value: formatPercent(results.summary.metrics.branchCoverage) },
+              {
+                label: isMutationDisabled(results.mutationEnabled) ? '变异体状态' : '变异体总数',
+                value: isMutationDisabled(results.mutationEnabled)
+                  ? '未启用'
+                  : formatCount(displayTotalMutants),
+              },
+              { label: '测试总数', value: formatCount(results.summary.metrics.totalTests) },
+              {
+                label: 'LLM 调用',
+                value: `${formatCount(results.llmCalls)} / ${formatCount(results.budget)}`,
+              },
+            ].map(({ label, value }) => (
+              <article key={label} className="rounded-md bg-muted/50 p-2.5">
+                <p className="text-xs text-muted-foreground">{label}</p>
+                <p className="text-lg font-bold mt-0.5">{value}</p>
+              </article>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
-      <section className="run-card" aria-labelledby="results-mode-summary">
-        <p className="eyebrow">模式</p>
-        <h3 id="results-mode-summary">模式摘要</h3>
-        <ul className="summary-list summary-list--compact summary-list--two-column">
-          {modeHighlights.map((entry) => (
-            <li key={entry.label}>
-              <strong>{entry.label}</strong>
-              <span>{entry.value}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* 模式摘要 */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">模式摘要</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="divide-y divide-border">
+              {modeHighlights.map((entry) => (
+                <InfoRow key={entry.label} label={entry.label} value={entry.value} />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
 
-      <section className="run-card" aria-labelledby="results-test-summary">
-        <p className="eyebrow">数据库</p>
-        <h3 id="results-test-summary">测试与变异体摘要</h3>
-        <ul className="summary-list summary-list--compact summary-list--two-column">
-          <li>
-            <strong>编译通过用例</strong>
-            <span>
-              {formatCount(results.summary.tests.compiledCases)} /{' '}
-              {formatCount(results.summary.tests.totalCases)}
-            </span>
-          </li>
-          <li>
-            <strong>生成的方法数</strong>
-            <span>{formatCount(results.summary.tests.totalMethods)}</span>
-          </li>
-          <li>
-            <strong>命中的目标方法</strong>
-            <span>{formatCount(results.summary.tests.targetMethods)}</span>
-          </li>
-          <li>
-            <strong>已评估变异体</strong>
-            <span>{formatCount(results.summary.mutants.evaluated)}</span>
-          </li>
-          <li>
-            <strong>待评估变异体</strong>
-            <span>{formatCount(results.summary.mutants.pending)}</span>
-          </li>
-          <li>
-            <strong>无效变异体</strong>
-            <span>{formatCount(results.summary.mutants.invalid)}</span>
-          </li>
-        </ul>
-      </section>
+        {/* 测试与变异体 */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">测试与变异体</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="divide-y divide-border">
+              <InfoRow
+                label="编译通过用例"
+                value={`${formatCount(results.summary.tests.compiledCases)} / ${formatCount(results.summary.tests.totalCases)}`}
+              />
+              <InfoRow label="生成方法数" value={formatCount(results.summary.tests.totalMethods)} />
+              <InfoRow
+                label="命中目标方法"
+                value={formatCount(results.summary.tests.targetMethods)}
+              />
+              <InfoRow
+                label="已评估变异体"
+                value={formatCount(results.summary.mutants.evaluated)}
+              />
+              <InfoRow label="待评估变异体" value={formatCount(results.summary.mutants.pending)} />
+              <InfoRow label="无效变异体" value={formatCount(results.summary.mutants.invalid)} />
+            </div>
+          </CardContent>
+        </Card>
 
-      <section className="run-card" aria-labelledby="results-coverage-summary">
-        <p className="eyebrow">覆盖率</p>
-        <h3 id="results-coverage-summary">覆盖率摘要</h3>
-        <ul className="summary-list summary-list--compact summary-list--two-column">
-          <li>
-            <strong>数据库最新迭代</strong>
-            <span>{formatCount(results.summary.coverage.latestIteration)}</span>
-          </li>
-          <li>
-            <strong>已跟踪方法数</strong>
-            <span>{formatCount(results.summary.coverage.methodsTracked)}</span>
-          </li>
-          <li>
-            <strong>平均行覆盖率</strong>
-            <span>{formatPercent(results.summary.coverage.averageLineCoverage)}</span>
-          </li>
-          <li>
-            <strong>平均分支覆盖率</strong>
-            <span>{formatPercent(results.summary.coverage.averageBranchCoverage)}</span>
-          </li>
-          <li>
-            <strong>最终状态来源</strong>
-            <span>{results.summary.sources.finalState ? '可用' : '缺失'}</span>
-          </li>
-          <li>
-            <strong>运行日志来源</strong>
-            <span>{results.summary.sources.runLog ? '可用' : '缺失'}</span>
-          </li>
-        </ul>
-      </section>
+        {/* 覆盖率 */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">覆盖率</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="divide-y divide-border">
+              <InfoRow
+                label="最新迭代"
+                value={formatCount(results.summary.coverage.latestIteration)}
+              />
+              <InfoRow
+                label="已跟踪方法"
+                value={formatCount(results.summary.coverage.methodsTracked)}
+              />
+              <InfoRow
+                label="平均行覆盖率"
+                value={formatPercent(results.summary.coverage.averageLineCoverage)}
+              />
+              <InfoRow
+                label="平均分支覆盖率"
+                value={formatPercent(results.summary.coverage.averageBranchCoverage)}
+              />
+              <InfoRow
+                label="最终状态"
+                value={results.summary.sources.finalState ? '可用' : '缺失'}
+              />
+              <InfoRow label="运行日志" value={results.summary.sources.runLog ? '可用' : '缺失'} />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
-      <section className="run-card" aria-labelledby="results-artifacts">
-        <p className="eyebrow">工件</p>
-        <h3 id="results-artifacts">工件下载</h3>
-        <div className="artifact-grid">
-          <ArtifactCard title="最终状态 JSON" artifact={results.artifacts.finalState} />
-          <ArtifactCard title="运行日志" artifact={results.artifacts.runLog} />
-          {results.reportArtifact && (
-            <ArtifactCard
-              title="Markdown 报告"
-              artifact={results.reportArtifact}
-              testId="report-download-link"
-            />
-          )}
-        </div>
-      </section>
+      {/* 工件 */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">工件下载</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <ArtifactCard title="最终状态 JSON" artifact={results.artifacts.finalState} />
+            <ArtifactCard title="运行日志" artifact={results.artifacts.runLog} />
+            {results.reportArtifact && (
+              <ArtifactCard
+                title="Markdown 报告"
+                artifact={results.reportArtifact}
+                testId="report-download-link"
+              />
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
+      {/* Pull Request */}
       {results.pullRequestUrl ? (
-        <section className="run-card" aria-labelledby="results-pr-link">
-          <p className="eyebrow">Pull Request</p>
-          <h3 id="results-pr-link">Pull Request 链接</h3>
-          <p className="muted-copy">测试文件已提交至 GitHub 仓库并创建 Pull Request。</p>
-          <a
-            className="artifact-link"
-            href={results.pullRequestUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid="pr-link"
-          >
-            查看 Pull Request
-          </a>
-        </section>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Pull Request 链接</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground mb-2">
+              测试文件已提交至 GitHub 仓库并创建 Pull Request。
+            </p>
+            <Button variant="outline" size="sm" className="h-7 text-xs" asChild>
+              <a
+                href={results.pullRequestUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="pr-link"
+              >
+                查看 Pull Request
+              </a>
+            </Button>
+          </CardContent>
+        </Card>
       ) : results.reportArtifact?.exists ? (
-        <section className="run-card" aria-labelledby="results-pr-failure">
-          <p className="eyebrow">Pull Request</p>
-          <h3 id="results-pr-failure">Pull Request 创建失败</h3>
-          <p className="muted-copy">
-            {results.pullRequestError?.trim() ||
-              '报告已生成，但 Pull Request 创建失败。请检查 GitHub 授权状态或仓库权限。'}
-          </p>
-        </section>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Pull Request 创建失败</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground">
+              {results.pullRequestError?.trim() ||
+                '报告已生成，但 Pull Request 创建失败。请检查 GitHub 授权状态或仓库权限。'}
+            </p>
+          </CardContent>
+        </Card>
       ) : null}
 
-      <Link to={`/runs/${runId}`}>返回运行详情</Link>
-    </section>
+      <Separator />
+
+      <Button variant="ghost" size="sm" className="text-xs" asChild>
+        <Link to={`/runs/${runId}`}>返回运行详情</Link>
+      </Button>
+    </div>
   );
 }

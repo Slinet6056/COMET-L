@@ -1,6 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import {
   fetchRunSnapshot,
   subscribeToRunEvents,
@@ -84,7 +97,7 @@ const KEY_LABELS: Record<string, string> = {
 
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
-    return '暂无';
+    return '—';
   }
 
   return `${(value * 100).toFixed(1)}%`;
@@ -92,7 +105,7 @@ function formatPercent(value: number | null | undefined): string {
 
 function formatMetricValue(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
-    return '暂无';
+    return '—';
   }
 
   return value.toLocaleString();
@@ -162,7 +175,7 @@ function formatValue(value: unknown): string {
     return value ? '是' : '否';
   }
   if (value === null || value === undefined) {
-    return '暂无';
+    return '—';
   }
   if (typeof value === 'object') {
     return JSON.stringify(value);
@@ -465,22 +478,43 @@ function getMutationStatusText(mutationEnabled: boolean | null | undefined): str
   return isMutationDisabled(mutationEnabled) ? '未启用' : '已启用';
 }
 
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between py-1.5">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium">{value}</span>
+    </div>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md bg-muted/50 p-2.5">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-lg font-bold mt-0.5">{value}</p>
+    </div>
+  );
+}
+
 function HistoricalLogNotice(props: { runId: string }) {
   const { runId } = props;
 
   return (
-    <section className="run-card" aria-labelledby="run-history-log-panel">
-      <p className="eyebrow">日志</p>
-      <h3 id="run-history-log-panel">历史日志</h3>
-      <p className="muted-copy">
-        这次运行是从已落盘记录中恢复出来的，实时日志缓冲区不会再重建。你仍然可以直接下载本次运行的
-        <code> run.log </code>
-        查看完整日志。
-      </p>
-      <Link to={`/api/runs/${runId}/artifacts/run-log`} className="artifact-link">
-        下载 run.log
-      </Link>
-    </section>
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">历史日志</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-xs text-muted-foreground mb-2">
+          这次运行是从已落盘记录中恢复出来的，实时日志缓冲区不会再重建。仍可直接下载
+          <code> run.log </code>
+          查看完整日志。
+        </p>
+        <Button variant="outline" size="sm" className="h-7 text-xs" asChild>
+          <Link to={`/api/runs/${runId}/artifacts/run-log`}>下载 run.log</Link>
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -495,134 +529,129 @@ function StandardRunView(props: {
   const mutationDisabled = isMutationDisabled(snapshot.mutationEnabled);
 
   return (
-    <>
-      <div className="run-page__hero">
-        <div>
-          <p className="eyebrow">运行</p>
-          <h2>运行状态</h2>
-          <p className="run-page__lead">
-            <code>{snapshot.runId}</code> 的标准模式快照，页面会先根据最新后端状态重建，
-            {snapshot.isHistorical
-              ? '当前展示的是历史快照，不会再恢复实时更新。'
-              : '然后再恢复实时更新。'}
-          </p>
-        </div>
-
-        <div className="run-status-badges">
-          <span className="run-badge">状态：{translateStatus(snapshot.status)}</span>
-          <span className="run-badge">阶段：{translatePhaseLabel(snapshot.phase)}</span>
-          <span className="run-badge">实时连接：{CONNECTION_LABELS[connectionState]}</span>
+    <div className="space-y-4">
+      {/* 标题 */}
+      <div>
+        <p className="text-xs font-mono text-muted-foreground tracking-widest uppercase mb-1">
+          运行
+        </p>
+        <h1 className="text-xl font-semibold">运行状态</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          <code className="text-xs bg-muted px-1 rounded">{snapshot.runId}</code> 的标准模式快照。
+          {snapshot.isHistorical ? '当前展示历史快照，不会再恢复实时更新。' : ''}
+        </p>
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            状态：{translateStatus(snapshot.status)}
+          </Badge>
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            阶段：{translatePhaseLabel(snapshot.phase)}
+          </Badge>
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            实时连接：{CONNECTION_LABELS[connectionState]}
+          </Badge>
         </div>
       </div>
 
-      <section className="run-card" aria-labelledby="run-metrics-panel">
-        <p className="eyebrow">指标</p>
-        <h3 id="run-metrics-panel">核心指标</h3>
-        <div className="metric-grid metric-grid--hero">
-          <article>
-            <span>变异分数</span>
-            <strong>
-              {mutationDisabled ? '未启用' : formatPercent(snapshot.metrics.mutationScore)}
-            </strong>
-          </article>
-          <article>
-            <span>行覆盖率</span>
-            <strong>{formatPercent(snapshot.metrics.lineCoverage)}</strong>
-          </article>
-          <article>
-            <span>分支覆盖率</span>
-            <strong>{formatPercent(snapshot.metrics.branchCoverage)}</strong>
-          </article>
-        </div>
-        <dl className="detail-grid detail-grid--compact">
-          <div>
-            <dt>变异分析</dt>
-            <dd>{getMutationStatusText(snapshot.mutationEnabled)}</dd>
+      {/* 核心指标 */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">核心指标</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-3 gap-3">
+            <MetricCard
+              label="变异分数"
+              value={mutationDisabled ? '未启用' : formatPercent(snapshot.metrics.mutationScore)}
+            />
+            <MetricCard label="行覆盖率" value={formatPercent(snapshot.metrics.lineCoverage)} />
+            <MetricCard label="分支覆盖率" value={formatPercent(snapshot.metrics.branchCoverage)} />
           </div>
-          <div>
-            <dt>当前目标</dt>
-            <dd>{formatTarget(snapshot.currentTarget)}</dd>
+          <Separator />
+          <div className="grid grid-cols-2 gap-x-8 divide-y divide-border sm:divide-y-0 sm:grid-cols-2">
+            <div className="divide-y divide-border">
+              <InfoRow label="变异分析" value={getMutationStatusText(snapshot.mutationEnabled)} />
+              <InfoRow label="当前目标" value={formatTarget(snapshot.currentTarget)} />
+              <InfoRow label="上一个目标" value={formatTarget(snapshot.previousTarget)} />
+              <InfoRow label="测试总数" value={formatMetricValue(snapshot.metrics.totalTests)} />
+            </div>
+            <div className="divide-y divide-border">
+              <InfoRow
+                label="当前方法覆盖率"
+                value={formatPercent(snapshot.metrics.currentMethodCoverage)}
+              />
+              {mutationDisabled ? null : (
+                <>
+                  <InfoRow
+                    label="已杀死变异体"
+                    value={formatMetricValue(snapshot.metrics.killedMutants)}
+                  />
+                  <InfoRow
+                    label="存活变异体"
+                    value={formatMetricValue(snapshot.metrics.survivedMutants)}
+                  />
+                </>
+              )}
+              <InfoRow label="LLM 调用" value={`${snapshot.llmCalls} / ${snapshot.budget}`} />
+              <InfoRow label="迭代次数" value={String(snapshot.iteration)} />
+            </div>
           </div>
-          <div>
-            <dt>上一个目标</dt>
-            <dd>{formatTarget(snapshot.previousTarget)}</dd>
-          </div>
-          <div>
-            <dt>测试总数</dt>
-            <dd>{formatMetricValue(snapshot.metrics.totalTests)}</dd>
-          </div>
-          <div>
-            <dt>当前方法覆盖率</dt>
-            <dd>{formatPercent(snapshot.metrics.currentMethodCoverage)}</dd>
-          </div>
-          {mutationDisabled ? null : (
-            <>
-              <div>
-                <dt>已杀死变异体</dt>
-                <dd>{formatMetricValue(snapshot.metrics.killedMutants)}</dd>
+        </CardContent>
+      </Card>
+
+      {/* 决策面板 */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">决策面板</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground">
+            {snapshot.decisionReasoning ?? '暂未发布决策说明。'}
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* 改进 + 操作历史 并排 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">最近改进</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="divide-y divide-border">
+              {improvementSummary.map((entry) => (
+                <InfoRow key={entry.label} label={entry.label} value={entry.value} />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">操作历史摘要</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {actionHistory.length > 0 ? (
+              <div className="divide-y divide-border">
+                {actionHistory.map((entry) => (
+                  <InfoRow key={entry.id} label={entry.title} value={entry.detail} />
+                ))}
               </div>
-              <div>
-                <dt>存活变异体</dt>
-                <dd>{formatMetricValue(snapshot.metrics.survivedMutants)}</dd>
-              </div>
-            </>
-          )}
-          <div>
-            <dt>LLM 调用次数</dt>
-            <dd>
-              {snapshot.llmCalls} / {snapshot.budget}
-            </dd>
-          </div>
-          <div>
-            <dt>迭代次数</dt>
-            <dd>{snapshot.iteration}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section className="run-card" aria-labelledby="run-decision-panel">
-        <p className="eyebrow">决策</p>
-        <h3 id="run-decision-panel">决策面板</h3>
-        <div className="decision-reasoning">
-          <strong>决策说明</strong>
-          <p>{snapshot.decisionReasoning ?? '暂未发布决策说明。'}</p>
-        </div>
-      </section>
-
-      <section className="run-card" aria-labelledby="run-improvements-panel">
-        <p className="eyebrow">改进</p>
-        <h3 id="run-improvements-panel">最近改进</h3>
-        <ul className="summary-list summary-list--compact summary-list--two-column">
-          {improvementSummary.map((entry) => (
-            <li key={entry.label}>
-              <strong>{entry.label}</strong>
-              <span>{entry.value}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="run-card" aria-labelledby="run-actions-panel">
-        <p className="eyebrow">历史</p>
-        <h3 id="run-actions-panel">操作历史摘要</h3>
-        {actionHistory.length > 0 ? (
-          <ol className="summary-list summary-list--compact summary-list--two-column">
-            {actionHistory.map((entry) => (
-              <li key={entry.id}>
-                <strong>{entry.title}</strong>
-                <span>{entry.detail}</span>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="muted-copy">正在等待实时运行事件。</p>
-        )}
-      </section>
+            ) : (
+              <p className="text-xs text-muted-foreground">正在等待实时运行事件。</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {snapshot.isHistorical ? <HistoricalLogNotice runId={runId} /> : null}
 
-      <Link to={`/runs/${runId}/results`}>前往结果页</Link>
-    </>
+      <Separator />
+
+      <Button variant="ghost" size="sm" className="text-xs" asChild>
+        <Link to={`/runs/${runId}/results`}>前往结果页</Link>
+      </Button>
+    </div>
   );
 }
 
@@ -657,212 +686,227 @@ function ParallelRunView(props: {
   }, [workerOutputRows, workerPage]);
 
   return (
-    <>
-      <div className="run-page__hero">
-        <div>
-          <p className="eyebrow">运行</p>
-          <h2>并行运行状态</h2>
-          <p className="run-page__lead">
-            <code>{snapshot.runId}</code> 的并行模式快照，页面会先根据最新的批次感知后端状态恢复，
-            {snapshot.isHistorical
-              ? '当前展示的是历史快照，不会再继续实时更新。'
-              : '然后再继续实时更新。'}
-          </p>
-        </div>
-
-        <div className="run-status-badges">
-          <span className="run-badge">状态：{translateStatus(snapshot.status)}</span>
-          <span className="run-badge">阶段：{translatePhaseLabel(snapshot.phase)}</span>
-          <span className="run-badge">当前批次：{parallel.currentBatch}</span>
-          <span className="run-badge">实时连接：{CONNECTION_LABELS[connectionState]}</span>
+    <div className="space-y-4">
+      {/* 标题 */}
+      <div>
+        <p className="text-xs font-mono text-muted-foreground tracking-widest uppercase mb-1">
+          运行
+        </p>
+        <h1 className="text-xl font-semibold">并行运行状态</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          <code className="text-xs bg-muted px-1 rounded">{snapshot.runId}</code> 的并行模式快照。
+          {snapshot.isHistorical ? '当前展示历史快照，不会再继续实时更新。' : ''}
+        </p>
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            状态：{translateStatus(snapshot.status)}
+          </Badge>
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            阶段：{translatePhaseLabel(snapshot.phase)}
+          </Badge>
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            当前批次：{parallel.currentBatch}
+          </Badge>
+          <Badge variant="outline" className="text-xs h-5 px-1.5">
+            实时连接：{CONNECTION_LABELS[connectionState]}
+          </Badge>
         </div>
       </div>
 
-      <section className="run-card" aria-labelledby="run-parallel-metrics-panel">
-        <p className="eyebrow">指标</p>
-        <h3 id="run-parallel-metrics-panel">核心指标</h3>
-        <div className="metric-grid metric-grid--hero">
-          <article>
-            <span>变异分数</span>
-            <strong>
-              {mutationDisabled ? '未启用' : formatPercent(snapshot.metrics.globalMutationScore)}
-            </strong>
-          </article>
-          <article>
-            <span>行覆盖率</span>
-            <strong>{formatPercent(snapshot.metrics.lineCoverage)}</strong>
-          </article>
-          <article>
-            <span>分支覆盖率</span>
-            <strong>{formatPercent(snapshot.metrics.branchCoverage)}</strong>
-          </article>
-        </div>
-        <dl className="detail-grid detail-grid--compact">
-          <div>
-            <dt>变异分析</dt>
-            <dd>{getMutationStatusText(snapshot.mutationEnabled)}</dd>
+      {/* 核心指标 */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">核心指标</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-3 gap-3">
+            <MetricCard
+              label="变异分数"
+              value={
+                mutationDisabled ? '未启用' : formatPercent(snapshot.metrics.globalMutationScore)
+              }
+            />
+            <MetricCard label="行覆盖率" value={formatPercent(snapshot.metrics.lineCoverage)} />
+            <MetricCard label="分支覆盖率" value={formatPercent(snapshot.metrics.branchCoverage)} />
           </div>
-          <div>
-            <dt>当前批次</dt>
-            <dd>{parallel.currentBatch}</dd>
+          <Separator />
+          <div className="grid grid-cols-2 gap-x-8">
+            <div className="divide-y divide-border">
+              <InfoRow label="变异分析" value={getMutationStatusText(snapshot.mutationEnabled)} />
+              <InfoRow label="当前批次" value={String(parallel.currentBatch)} />
+              <InfoRow label="运行中目标" value={String(parallel.activeTargets.length)} />
+              <InfoRow label="最新工作线程" value={String(parallel.workerCards.length)} />
+            </div>
+            <div className="divide-y divide-border">
+              <InfoRow label="已完成批次组" value={String(parallel.batchResults.length)} />
+              <InfoRow label="测试总数" value={formatMetricValue(snapshot.metrics.totalTests)} />
+              {mutationDisabled ? null : (
+                <>
+                  <InfoRow
+                    label="变异体总数"
+                    value={formatMetricValue(snapshot.metrics.globalTotalMutants)}
+                  />
+                  <InfoRow
+                    label="已杀死变异体"
+                    value={formatMetricValue(snapshot.metrics.globalKilledMutants)}
+                  />
+                </>
+              )}
+              <InfoRow label="迭代次数" value={String(snapshot.iteration)} />
+            </div>
           </div>
-          <div>
-            <dt>运行中目标</dt>
-            <dd>{parallel.activeTargets.length}</dd>
-          </div>
-          <div>
-            <dt>最新工作线程更新</dt>
-            <dd>{parallel.workerCards.length}</dd>
-          </div>
-          <div>
-            <dt>已完成批次组</dt>
-            <dd>{parallel.batchResults.length}</dd>
-          </div>
-          <div>
-            <dt>测试总数</dt>
-            <dd>{formatMetricValue(snapshot.metrics.totalTests)}</dd>
-          </div>
-          {mutationDisabled ? null : (
+          {snapshot.decisionReasoning ? (
             <>
-              <div>
-                <dt>变异体总数</dt>
-                <dd>{formatMetricValue(snapshot.metrics.globalTotalMutants)}</dd>
-              </div>
-              <div>
-                <dt>已杀死变异体</dt>
-                <dd>{formatMetricValue(snapshot.metrics.globalKilledMutants)}</dd>
-              </div>
+              <Separator />
+              <p className="text-xs text-muted-foreground">{snapshot.decisionReasoning}</p>
             </>
-          )}
-          <div>
-            <dt>迭代次数</dt>
-            <dd>{snapshot.iteration}</dd>
-          </div>
-        </dl>
-        <div className="decision-reasoning">
-          <strong>决策说明</strong>
-          <p>{snapshot.decisionReasoning ?? '暂未发布决策说明。'}</p>
-        </div>
-      </section>
+          ) : null}
+        </CardContent>
+      </Card>
 
+      {/* 批次摘要 */}
       {!isPreprocessingPhase && parallelStatsSummary.length > 0 ? (
-        <section className="run-card" aria-labelledby="run-parallel-summary-panel">
-          <p className="eyebrow">摘要</p>
-          <h3 id="run-parallel-summary-panel">批次摘要</h3>
-          <ul className="summary-list summary-list--compact summary-list--two-column">
-            {parallelStatsSummary.map((entry) => (
-              <li key={entry.label}>
-                <strong>{entry.label}</strong>
-                <span>{entry.value}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">批次摘要</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="grid grid-cols-2 gap-x-8 divide-y divide-border sm:divide-y-0">
+              <div className="divide-y divide-border">
+                {parallelStatsSummary
+                  .slice(0, Math.ceil(parallelStatsSummary.length / 2))
+                  .map((entry) => (
+                    <InfoRow key={entry.label} label={entry.label} value={entry.value} />
+                  ))}
+              </div>
+              <div className="divide-y divide-border">
+                {parallelStatsSummary
+                  .slice(Math.ceil(parallelStatsSummary.length / 2))
+                  .map((entry) => (
+                    <InfoRow key={entry.label} label={entry.label} value={entry.value} />
+                  ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       ) : null}
 
+      {/* 工作线程输出 */}
       {!isPreprocessingPhase ? (
-        <section className="run-card" aria-labelledby="run-worker-panel">
-          <div className="run-card__header run-card__header--compact">
-            <div>
-              <p className="eyebrow">工作线程</p>
-              <h3 id="run-worker-panel">工作线程输出</h3>
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">工作线程输出</CardTitle>
+              <Badge variant="outline" className="text-xs h-5 px-1.5">
+                {CONNECTION_LABELS[connectionState]}
+              </Badge>
             </div>
-            <span className="run-badge">实时连接：{CONNECTION_LABELS[connectionState]}</span>
-          </div>
-          {workerOutputRows.length > 0 ? (
-            <>
-              <table className="worker-output-table">
-                <thead>
-                  <tr>
-                    <th scope="col">目标</th>
-                    <th scope="col">状态</th>
-                    <th scope="col">测试</th>
-                    <th scope="col">变异体</th>
-                    <th scope="col">已杀死</th>
-                    <th scope="col">分数</th>
-                    <th scope="col">覆盖率</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleWorkerRows.map((worker) => (
-                    <tr key={worker.key} className="worker-output-row">
-                      <td className="worker-output-row__target">
-                        <strong title={worker.targetId || worker.key}>
-                          {worker.targetId || '未命名目标'}
-                        </strong>
-                        <span>
-                          {worker.className}.{worker.methodName}
-                        </span>
-                        {worker.error ? (
-                          <p className="worker-output-row__error">{worker.error}</p>
-                        ) : null}
-                      </td>
-                      <td>
-                        <span
-                          className={
-                            worker.success
-                              ? 'worker-pill worker-pill--success'
-                              : 'worker-pill worker-pill--error'
-                          }
-                        >
-                          {formatWorkerStatusLabel(worker.success)}
-                        </span>
-                      </td>
-                      <td>{worker.testsGenerated}</td>
-                      <td>
-                        {mutationDisabled ? '未启用' : formatMetricValue(worker.mutantsGenerated)}
-                      </td>
-                      <td>
-                        {mutationDisabled ? '未启用' : formatMetricValue(worker.mutantsKilled)}
-                      </td>
-                      <td>
-                        {mutationDisabled ? '未启用' : formatPercent(worker.localMutationScore)}
-                      </td>
-                      <td>
-                        {formatPercent(
-                          worker.methodCoverage ?? workerCoverageLookup.get(worker.targetId),
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {workerPageCount > 1 ? (
-                <div className="run-log-viewer__pagination">
-                  <button
-                    type="button"
-                    className="run-log-viewer__pager-button"
-                    onClick={() => setWorkerPage((current) => Math.max(current - 1, 0))}
-                    disabled={workerPage === 0}
-                  >
-                    上一页
-                  </button>
-                  <span className="muted-copy">
-                    第 {workerPage + 1} / {workerPageCount} 页
-                  </span>
-                  <button
-                    type="button"
-                    className="run-log-viewer__pager-button"
-                    onClick={() =>
-                      setWorkerPage((current) => Math.min(current + 1, workerPageCount - 1))
-                    }
-                    disabled={workerPage >= workerPageCount - 1}
-                  >
-                    下一页
-                  </button>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <p className="muted-copy">正在等待首个工作线程批次完成。</p>
-          )}
-        </section>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {workerOutputRows.length > 0 ? (
+              <>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-xs">目标</TableHead>
+                      <TableHead className="text-xs">状态</TableHead>
+                      <TableHead className="text-xs">测试</TableHead>
+                      <TableHead className="text-xs">变异体</TableHead>
+                      <TableHead className="text-xs">已杀死</TableHead>
+                      <TableHead className="text-xs">分数</TableHead>
+                      <TableHead className="text-xs">覆盖率</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visibleWorkerRows.map((worker) => (
+                      <TableRow key={worker.key}>
+                        <TableCell className="text-xs">
+                          <div
+                            className="font-medium max-w-[200px] truncate"
+                            title={worker.targetId || worker.key}
+                          >
+                            {worker.targetId || '未命名目标'}
+                          </div>
+                          <div className="text-muted-foreground text-xs truncate max-w-[200px]">
+                            {worker.className}.{worker.methodName}
+                          </div>
+                          {worker.error ? (
+                            <div className="text-destructive text-xs mt-0.5 max-w-[200px] truncate">
+                              {worker.error}
+                            </div>
+                          ) : null}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={worker.success ? 'default' : 'destructive'}
+                            className="text-xs h-5 px-1.5"
+                          >
+                            {formatWorkerStatusLabel(worker.success)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs">{worker.testsGenerated}</TableCell>
+                        <TableCell className="text-xs">
+                          {mutationDisabled ? '—' : formatMetricValue(worker.mutantsGenerated)}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {mutationDisabled ? '—' : formatMetricValue(worker.mutantsKilled)}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {mutationDisabled ? '—' : formatPercent(worker.localMutationScore)}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {formatPercent(
+                            worker.methodCoverage ?? workerCoverageLookup.get(worker.targetId),
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                {workerPageCount > 1 ? (
+                  <div className="flex items-center justify-between mt-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setWorkerPage((current) => Math.max(current - 1, 0))}
+                      disabled={workerPage === 0}
+                    >
+                      上一页
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      第 {workerPage + 1} / {workerPageCount} 页
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() =>
+                        setWorkerPage((current) => Math.min(current + 1, workerPageCount - 1))
+                      }
+                      disabled={workerPage >= workerPageCount - 1}
+                    >
+                      下一页
+                    </Button>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">正在等待首个工作线程批次完成。</p>
+            )}
+          </CardContent>
+        </Card>
       ) : (
-        <section className="run-card" aria-labelledby="run-preprocessing-panel">
-          <p className="eyebrow">准备</p>
-          <h3 id="run-preprocessing-panel">并行预处理</h3>
-          <p className="muted-copy">预处理完成后会显示工作线程输出。下方仍可查看实时日志。</p>
-        </section>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">并行预处理</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground">
+              预处理完成后会显示工作线程输出。下方仍可查看实时日志。
+            </p>
+          </CardContent>
+        </Card>
       )}
 
       {snapshot.isHistorical ? (
@@ -871,8 +915,12 @@ function ParallelRunView(props: {
         <LogViewer runId={runId} runStatus={snapshot.status} />
       )}
 
-      <Link to={`/runs/${runId}/results`}>前往结果页</Link>
-    </>
+      <Separator />
+
+      <Button variant="ghost" size="sm" className="text-xs" asChild>
+        <Link to={`/runs/${runId}/results`}>前往结果页</Link>
+      </Button>
+    </div>
   );
 }
 
@@ -1034,29 +1082,41 @@ export function RunPage() {
 
   if (isLoading) {
     return (
-      <section className="panel run-page">
-        <p className="eyebrow">运行</p>
-        <h2>运行状态</h2>
-        <p>
-          正在加载 <code>{runId}</code> 的快照...
-        </p>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>运行状态</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            正在加载 <code>{runId}</code> 的快照...
+          </p>
+        </CardContent>
+      </Card>
     );
   }
 
   if (snapshot === null) {
     return (
-      <section className="panel run-page">
-        <p className="eyebrow">运行</p>
-        <h2>运行状态</h2>
-        <p role="alert">{pageError ?? '运行快照当前不可用。'}</p>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>运行状态</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p role="alert" className="text-sm text-destructive">
+            {pageError ?? '运行快照当前不可用。'}
+          </p>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <section className="panel run-page">
-      {pageError ? <p role="alert">{pageError}</p> : null}
+    <div>
+      {pageError ? (
+        <Alert variant="destructive" className="mb-4" role="alert">
+          <AlertDescription className="text-xs">{pageError}</AlertDescription>
+        </Alert>
+      ) : null}
       {snapshot.mode === 'parallel' ? (
         <ParallelRunView runId={runId} snapshot={snapshot} connectionState={connectionState} />
       ) : (
@@ -1068,6 +1128,6 @@ export function RunPage() {
           improvementSummary={improvementSummary}
         />
       )}
-    </section>
+    </div>
   );
 }
