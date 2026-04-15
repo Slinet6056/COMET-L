@@ -749,7 +749,11 @@ export function HomePage() {
                         >
                           <button
                             type="button"
-                            className={`w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors ${githubRepoUrl === repo.url ? 'bg-accent repo-picker__item--selected' : ''}`}
+                            className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                              githubRepoUrl === repo.url
+                                ? 'bg-primary/10 border-l-2 border-primary pl-[10px] repo-picker__item--selected'
+                                : 'hover:bg-accent border-l-2 border-transparent pl-[10px]'
+                            }`}
                             data-testid={`repo-item-${repo.fullName}`}
                             onClick={() => {
                               setGithubRepoUrl(repo.url);
@@ -762,11 +766,28 @@ export function HomePage() {
                             disabled={!githubConnected}
                           >
                             <div className="flex items-center gap-2">
-                              <span className="font-medium">{repo.fullName}</span>
+                              <span
+                                className={`font-medium ${githubRepoUrl === repo.url ? 'text-primary' : ''}`}
+                              >
+                                {repo.fullName}
+                              </span>
                               {repo.private ? (
                                 <Badge variant="secondary" className="text-xs h-4 px-1">
                                   私有
                                 </Badge>
+                              ) : null}
+                              {githubRepoUrl === repo.url ? (
+                                <svg
+                                  className="ml-auto h-4 w-4 text-primary shrink-0"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
                               ) : null}
                             </div>
                             {repo.description ? (
