@@ -46,7 +46,24 @@ def build_run_report(
     )
     total_tests = _format_count(metrics.get("totalTests") if final_state_available else None)
 
-    mutation_score_value = metrics.get("mutationScore") if final_state_available else None
+    if final_state_available:
+        # 对齐前端 getDisplayMutationScore 逻辑：并行模式用全局分数，标准模式用迭代分数
+        if mode == "parallel":
+            mutation_score_value: MetricValue = metrics.get("globalMutationScore")
+        else:
+            mutation_score_value = metrics.get("mutationScore")
+        # 兜底：分数为 0 或缺失但数据库有变异体时，从数据库计算
+        db_total = mutants_summary.get("total")
+        db_killed = mutants_summary.get("killed")
+        if (
+            (mutation_score_value is None or mutation_score_value == 0)
+            and isinstance(db_total, int)
+            and isinstance(db_killed, int)
+            and db_total > 0
+        ):
+            mutation_score_value = db_killed / db_total
+    else:
+        mutation_score_value = None
     if mutation_enabled is False:
         mutation_score = "未启用"
     else:
