@@ -79,7 +79,10 @@ COPY --from=jdk25 /opt/java/openjdk /opt/jdks/jdk-25
 
 RUN chmod +x /opt/comet-l/docker/entrypoint.sh /opt/comet-l/docker/java-env.sh /opt/comet-l/docker/self-check.sh \
     && ln -sf /opt/comet-l/docker/self-check.sh /usr/local/bin/comet-docker-self-check \
-    && mkdir -p /opt/comet-l/state /opt/comet-l/output /opt/comet-l/sandbox /opt/comet-l/logs
+    && mkdir -p /opt/comet-l/state /opt/comet-l/output /opt/comet-l/sandbox /opt/comet-l/logs \
+    && chown -R ubuntu:ubuntu /opt/comet-l/state /opt/comet-l/output /opt/comet-l/sandbox /opt/comet-l/logs
+
+USER ubuntu
 
 ENTRYPOINT ["/opt/comet-l/docker/entrypoint.sh"]
 CMD ["uv", "run", "python", "-m", "uvicorn", "comet.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
