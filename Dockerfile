@@ -30,7 +30,7 @@ WORKDIR /src
 COPY java-runtime/pom.xml java-runtime/pom.xml
 COPY java-runtime/src java-runtime/src
 
-RUN mvn -q -f java-runtime/pom.xml -Dmaven.compiler.release=25 clean package
+RUN mvn -q -f java-runtime/pom.xml clean package
 
 FROM node:22.14.0-bookworm-slim AS web-builder
 

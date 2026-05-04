@@ -14,7 +14,7 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.release>26</maven.compiler.release>
+        <maven.compiler.release>25</maven.compiler.release>
         <javaparser.version>3.28.0</javaparser.version>
         <junit.version>6.0.3</junit.version>
         <jacoco.version>0.8.14</jacoco.version>
