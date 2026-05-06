@@ -388,6 +388,41 @@ def _load_default_settings(default_config_path: Path) -> Settings:
     return Settings.from_yaml(str(default_config_path))
 
 
+def _load_default_settings_for_display(default_config_path: Path) -> Settings:
+    try:
+        return _load_default_settings(default_config_path)
+    except ValidationError as exc:
+        if not _is_missing_required_llm_error(exc):
+            raise
+
+    runtime_example_path = default_config_path.with_name("config.example.yaml")
+    if runtime_example_path != default_config_path and runtime_example_path.exists():
+        return _load_default_settings(runtime_example_path)
+
+    return Settings.model_validate({"llm": {"api_key": "your-api-key-here"}})
+
+
+def _github_config_for_display(server_config: GitHubConfig) -> GitHubConfig:
+    return GitHubConfig(
+        oauth_client_id=server_config.oauth_client_id,
+        oauth_client_secret=server_config.oauth_client_secret,
+        oauth_redirect_uri=server_config.oauth_redirect_uri,
+        oauth_scope=server_config.oauth_scope,
+        oauth_state_ttl_seconds=server_config.oauth_state_ttl_seconds,
+        oauth_authorize_url=server_config.oauth_authorize_url,
+        oauth_token_exchange_url=server_config.oauth_token_exchange_url,
+        oauth_api_base_url=server_config.oauth_api_base_url,
+    )
+
+
+def _is_missing_required_llm_error(exc: ValidationError) -> bool:
+    errors = exc.errors()
+    return bool(errors) and all(
+        tuple(error.get("loc", ())) == ("llm",) and error.get("type") == "missing"
+        for error in errors
+    )
+
+
 def _load_server_config(default_config_path: Path) -> ServerConfig:
     return ServerConfig.from_yaml(str(default_config_path))
 
@@ -1400,8 +1435,10 @@ def get_config_defaults(
     services: AppServices = Depends(get_app_services),
     _: AuthenticatedUser = Depends(require_user),
 ) -> ConfigPayload:
-    settings = _load_default_settings(services.default_config_path)
-    settings.deployment = _load_server_config(services.default_config_path).deployment
+    server_config = _load_server_config(services.default_config_path)
+    settings = _load_default_settings_for_display(services.default_config_path)
+    settings.github = _github_config_for_display(server_config.github)
+    settings.deployment = server_config.deployment
     safe_config, annotations = redacted_settings_dict(settings)
     return ConfigPayload.model_validate(
         {"config": safe_config, "configPolicy": annotations.to_api_dict()}

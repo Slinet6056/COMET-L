@@ -35,6 +35,9 @@ FIXED_CONFIG_FIELDS: set[PathTuple] = {
     ("github", "managed_clone_root"),
 }
 SECRET_KEY_PARTS = ("api_key", "secret", "token", "password", "session")
+SECRET_CONFIG_FIELDS: set[PathTuple] = {
+    ("github", "encrypted_key_store_path"),
+}
 
 
 @dataclass(slots=True)
@@ -334,6 +337,8 @@ def _collect_redacted_fields(config: dict[str, Any]) -> list[str]:
 def _is_secret_path(path: PathTuple) -> bool:
     if not path:
         return False
+    if path in SECRET_CONFIG_FIELDS:
+        return True
     key = path[-1].lower()
     return any(part in key for part in SECRET_KEY_PARTS)
 

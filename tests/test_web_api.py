@@ -737,6 +737,55 @@ class ConfigApiTests(unittest.TestCase):
         self.assertFalse(payload["config"]["preprocessing"]["exit_after_preprocessing"])
         self.assertNotIn("paths", payload["config"])
 
+    def test_defaults_endpoint_accepts_server_config_without_runtime_llm(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            default_config_path = root / "config.yaml"
+            default_config_path.write_text(
+                (
+                    "deployment:\n"
+                    "  max_budget: 77\n"
+                    "  allowed_origins:\n"
+                    "    - http://localhost:8000\n"
+                    "github:\n"
+                    "  oauth_client_id: server-client-id\n"
+                    "  encrypted_token_store_path: /srv/comet/token.enc\n"
+                    "  encrypted_key_store_path: /srv/comet/token.key\n"
+                    "  managed_clone_root: /srv/comet/managed-clones\n"
+                ),
+                encoding="utf-8",
+            )
+            client = authenticated_client(
+                run_service=RunLifecycleService(workspace_root=root),
+                default_config_path=default_config_path,
+            )
+
+            response = client.get("/api/config/defaults")
+
+            self.assertEqual(response.status_code, 200, response.text)
+            payload = response.json()
+            self.assertEqual(payload["config"]["deployment"]["max_budget"], 77)
+            self.assertEqual(
+                payload["config"]["deployment"]["allowed_origins"],
+                ["http://localhost:8000"],
+            )
+            self.assertEqual(payload["config"]["github"]["oauth_client_id"], "server-client-id")
+            self.assertEqual(
+                payload["config"]["github"]["managed_clone_root"],
+                "./sandbox/github-managed",
+            )
+            self.assertEqual(
+                payload["config"]["github"]["encrypted_token_store_path"],
+                "[REDACTED]",
+            )
+            self.assertEqual(
+                payload["config"]["github"]["encrypted_key_store_path"],
+                "[REDACTED]",
+            )
+            self.assertEqual(payload["config"]["llm"]["api_key"], "[REDACTED]")
+            self.assertTrue(payload["config"]["llm"]["model"])
+            self.assertNotIn("paths", payload["config"])
+
     def test_parse_valid_yaml_returns_normalized_config(self) -> None:
         client = authenticated_client()
 
