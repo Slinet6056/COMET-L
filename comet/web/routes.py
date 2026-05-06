@@ -33,9 +33,10 @@ from comet.config.policy import (
     UnknownConfigFieldError,
     apply_run_form_policy,
     apply_uploaded_config_policy,
+    enforce_deployment_policy,
     redacted_settings_dict,
 )
-from comet.config.settings import GitHubConfig
+from comet.config.settings import DeploymentPolicyConfig, GitHubConfig, ServerConfig
 
 from .github_auth_service import GitHubAuthError, GitHubOAuthService
 from .run_service import (
@@ -266,8 +267,8 @@ def _hash_password(password: str) -> str:
     return PASSWORD_HASHER.hash(password)
 
 
-def _public_deployment_config(settings: Settings) -> dict[str, object]:
-    return settings.deployment.to_public_dict()
+def _public_deployment_config(deployment: DeploymentPolicyConfig) -> dict[str, object]:
+    return deployment.to_public_dict()
 
 
 def _web_database(services: AppServices) -> WebDatabase:
@@ -367,8 +368,28 @@ def _strip_uploaded_runtime_overrides(config_data: dict[str, Any]) -> dict[str, 
     return GitHubConfig.strip_yaml_config(config_data)
 
 
+def _server_config_overrides(default_config_path: Path) -> dict[str, Any]:
+    return _load_server_config(default_config_path).model_dump()
+
+
+def _runtime_base_settings(
+    default_config_path: Path,
+    server_overrides: dict[str, Any],
+    uploaded_config: dict[str, Any],
+) -> Settings:
+    try:
+        base_settings = _load_default_settings(default_config_path)
+        return Settings.model_validate(_deep_merge(base_settings.to_dict(), server_overrides))
+    except ValidationError:
+        return Settings.model_validate(_deep_merge(uploaded_config, server_overrides))
+
+
 def _load_default_settings(default_config_path: Path) -> Settings:
     return Settings.from_yaml(str(default_config_path))
+
+
+def _load_server_config(default_config_path: Path) -> ServerConfig:
+    return ServerConfig.from_yaml(str(default_config_path))
 
 
 def _config_error_response(exc: ValidationError) -> JSONResponse:
@@ -698,13 +719,13 @@ def login(
             AuthenticatedUser(id=user.id, username=user.username, role=user.role)
         ).model_dump(),
     )
-    settings = Settings.from_yaml(str(services.default_config_path))
+    server_config = _load_server_config(services.default_config_path)
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
         max_age=SESSION_TTL_SECONDS,
         path="/",
-        secure=settings.deployment.secure_auth_cookies,
+        secure=server_config.deployment.secure_auth_cookies,
         httponly=True,
         samesite="lax",
     )
@@ -743,8 +764,10 @@ def get_public_deployment_config(
     services: AppServices = Depends(get_app_services),
     _user: AuthenticatedUser = Depends(require_user),
 ) -> PublicDeploymentConfigResponse:
-    settings = Settings.from_yaml(str(services.default_config_path))
-    return PublicDeploymentConfigResponse(deployment=_public_deployment_config(settings))
+    server_config = _load_server_config(services.default_config_path)
+    return PublicDeploymentConfigResponse(
+        deployment=_public_deployment_config(server_config.deployment)
+    )
 
 
 @router.get(
@@ -1281,11 +1304,19 @@ async def _load_merged_settings(
     services: AppServices,
     config_file: UploadFile | None,
 ) -> tuple[Settings, str, ConfigPolicyAnnotations] | JSONResponse:
-    base_settings = _load_default_settings(services.default_config_path).to_dict()
+    server_overrides = _server_config_overrides(services.default_config_path)
     config_label = str(services.default_config_path)
 
     if config_file is None:
-        return Settings.model_validate(base_settings), config_label, ConfigPolicyAnnotations()
+        try:
+            base_settings = _load_default_settings(services.default_config_path)
+            effective = Settings.model_validate(
+                _deep_merge(base_settings.to_dict(), server_overrides)
+            )
+            annotations = enforce_deployment_policy(effective)
+        except ValidationError as exc:
+            return _config_error_response(exc)
+        return effective, config_label, annotations
 
     try:
         content = (await config_file.read()).decode("utf-8")
@@ -1340,10 +1371,13 @@ async def _load_merged_settings(
         )
 
     try:
-        result = apply_uploaded_config_policy(
-            Settings.model_validate(base_settings),
-            _strip_uploaded_runtime_overrides(parsed),
+        normalized = _strip_uploaded_runtime_overrides(parsed)
+        base_settings = _runtime_base_settings(
+            services.default_config_path,
+            server_overrides,
+            normalized,
         )
+        result = apply_uploaded_config_policy(base_settings, normalized)
     except ValidationError as exc:
         return _config_error_response(exc)
     except UnknownConfigFieldError as exc:
@@ -1366,7 +1400,8 @@ def get_config_defaults(
     services: AppServices = Depends(get_app_services),
     _: AuthenticatedUser = Depends(require_user),
 ) -> ConfigPayload:
-    settings = Settings.from_yaml(str(services.default_config_path))
+    settings = _load_default_settings(services.default_config_path)
+    settings.deployment = _load_server_config(services.default_config_path).deployment
     safe_config, annotations = redacted_settings_dict(settings)
     return ConfigPayload.model_validate(
         {"config": safe_config, "configPolicy": annotations.to_api_dict()}
@@ -1898,9 +1933,9 @@ def get_github_auth_connect_url(
     _admin: AuthenticatedUser = Depends(require_admin),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> JSONResponse:
-    settings = Settings.from_yaml(str(services.default_config_path))
+    server_config = _load_server_config(services.default_config_path)
     try:
-        connect_url = github_auth_service.build_connect_url(settings.github)
+        connect_url = github_auth_service.build_connect_url(server_config.github)
     except GitHubAuthError as exc:
         logger.warning("GitHub OAuth 配置无效: %s", exc)
         return JSONResponse(
@@ -1927,7 +1962,7 @@ def handle_github_auth_callback(
     _admin: AuthenticatedUser = Depends(require_admin),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> JSONResponse | RedirectResponse:
-    settings = Settings.from_yaml(str(services.default_config_path))
+    server_config = _load_server_config(services.default_config_path)
     accept_header = request.headers.get("accept", "").lower()
     accepts_html = "application/json" not in accept_header and "text/html" in accept_header
 
@@ -1966,7 +2001,7 @@ def handle_github_auth_callback(
         )
 
     try:
-        status = github_auth_service.handle_callback(settings.github, code=code, state=state)
+        status = github_auth_service.handle_callback(server_config.github, code=code, state=state)
     except GitHubAuthError as exc:
         logger.warning("GitHub OAuth 回调失败: %s", exc)
         message = "GitHub 授权失败，请重新发起授权。"
@@ -1993,9 +2028,9 @@ def get_github_auth_status(
     _admin: AuthenticatedUser = Depends(require_admin),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> JSONResponse:
-    settings = Settings.from_yaml(str(services.default_config_path))
+    server_config = _load_server_config(services.default_config_path)
     try:
-        status = github_auth_service.get_status(settings.github)
+        status = github_auth_service.get_status(server_config.github)
     except GitHubAuthError as exc:
         logger.warning("GitHub OAuth 状态查询失败: %s", exc)
         return JSONResponse(
@@ -2016,8 +2051,8 @@ def disconnect_github_auth(
     _admin: AuthenticatedUser = Depends(require_admin),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> JSONResponse:
-    settings = Settings.from_yaml(str(services.default_config_path))
-    github_auth_service.disconnect(settings.github)
+    server_config = _load_server_config(services.default_config_path)
+    github_auth_service.disconnect(server_config.github)
     return JSONResponse(
         status_code=200,
         content={
@@ -2039,9 +2074,9 @@ def get_github_repositories(
     _admin: AuthenticatedUser = Depends(require_admin),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> GitHubRepositoriesResponse | JSONResponse:
-    settings = Settings.from_yaml(str(services.default_config_path))
+    server_config = _load_server_config(services.default_config_path)
     try:
-        repositories = github_auth_service.list_repositories(settings.github)
+        repositories = github_auth_service.list_repositories(server_config.github)
     except GitHubAuthError as exc:
         logger.warning("GitHub 仓库列表获取失败: %s", exc)
         return _error_response(

@@ -399,6 +399,35 @@ class LocalAuthApiTests(unittest.TestCase):
             revoked_at = connection.execute("SELECT revoked_at FROM sessions").fetchone()[0]
         self.assertIsNotNone(revoked_at)
 
+    def test_login_uses_server_config_without_requiring_llm(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        assert self.default_config_path is not None
+        self.default_config_path.write_text(
+            (
+                "deployment:\n"
+                "  secure_auth_cookies: false\n"
+                "  allowed_origins:\n"
+                "    - https://console.example\n"
+            ),
+            encoding="utf-8",
+        )
+        user_id = self._create_user(username="server-only", password="secret-123")
+
+        login_response = self.client.post(
+            "/api/auth/login",
+            json={"username": "server-only", "password": "secret-123"},
+        )
+
+        self.assertEqual(login_response.status_code, 200, login_response.text)
+        self.assertEqual(login_response.json()["user"]["id"], user_id)
+        self.assertIn("comet_session", login_response.cookies)
+
+        public_config_response = self.client.get("/api/deployment/public-config")
+        self.assertEqual(public_config_response.status_code, 200, public_config_response.text)
+        deployment = public_config_response.json()["deployment"]
+        self.assertEqual(deployment["allowedOrigins"], ["https://console.example"])
+
     def test_auth_rejects_disabled_users_and_throttles_failed_logins(self) -> None:
         assert self.client is not None
         self._create_user(username="disabled", password="secret-123", is_active=False)
@@ -1320,6 +1349,52 @@ class UploadRunApiTests(unittest.TestCase):
         assert record is not None
         self.assertEqual(record.project_source_type, "upload")
         self.assertEqual(record.path_metadata["uploadSource"]["projectUploadId"], project_upload_id)
+
+    def test_run_with_uploaded_config_uses_server_policy_without_default_llm(self) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        self.default_config_path.write_text(
+            ("deployment:\n  max_budget: 7\n  allowed_java_versions:\n    - '17'\n"),
+            encoding="utf-8",
+        )
+        project_upload_id = self._upload_project("server-policy-project.zip")
+
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectUploadId": project_upload_id,
+                "budget": "99",
+                "selectedJavaVersion": "17",
+            },
+            files={
+                "configFile": (
+                    "config.yaml",
+                    BytesIO(b"llm:\n  api_key: uploaded-key\n"),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        self.assertEqual(payload["effectiveConfig"]["evolution"]["budget_llm_calls"], 7)
+        self.assertEqual(payload["effectiveConfig"]["execution"]["selected_java_version"], "17")
+
+    def test_run_without_runtime_llm_config_returns_validation_error(self) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        self.default_config_path.write_text("deployment:\n  max_budget: 7\n", encoding="utf-8")
+        project_upload_id = self._upload_project("missing-llm-project.zip")
+
+        response = self.client.post("/api/runs", data={"projectUploadId": project_upload_id})
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["error"]["code"], "invalid_config")
+        self.assertTrue(
+            any(item["path"] == ["llm"] for item in response.json()["error"]["fieldErrors"])
+        )
+        self.assertEqual(self._run_count(), 0)
+        self.assertIsNone(self._upload_row(project_upload_id)["used_at"])
 
     def test_local_path_forbidden_for_ordinary_user_creates_no_run(self) -> None:
         assert self.client is not None

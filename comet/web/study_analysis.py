@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -174,13 +173,7 @@ class StudyReplayAnalyzer:
             return 1
         if requested_max_workers is not None:
             return max(1, min(requested_max_workers, task_count))
-
-        configured_max_workers = self.settings.preprocessing.max_workers
-        if configured_max_workers is not None:
-            return max(1, min(configured_max_workers, task_count))
-
-        cpu_count = os.cpu_count() or 1
-        return max(1, min(cpu_count, task_count))
+        return 1
 
     def _validate_project_path(self, project_path: Path) -> None:
         if not project_path.exists():

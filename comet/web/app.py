@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from comet.config import Settings
+from comet.config.settings import ServerConfig
 
 from .git_pr_service import GitHubPullRequestService
 from .github_auth_service import GitHubOAuthService
@@ -72,8 +72,8 @@ def create_app(
         call_next: Callable[[Request], Awaitable[JSONResponse]],
     ) -> JSONResponse:
         if _requires_origin_guard(request):
-            settings = Settings.from_yaml(str(app.state.services.default_config_path))
-            allowed_origins = _allowed_request_origins(request, settings)
+            server_config = ServerConfig.from_yaml(str(app.state.services.default_config_path))
+            allowed_origins = _allowed_request_origins(request, server_config)
             request_origin = _request_origin_or_referer(request)
             if request_origin is None or request_origin not in allowed_origins:
                 return JSONResponse(
@@ -161,9 +161,9 @@ def _request_origin_or_referer(request: Request) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
 
 
-def _allowed_request_origins(request: Request, settings: Settings) -> set[str]:
+def _allowed_request_origins(request: Request, server_config: ServerConfig) -> set[str]:
     host_origin = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
-    return {host_origin, *settings.deployment.allowed_origins}
+    return {host_origin, *server_config.deployment.allowed_origins}
 
 
 app = _LazyApp()

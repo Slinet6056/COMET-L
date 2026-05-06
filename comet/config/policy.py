@@ -218,6 +218,7 @@ def redacted_settings_dict(settings: Settings) -> tuple[dict[str, Any], ConfigPo
 
 def _normalize_submitted_config(submitted: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(submitted or {})
+    normalized.pop("deployment", None)
     evolution = normalized.get("evolution")
     if isinstance(evolution, dict) and "budget" in evolution:
         normalized_evolution = dict(evolution)

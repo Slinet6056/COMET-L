@@ -544,6 +544,26 @@ class DeploymentPolicyConfig(BaseModel):
         }
 
 
+class ServerConfig(BaseModel):
+    """Web 服务端部署配置。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    github: GitHubConfig = Field(default_factory=GitHubConfig)
+    deployment: DeploymentPolicyConfig = Field(default_factory=DeploymentPolicyConfig)
+
+    @classmethod
+    def from_yaml(cls, config_path: str) -> "ServerConfig":
+        config_file = Path(config_path)
+        if not config_file.exists():
+            return cls.model_validate(GitHubConfig.apply_env_overrides({}))
+
+        with open(config_file, "r", encoding="utf-8") as f:
+            config_data = yaml.safe_load(f)
+
+        return cls.model_validate(GitHubConfig.apply_env_overrides(config_data))
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
