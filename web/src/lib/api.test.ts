@@ -228,6 +228,61 @@ describe('createRun', () => {
     expect(payload.get('projectPath')).toBeNull();
     expect(payload.get('githubRepoUrl')).toBe('https://github.com/openai/example-repo');
   });
+
+  it('strips deployment policy from generated run config file', async () => {
+    let capturedBody: unknown = null;
+    let capturedConfigText = '';
+    const OriginalFile = globalThis.File;
+
+    class CapturingFile extends OriginalFile {
+      constructor(parts: BlobPart[], name: string, options?: FilePropertyBag) {
+        super(parts, name, options);
+        capturedConfigText = parts
+          .map((part) => (typeof part === 'string' ? part : String(part)))
+          .join('');
+      }
+    }
+
+    vi.stubGlobal('File', CapturingFile as typeof File);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      capturedBody = (init?.body ?? null) as FormData | null;
+      return new Response(
+        JSON.stringify({
+          runId: 'run-4',
+          status: 'created',
+          mode: 'standard',
+        }),
+        {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
+    });
+
+    const config = {
+      llm: { api_key: 'test-key' },
+      evolution: { mutation_enabled: true, max_iterations: 10 },
+      deployment: { max_budget: 100, allow_local_path_mode: true },
+    };
+
+    try {
+      await createRun({
+        projectPath: '/tmp/project',
+        config,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(capturedBody instanceof FormData).toBe(true);
+    if (!(capturedBody instanceof FormData)) {
+      throw new Error('expected FormData body');
+    }
+    const submittedConfig = JSON.parse(capturedConfigText) as Record<string, unknown>;
+    expect(submittedConfig.deployment).toBeUndefined();
+    expect(submittedConfig.llm).toEqual({ api_key: 'test-key' });
+    expect(config.deployment).toEqual({ max_budget: 100, allow_local_path_mode: true });
+  });
 });
 
 describe('uploadProjectZip', () => {

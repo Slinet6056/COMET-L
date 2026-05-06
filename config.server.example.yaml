@@ -1,0 +1,53 @@
+# 服务器侧部署配置示例。
+# 复制为 config.yaml 后再部署：cp -n config.server.example.yaml config.yaml
+# 用户侧运行配置请参考 config.example.yaml；不要把用户提交的 web-config.yaml 当作服务端策略来源。
+
+deployment:
+  # 单次运行限制
+  max_budget: 500
+  max_run_timeout_seconds: 7200
+  max_iterations: 10
+
+  # Web 控制台允许用户选择的目标 Java 版本
+  allowed_java_versions:
+    - "8"
+    - "11"
+    - "17"
+    - "21"
+    - "25"
+
+  # Cookie 与 CSRF Origin 策略。生产环境必须通过 HTTPS 访问，并启用 secure_auth_cookies。
+  secure_auth_cookies: true
+  allowed_origins:
+    - "https://comet.example.internal"
+
+  # 单进程 FIFO 调度器限制
+  global_max_running_tasks: 2
+  per_user_max_running_tasks: 1
+  global_max_pending_tasks: 50
+  per_user_max_pending_tasks: 5
+
+  # 服务器本地路径模式仅供管理员使用；默认关闭。
+  allow_local_path_mode: false
+  local_path_allowlist: []
+
+  # 数据保留策略
+  upload_retention_hours: 24
+  run_artifact_retention_days: 30
+
+github:
+  # GitHub 仓库导入、自动 push 或创建 PR 时需要配置 OAuth App。
+  # 也可以使用 COMET_GITHUB_* 环境变量覆盖这些字段。
+  oauth_client_id: null
+  oauth_client_secret: null
+  oauth_redirect_uri: "https://comet.example.internal/api/github/auth/callback"
+  oauth_scope: "repo"
+  oauth_state_ttl_seconds: 600
+  oauth_authorize_url: "https://github.com/login/oauth/authorize"
+  oauth_token_exchange_url: "https://github.com/login/oauth/access_token"
+  oauth_api_base_url: "https://api.github.com"
+  encrypted_token_store_path: "./state/github/auth/token.enc"
+  encrypted_key_store_path: "./state/github/auth/token.key"
+  managed_clone_root: "./sandbox/github-managed"
+  repo_url: null
+  base_branch: null

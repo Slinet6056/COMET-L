@@ -28,7 +28,7 @@ from comet.models import Mutant, MutationPatch, TestCase, TestMethod
 from comet.store.database import Database
 from comet.utils.log_context import log_context
 from comet.utils.method_keys import build_method_key
-from comet.web.app import app, create_app
+from comet.web.app import app, create_app, default_config_path_for_repo_root
 from comet.web.github_auth_service import GitHubAuthStatus, GitHubOAuthService, GitHubTokenStorage
 from comet.web.log_router import RunLogRouter
 from comet.web.routes import ApiErrorException, require_admin
@@ -669,6 +669,26 @@ class AdminUserManagementApiTests(unittest.TestCase):
         self.assertNotIn("api_key", serialized)
 
 
+class DefaultConfigPathTests(unittest.TestCase):
+    def test_prefers_config_yaml_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config.yaml"
+            config_example_path = root / "config.example.yaml"
+            config_example_path.write_text("llm:\n  api_key: example\n", encoding="utf-8")
+            config_path.write_text("llm:\n  api_key: live\n", encoding="utf-8")
+
+            self.assertEqual(default_config_path_for_repo_root(root), config_path)
+
+    def test_ignores_config_example_when_resolving_default_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_example_path = root / "config.example.yaml"
+            config_example_path.write_text("llm:\n  api_key: example\n", encoding="utf-8")
+
+            self.assertEqual(default_config_path_for_repo_root(root), root / "config.yaml")
+
+
 class ConfigApiTests(unittest.TestCase):
     def test_app_is_importable(self) -> None:
         self.assertIsNotNone(app)
@@ -682,7 +702,8 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("config", payload)
-        self.assertEqual(payload["config"]["llm"]["model"], "gpt-4")
+        self.assertIsInstance(payload["config"]["llm"]["model"], str)
+        self.assertTrue(payload["config"]["llm"]["model"])
         self.assertTrue(payload["config"]["evolution"]["mutation_enabled"])
         self.assertFalse(payload["config"]["preprocessing"]["exit_after_preprocessing"])
         self.assertNotIn("paths", payload["config"])

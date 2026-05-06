@@ -251,6 +251,16 @@ describe('Config page', () => {
       expect(fetchRunSnapshotSpy).toHaveBeenCalledWith('run-123');
     });
 
+    const submittedConfig = createRunSpy.mock.calls[0]?.[0].config;
+    if (
+      submittedConfig === undefined ||
+      submittedConfig === null ||
+      typeof submittedConfig !== 'object'
+    ) {
+      throw new Error('expected createRun to receive a config object');
+    }
+    expect(submittedConfig).not.toHaveProperty('deployment');
+
     expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
     expect(screen.getByText('run-123')).toBeInTheDocument();
   });

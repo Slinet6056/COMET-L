@@ -240,6 +240,7 @@ just docker-verify
 
 ```bash
 mkdir -p .docker-data/{state,output,sandbox,logs}
+cp -n config.server.example.yaml config.yaml
 
 docker run --rm -it \
   --name comet-l \
@@ -248,22 +249,26 @@ docker run --rm -it \
   -v "$PWD/.docker-data/output:/opt/comet-l/output" \
   -v "$PWD/.docker-data/sandbox:/opt/comet-l/sandbox" \
   -v "$PWD/.docker-data/logs:/opt/comet-l/logs" \
+  -v "$PWD/config.yaml:/opt/comet-l/config.yaml" \
   comet-l:multi-jdk
 ```
 
-如果使用 GitHub 仓库导入、自动 push 或创建 PR，需要额外提供 OAuth App 配置：
+`config.example.yaml` 是用户侧运行配置样例，`config.server.example.yaml` 是服务器侧部署配置样例。部署 Web 控制台时，先从 `config.server.example.yaml` 复制出正式的 `config.yaml`，再按环境修改其中的 `deployment` 和 `github` 配置。
 
-```bash
--e COMET_GITHUB_OAUTH_CLIENT_ID='你的 Client ID' \
--e COMET_GITHUB_OAUTH_CLIENT_SECRET='你的 Client Secret' \
--e COMET_GITHUB_OAUTH_REDIRECT_URI='http://127.0.0.1:8000/api/github/auth/callback' \
--e COMET_GITHUB_OAUTH_SCOPE='repo' \
--e COMET_GITHUB_ENCRYPTED_TOKEN_STORE_PATH='./state/github/auth/token.enc' \
--e COMET_GITHUB_ENCRYPTED_KEY_STORE_PATH='./state/github/auth/token.key' \
--e COMET_GITHUB_MANAGED_CLONE_ROOT='./sandbox/github-managed'
+如果使用 GitHub 仓库导入、自动 push 或创建 PR，把 GitHub OAuth 配置写进挂载的 `config.yaml`：
+
+```yaml
+github:
+  oauth_client_id: "你的 Client ID"
+  oauth_client_secret: "你的 Client Secret"
+  oauth_redirect_uri: "http://127.0.0.1:8000/api/github/auth/callback"
+  oauth_scope: "repo"
+  encrypted_token_store_path: "./state/github/auth/token.enc"
+  encrypted_key_store_path: "./state/github/auth/token.key"
+  managed_clone_root: "./sandbox/github-managed"
 ```
 
-普通用户在 Web 控制台中使用 ZIP 上传创建运行，不需要把宿主机项目目录挂进容器。只有管理员需要使用服务器本地路径模式时，才应挂载项目目录；该模式默认关闭，并且必须同时满足 `deployment.allow_local_path_mode=true` 和 `deployment.local_path_allowlist` 非空且覆盖挂载路径。
+普通用户在 Web 控制台中使用 ZIP 上传创建运行，不需要把宿主机项目目录挂进容器。只有管理员需要使用服务器本地路径模式时，才需要挂载项目目录，并在 `config.yaml` 的 `deployment` 中开启本地路径模式、填写允许访问的目录。
 
 管理员处理宿主机本地 Maven 项目时，可以把项目目录挂进容器：
 

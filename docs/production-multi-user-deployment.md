@@ -153,60 +153,41 @@ uv run python -m comet.web.admin demote-user --user-id 2
 
 ## 部署配置选项
 
-以下配置项位于 `config.yaml` 的 `deployment` 部分，控制服务器端策略：
+部署 Web 控制台时使用服务器侧配置。先复制 `config.server.example.yaml` 为 `config.yaml`，再按部署环境修改 `deployment` 和 `github` 字段。
+
+`config.example.yaml` 是用户侧运行配置样例，供单次运行或前端表单参考；不要把它当作服务器部署配置。
 
 ```yaml
 deployment:
-  # 单次运行限制
-  max_budget: 500                    # 最大 LLM 调用次数
-  max_run_timeout_seconds: 7200      # 最大运行超时（秒）
-  max_iterations: 10                 # 最大迭代次数
-
-  # Java 版本控制
-  allowed_java_versions:             # 允许的 Java 版本
+  max_budget: 500
+  max_run_timeout_seconds: 7200
+  max_iterations: 10
+  allowed_java_versions:
     - "8"
     - "11"
     - "17"
     - "21"
     - "25"
-
-  # Cookie 安全
-  secure_auth_cookies: true          # 生产环境必须启用
-  allowed_origins: []                # 允许的额外 Origin
-
-  # 队列限制
-  global_max_running_tasks: 2        # 全局最大并行运行数
-  per_user_max_running_tasks: 1      # 每用户最大并行运行数
-  global_max_pending_tasks: 50       # 全局最大排队数
-  per_user_max_pending_tasks: 5      # 每用户最大排队数
-
-  # 本地路径模式（仅管理员）
-  allow_local_path_mode: false       # 是否允许本地路径模式
-  local_path_allowlist: []           # 允许的本地路径根目录
-
-  # 数据保留
-  upload_retention_hours: 24         # 未使用上传保留时间
-  run_artifact_retention_days: 30    # 运行产物保留天数
+  secure_auth_cookies: true
+  allowed_origins:
+    - "https://comet.example.internal"
+  global_max_running_tasks: 2
+  per_user_max_running_tasks: 1
+  global_max_pending_tasks: 50
+  per_user_max_pending_tasks: 5
+  allow_local_path_mode: false
+  local_path_allowlist: []
+  upload_retention_hours: 24
+  run_artifact_retention_days: 30
 ```
 
-上传限制由服务端固定检查执行。当前项目 ZIP 最大 25 MB，解压后总大小最大 200 MB，单文件最大 50 MB，最多 5000 个条目，并拒绝路径穿越、重复规范化路径、符号链接、特殊文件和异常压缩率。超过限制会返回“上传文件过大”等稳定错误。缺陷报告 ZIP 只接受 `.md`、`.txt`、`.diff` 和 `.patch` 文件。
+生产部署请把服务器侧配置写入挂载的 `config.yaml`。`deployment` 用来限制预算、超时、队列、本地路径和数据保留时间。
 
-队列限制是单进程 SQLite FIFO 调度器的保护阈值。默认全局同时运行 2 个任务，每用户同时运行 1 个任务；默认全局最多排队 50 个任务，每用户最多排队 5 个任务。超过限制时 API 返回 429 和 `queue_limit_exceeded`。
+上传 ZIP 最大 25 MB，解压后总大小最大 200 MB，单文件最大 50 MB，最多 5000 个条目。缺陷报告 ZIP 只接受 `.md`、`.txt`、`.diff` 和 `.patch` 文件。
 
-保留策略由清理逻辑读取：未使用上传默认保留 24 小时，已结束运行产物默认保留 30 天。运维侧应安排定时清理，并在清理前确认备份策略。
+默认全局同时运行 2 个任务，每用户同时运行 1 个任务；默认全局最多排队 50 个任务，每用户最多排队 5 个任务。根据服务器资源调整这些数值。
 
-### 公开部署配置 API
-
-`GET /api/deployment/public-config` 返回前端安全的部署配置（不包含敏感信息）：
-
-- Cookie 安全标志
-- 允许的 Origin 列表
-- 本地路径模式开关（不包含具体路径）
-- 队列限制
-- 预算和超时限制
-- 保留策略
-
-注意：此 API 故意不返回 `local_path_allowlist` 的具体路径，以防泄露服务器目录结构。
+未使用上传默认保留 24 小时，已结束运行产物默认保留 30 天。生产环境应配置定期备份和清理计划。
 
 ## 用户权限模型
 
@@ -243,8 +224,6 @@ deployment:
     - "/srv/comet-l/bug-reports"
 ```
 
-公开部署配置接口不会返回 `local_path_allowlist` 的具体路径，只返回是否已配置和数量，避免泄露服务器目录结构。
-
 ## 数据备份与恢复
 
 ### 备份内容
@@ -270,11 +249,7 @@ tar czf /backup/comet-l/$(date +%Y%m%d)/users.tar.gz state/users/ output/users/ 
 
 ### 恢复注意事项
 
-- **仅支持相同版本恢复：** 备份和恢复的 COMET-L 版本必须一致
-- **不支持跨版本迁移：** 不同版本之间的数据库结构可能不兼容
-- **不支持旧单用户版本迁移：** 无法将单用户版本的数据迁移到多用户版本
-- **不支持导入旧运行记录：** 不要把旧 `state/runs/` 或旧 `output/runs/` 手工复制为多用户数据
-- 恢复前停止服务，恢复后重新启动
+恢复前停止服务，恢复完成后再重新启动。备份和恢复应使用同一版本的 COMET-L。
 
 ### 恢复命令示例
 
@@ -302,6 +277,7 @@ just docker-build
 
 # 运行容器（生产模式）
 mkdir -p .docker-data/{state,output,sandbox,logs}
+cp -n config.server.example.yaml config.yaml
 
 docker run --rm -it \
   --name comet-l \
@@ -310,23 +286,24 @@ docker run --rm -it \
   -v "$PWD/.docker-data/output:/opt/comet-l/output" \
   -v "$PWD/.docker-data/sandbox:/opt/comet-l/sandbox" \
   -v "$PWD/.docker-data/logs:/opt/comet-l/logs" \
-  -e COMET_WEB_DB_PATH=/opt/comet-l/state/web/comet-web.sqlite3 \
+  -v "$PWD/config.yaml:/opt/comet-l/config.yaml" \
   comet-l:multi-jdk \
   uv run python -m uvicorn comet.web.app:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
 ### GitHub OAuth 配置（可选）
 
-如需使用 GitHub 仓库导入和 PR 功能，配置以下环境变量：
+如需使用 GitHub 仓库导入和 PR 功能，在挂载的 `config.yaml` 中配置 `github` 部分：
 
-```bash
--e COMET_GITHUB_OAUTH_CLIENT_ID='替换为你的 GitHub OAuth Client ID' \
--e COMET_GITHUB_OAUTH_CLIENT_SECRET='替换为你的 GitHub OAuth Client Secret' \
--e COMET_GITHUB_OAUTH_REDIRECT_URI='https://comet.example.internal/api/github/auth/callback' \
--e COMET_GITHUB_OAUTH_SCOPE='repo' \
--e COMET_GITHUB_ENCRYPTED_TOKEN_STORE_PATH='./state/github/auth/token.enc' \
--e COMET_GITHUB_ENCRYPTED_KEY_STORE_PATH='./state/github/auth/token.key' \
--e COMET_GITHUB_MANAGED_CLONE_ROOT='./sandbox/github-managed'
+```yaml
+github:
+  oauth_client_id: "替换为你的 GitHub OAuth Client ID"
+  oauth_client_secret: "替换为你的 GitHub OAuth Client Secret"
+  oauth_redirect_uri: "https://comet.example.internal/api/github/auth/callback"
+  oauth_scope: "repo"
+  encrypted_token_store_path: "./state/github/auth/token.enc"
+  encrypted_key_store_path: "./state/github/auth/token.key"
+  managed_clone_root: "./sandbox/github-managed"
 ```
 
 ## 安全建议

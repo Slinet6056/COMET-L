@@ -35,6 +35,7 @@ import {
 import { CONFIG_SECTIONS, EXAMPLE_PROJECTS, type ConfigFieldDefinition } from './configFields';
 
 type ConfigValue = Record<string, unknown>;
+type DeploymentConfig = Record<string, unknown>;
 type FieldErrors = Record<string, string>;
 
 function getFieldKey(path: string[]): string {
@@ -122,8 +123,27 @@ function getPolicyFields(fields: string[] | undefined): Set<string> {
   return new Set(fields ?? []);
 }
 
-function isLocalPathModeEnabled(config: ConfigValue): boolean {
-  return getNestedValue(config, ['deployment', 'allow_local_path_mode']) === true;
+function splitServerConfig(config: ConfigValue): {
+  userConfig: ConfigValue;
+  deploymentConfig: DeploymentConfig | null;
+} {
+  const userConfig = structuredClone(config);
+  const deploymentValue = userConfig.deployment;
+  delete userConfig.deployment;
+
+  return {
+    userConfig,
+    deploymentConfig:
+      deploymentValue !== null &&
+      typeof deploymentValue === 'object' &&
+      !Array.isArray(deploymentValue)
+        ? (deploymentValue as DeploymentConfig)
+        : null,
+  };
+}
+
+function isLocalPathModeEnabled(deploymentConfig: DeploymentConfig | null): boolean {
+  return deploymentConfig?.allow_local_path_mode === true;
 }
 
 function getFieldPolicyNotes(fieldKey: string, configPolicy: ConfigPolicy | null): string[] {
@@ -152,6 +172,7 @@ export function HomePage({ user }: { user: AuthUser }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [config, setConfig] = useState<ConfigValue | null>(null);
+  const [deploymentConfig, setDeploymentConfig] = useState<DeploymentConfig | null>(null);
   const [configPolicy, setConfigPolicy] = useState<ConfigPolicy | null>(null);
   const [sourceMode, setSourceMode] = useState<SourceMode>('upload');
   const [projectPath, setProjectPath] = useState('');
@@ -177,8 +198,8 @@ export function HomePage({ user }: { user: AuthUser }) {
   const [isUploadingProject, setIsUploadingProject] = useState(false);
   const [isUploadingBugReports, setIsUploadingBugReports] = useState(false);
   const allowLocalPathMode = useMemo(
-    () => config !== null && user.role === 'admin' && isLocalPathModeEnabled(config),
-    [config, user.role],
+    () => user.role === 'admin' && isLocalPathModeEnabled(deploymentConfig),
+    [deploymentConfig, user.role],
   );
 
   useEffect(() => {
@@ -190,7 +211,9 @@ export function HomePage({ user }: { user: AuthUser }) {
         if (!active) {
           return;
         }
-        setConfig(payload.config);
+        const nextConfig = splitServerConfig(payload.config);
+        setConfig(nextConfig.userConfig);
+        setDeploymentConfig(nextConfig.deploymentConfig);
         setConfigPolicy(payload.configPolicy ?? null);
       } catch (error) {
         if (!active) {
@@ -385,7 +408,9 @@ export function HomePage({ user }: { user: AuthUser }) {
 
     try {
       const payload = await parseConfigFile(file);
-      setConfig(payload.config);
+      const nextConfig = splitServerConfig(payload.config);
+      setConfig(nextConfig.userConfig);
+      setDeploymentConfig(nextConfig.deploymentConfig);
       setConfigPolicy(payload.configPolicy ?? null);
       setUploadNotice(`${file.name} 已解析并回填到表单中。`);
     } catch (error) {

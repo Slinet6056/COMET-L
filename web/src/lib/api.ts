@@ -29,6 +29,12 @@ export type RunConfigPayload = Record<string, unknown> & {
   };
 };
 
+function toUserRunConfig(config: RunConfigPayload): RunConfigPayload {
+  const runConfig = structuredClone(config);
+  delete runConfig.deployment;
+  return runConfig;
+}
+
 export type UploadResponse = {
   uploadId: string;
   kind: 'project' | 'bug_reports';
@@ -448,6 +454,7 @@ export async function createRun(options: {
   config: RunConfigPayload;
 }): Promise<RunCreateResponse> {
   const formData = new FormData();
+  const runConfig = toUserRunConfig(options.config);
   if (options.projectPath && options.projectPath.trim().length > 0) {
     formData.set('projectPath', options.projectPath);
   }
@@ -469,12 +476,12 @@ export async function createRun(options: {
   if (options.bugReportsUploadId && options.bugReportsUploadId.trim().length > 0) {
     formData.set('bugReportsUploadId', options.bugReportsUploadId.trim());
   }
-  if (typeof options.config.evolution?.mutation_enabled === 'boolean') {
-    formData.set('mutationEnabled', String(options.config.evolution.mutation_enabled));
+  if (typeof runConfig.evolution?.mutation_enabled === 'boolean') {
+    formData.set('mutationEnabled', String(runConfig.evolution.mutation_enabled));
   }
   formData.set(
     'configFile',
-    new File([JSON.stringify(options.config, null, 2)], 'web-config.yaml', {
+    new File([JSON.stringify(runConfig, null, 2)], 'web-config.yaml', {
       type: 'application/x-yaml',
     }),
   );

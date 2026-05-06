@@ -53,7 +53,7 @@ def create_app(
     app.state.services = AppServices(
         run_service=resolved_run_service,
         github_auth_service=resolved_github_auth_service,
-        default_config_path=default_config_path or repo_root / "config.example.yaml",
+        default_config_path=default_config_path or default_config_path_for_repo_root(repo_root),
         system_initializer=system_initializer,
         evolution_runner=evolution_runner,
         web_database=web_database,
@@ -121,6 +121,10 @@ def create_app(
             return FileResponse(_resolve_frontend_path(full_path))
 
     return app
+
+
+def default_config_path_for_repo_root(repo_root: Path) -> Path:
+    return repo_root / "config.yaml"
 
 
 class _LazyApp:
