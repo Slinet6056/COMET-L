@@ -59,9 +59,11 @@ Use executable sources first: `justfile`, `pyproject.toml`, `web/package.json`, 
 
 - Keep changes surgical and aligned with the surrounding file’s style.
 - Use Chinese for Python user-facing strings; keep Java comments in English; avoid emojis.
-- When changing Java runtime code, rebuild it with `just runtime-build`.
-- For frontend logic/type changes, run `just web-build` in addition to `just check-web`.
-- For repo-wide validation, prefer the smallest relevant check first; use `just check` when changes cross Python/Web/Java boundaries.
+- After any change, run the full validation suite for every affected area, not only targeted tests for the edited files. This prevents local changes from breaking neighboring code in the same area.
+- Python changes require the full Python checks and tests: `just check-python` plus the relevant full pytest suite for the affected Python area, for example `just test-python tests` when the impact is broad or unclear.
+- Frontend logic/type changes require the full frontend checks, typecheck/build, and test suite: `just check-web`, `just web-build`, and `pnpm --dir web exec vitest run`.
+- Java runtime changes require the full Java/runtime validation: `just check-java` and `just runtime-build`.
+- Changes that cross Python/Web/Java boundaries require `just check` plus the full test/build commands for each affected area.
 
 ## Existing instruction files
 
