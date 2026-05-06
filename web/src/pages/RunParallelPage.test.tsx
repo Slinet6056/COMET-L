@@ -156,6 +156,8 @@ function buildParallelSnapshot(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const defaultUser = { id: 1, username: 'testuser', role: 'user' as const };
+
 describe('Run page parallel mode', () => {
   let onEvent: ((event: api.RunEvent) => void) | null;
 
@@ -163,6 +165,7 @@ describe('Run page parallel mode', () => {
     onEvent = null;
     vi.restoreAllMocks();
     vi.stubGlobal('EventSource', class {} as unknown as typeof EventSource);
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
     vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue(buildParallelSnapshot());
     vi.spyOn(api, 'fetchRunLogs').mockResolvedValue({
       runId: 'run-par-42',

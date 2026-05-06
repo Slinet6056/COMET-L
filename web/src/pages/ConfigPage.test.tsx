@@ -77,7 +77,20 @@ const defaultConfig = {
       timeout_per_target: 300,
     },
   },
+  deployment: {
+    allow_local_path_mode: false,
+  },
 };
+
+const localPathConfig = {
+  ...defaultConfig,
+  deployment: {
+    allow_local_path_mode: true,
+  },
+};
+
+const defaultUser = { id: 1, username: 'testuser', role: 'user' as const };
+const adminUser = { id: 2, username: 'admin', role: 'admin' as const };
 
 describe('Config page', () => {
   beforeEach(() => {
@@ -90,6 +103,7 @@ describe('Config page', () => {
 
   it('uploads YAML and backfills the form with parsed config', async () => {
     vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
     vi.spyOn(api, 'parseConfigFile').mockResolvedValue({
       config: {
         ...defaultConfig,
@@ -133,7 +147,8 @@ describe('Config page', () => {
   });
 
   it('shows backend project path validation errors', async () => {
-    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: localPathConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
     vi.spyOn(api, 'createRun').mockRejectedValue(
       new api.ApiError(422, {
         error: {
@@ -157,6 +172,9 @@ describe('Config page', () => {
       </MemoryRouter>,
     );
 
+    await screen.findByLabelText('上传项目 ZIP');
+    await user.click(screen.getByRole('tab', { name: '本地路径' }));
+
     await screen.findByLabelText('项目路径');
     await user.type(screen.getByLabelText('项目路径'), '/tmp/missing-project');
     await user.click(screen.getByRole('button', { name: '启动运行' }));
@@ -166,7 +184,8 @@ describe('Config page', () => {
   });
 
   it('submits config and navigates to the created run page', async () => {
-    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: localPathConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
     const createRunSpy = vi.spyOn(api, 'createRun').mockResolvedValue({
       runId: 'run-123',
       status: 'created',
@@ -209,6 +228,9 @@ describe('Config page', () => {
         <App />
       </MemoryRouter>,
     );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    await user.click(screen.getByRole('tab', { name: '本地路径' }));
 
     await screen.findByLabelText('项目路径');
     await user.click(screen.getByRole('button', { name: '计算器示例' }));

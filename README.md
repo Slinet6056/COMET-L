@@ -194,6 +194,24 @@ just web-dev
 
 当前默认没有为 Vite dev server 配置 API 代理，所以完整运行仍建议使用 `just web-build && just web-serve`。
 
+### 多用户生产部署
+
+COMET-L 支持多用户 Web 控制台部署，适用于小型团队或半可信环境。详细部署指南请参见 [docs/production-multi-user-deployment.md](docs/production-multi-user-deployment.md)。该模式只面向 fresh deployment，不提供旧单用户数据导入、迁移或兼容流程，migration unsupported。
+
+**关键要点：**
+
+- **单进程限制：** 必须使用 `uvicorn --workers 1` 启动，不支持多 worker、多进程、多节点或公共 SaaS 级水平扩展。
+- **全新部署：** 当前版本不支持旧单用户版本数据迁移、导入或兼容读取。
+- **代码执行警告：** 用户上传的 Maven 项目会在服务器上执行 Maven 构建、测试和项目代码。本 MVP 仅适合小型内部或半可信用户，不适合直接开放给不可信公网用户。
+- **安全配置：** 生产环境必须启用 HTTPS、`secure_auth_cookies: true`、可信 `allowed_origins`、上传大小限制、队列限制和数据保留策略。
+- **状态与会话：** Web SQLite 默认位于 `state/web/comet-web.sqlite3`，登录 Cookie 名为 `comet_session`。普通用户使用上传 ID 创建运行，管理员本地路径模式默认关闭，只有启用 `allow_local_path_mode` 且配置 allowlist 后才可使用。
+
+快速初始化管理员账户：
+
+```bash
+uv run python -m comet.web.admin create-admin --username admin --password "your-password"
+```
+
 ## Docker 多 JDK 镜像
 
 构建和自检：
@@ -245,7 +263,9 @@ docker run --rm -it \
 -e COMET_GITHUB_MANAGED_CLONE_ROOT='./sandbox/github-managed'
 ```
 
-处理宿主机本地 Maven 项目时，还需要把项目目录挂进容器：
+普通用户在 Web 控制台中使用 ZIP 上传创建运行，不需要把宿主机项目目录挂进容器。只有管理员需要使用服务器本地路径模式时，才应挂载项目目录；该模式默认关闭，并且必须同时满足 `deployment.allow_local_path_mode=true` 和 `deployment.local_path_allowlist` 非空且覆盖挂载路径。
+
+管理员处理宿主机本地 Maven 项目时，可以把项目目录挂进容器：
 
 ```bash
 docker run --rm -it \
@@ -258,7 +278,7 @@ docker run --rm -it \
   comet-l:multi-jdk
 ```
 
-随后在 Web 首页选择“本地路径”，项目路径填写 `/workspace/project`。
+随后管理员可在 Web 首页选择“本地路径”，项目路径填写 `/workspace/project`。普通用户仍应使用 ZIP 上传方式提交项目。
 
 ## Bug 报告输入
 
@@ -358,10 +378,10 @@ COMET-L/
 
 ## 运行产物与限制
 
-- 标准本地路径模式会在沙箱中运行，完成后把生成测试导出回原项目的 `src/test/java/`。
+- 标准本地路径模式只供管理员在显式开启 allowlist 后使用，会在沙箱中运行，完成后把生成测试导出回原项目的 `src/test/java/`。普通用户使用 ZIP 上传模式。
 - GitHub 受管仓库模式会直接使用受管 clone 工作目录，不从 sandbox 回写。
-- Web 控制台当前按单用户本地场景设计，不提供多用户隔离和权限控制。
-- 同一时刻只允许一个 active run；已有运行时再次创建运行会返回冲突错误。
+- Web 控制台的多用户生产模式要求单 FastAPI 进程运行，状态存储在 SQLite，并按用户隔离运行根目录。
+- Web 调度器是单进程 SQLite-backed FIFO 队列，默认全局同时运行 2 个任务、每用户同时运行 1 个任务。
 - 结果页主要提供 `final_state.json`、`run.log` 和 `report.md` 下载入口。
 - 没有可用 `config.yaml` 且没有 `OPENAI_API_KEY` 环境变量时，CLI 会拒绝启动。
 

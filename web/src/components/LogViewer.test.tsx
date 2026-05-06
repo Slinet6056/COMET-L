@@ -7,13 +7,17 @@ import * as api from '../lib/api';
 
 function buildStream(
   taskId: string,
-  status: 'pending' | 'running' | 'completed' | 'failed',
+  status: 'pending' | 'starting' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed',
   overrides: Partial<api.RunLogStream> = {},
 ): api.RunLogStream {
-  const startedAt = overrides.startedAt ?? (status === 'pending' ? null : '2026-03-10T10:00:00Z');
+  const startedAt =
+    overrides.startedAt ??
+    (status === 'pending' || status === 'starting' ? null : '2026-03-10T10:00:00Z');
   const endedAt =
     overrides.endedAt ??
-    (status === 'completed' || status === 'failed' ? '2026-03-10T10:00:05Z' : null);
+    (status === 'completed' || status === 'failed' || status === 'cancelled'
+      ? '2026-03-10T10:00:05Z'
+      : null);
 
   return {
     taskId,
@@ -24,7 +28,8 @@ function buildStream(
     failedAt: overrides.failedAt ?? (status === 'failed' ? endedAt : null),
     endedAt,
     durationSeconds:
-      overrides.durationSeconds ?? (status === 'completed' || status === 'failed' ? 5 : null),
+      overrides.durationSeconds ??
+      (status === 'completed' || status === 'failed' || status === 'cancelled' ? 5 : null),
     firstEntryAt: overrides.firstEntryAt ?? startedAt,
     lastEntryAt: overrides.lastEntryAt ?? endedAt ?? startedAt,
     bufferedEntryCount: overrides.bufferedEntryCount ?? 0,
@@ -293,6 +298,58 @@ describe('LogViewer', () => {
     expect(pendingButton).toHaveTextContent('等待中');
     expect(pendingButton).toHaveAttribute('aria-expanded', 'false');
     expect(pendingButton).toHaveAttribute('aria-controls', 'finished-log-panel-task-pending');
+  });
+
+  it('labels pending, starting, cancelling, and cancelled streams in Chinese', async () => {
+    const user = userEvent.setup();
+    const mainStream = buildStream('main', 'running');
+    const streams = [
+      mainStream,
+      buildStream('task-pending', 'pending'),
+      buildStream('task-starting', 'starting'),
+      buildStream('task-cancelling', 'cancelling'),
+      buildStream('task-cancelled', 'cancelled'),
+    ];
+
+    vi.spyOn(api, 'fetchRunLogs').mockResolvedValue(buildSummary('run-logs-test', streams));
+    vi.spyOn(api, 'fetchRunLogsForTask').mockImplementation(async (_runId, taskId) => {
+      const stream = streams.find((item) => item.taskId === taskId) ?? mainStream;
+      return buildStreamResponse(
+        taskId,
+        [],
+        stream,
+        streams.map((item) => item.taskId),
+      );
+    });
+
+    render(<LogViewer runId="run-logs-test" runStatus="running" />);
+
+    await screen.findByRole('tab', { name: '主日志' });
+    await user.click(screen.getByRole('tab', { name: '运行中 (3)' }));
+
+    expect(screen.getByRole('button', { name: /task-pending/i })).toHaveTextContent('等待中');
+    expect(screen.getByRole('button', { name: /task-starting/i })).toHaveTextContent('启动中');
+    expect(screen.getByRole('button', { name: /task-cancelling/i })).toHaveTextContent('取消中');
+
+    await user.click(screen.getByRole('tab', { name: '已结束 (1)' }));
+    expect(screen.getByRole('button', { name: /task-cancelled/i })).toHaveTextContent('已取消');
+  });
+
+  it('shows a safe not-found copy for log summary 404 errors', async () => {
+    vi.spyOn(api, 'fetchRunLogs').mockRejectedValue(
+      new api.ApiError(404, {
+        error: {
+          code: 'run_not_found',
+          message: 'Run secret-log not found at /home/comet/logs/users/alice/run.log',
+          fieldErrors: [],
+        },
+      }),
+    );
+
+    render(<LogViewer runId="secret-log" runStatus="running" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('任务不存在或无权访问');
+    expect(screen.queryByText(/secret-log|\/home|logs\/users|alice/)).not.toBeInTheDocument();
   });
 
   it('keeps polling the currently selected detail stream in the active view', async () => {

@@ -6,15 +6,15 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { fetchRunResults, type RunResultsArtifact, type RunResultsResponse } from '../lib/api';
+import {
+  fetchRunResults,
+  getSafeApiErrorMessage,
+  translateRunStatus,
+  type RunResultsArtifact,
+  type RunResultsResponse,
+} from '../lib/api';
 
 const STATUS_LABELS: Record<string, string> = {
-  created: '已创建',
-  queued: '排队中',
-  preprocessing: '预处理中',
-  running: '运行中',
-  completed: '已完成',
-  failed: '失败',
   standard: '标准单目标演化',
   parallel: '并行批次演化',
 };
@@ -73,7 +73,7 @@ function translateStatus(value: string | null | undefined): string {
     return '未知';
   }
 
-  return STATUS_LABELS[value] ?? value;
+  return STATUS_LABELS[value] ?? translateRunStatus(value);
 }
 
 function translatePhaseLabel(label: string | null | undefined): string {
@@ -89,8 +89,16 @@ function buildTerminalMessage(results: RunResultsResponse): string {
     return '本次运行以失败结束。如果后端已生成 final-state 数据和运行日志，仍可在此获取。';
   }
 
-  if (results.status === 'completed') {
+  if (results.status === 'completed' || results.status === 'succeeded') {
     return '本次运行已完成。下方摘要展示最终快照以及按本次运行聚合的数据库统计。';
+  }
+
+  if (results.status === 'cancelled') {
+    return '本次运行已取消。页面仍会展示取消前已经落盘的结果数据。';
+  }
+
+  if (results.status === 'stale') {
+    return '本次运行已失效，通常是服务重启后无法恢复实时状态。页面仅展示当前可获得的数据。';
   }
 
   return '本次运行尚未进入终态。页面仍会展示当前可获得的最新结果数据。';
@@ -194,6 +202,11 @@ function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact; tes
     );
   }
 
+  const safeDownloadUrl =
+    typeof artifact.downloadUrl === 'string' && artifact.downloadUrl.trim().length > 0
+      ? artifact.downloadUrl
+      : null;
+
   return (
     <div className="rounded-lg border border-border p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
@@ -220,12 +233,14 @@ function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact; tes
         </div>
       </div>
 
-      {artifact.exists ? (
+      {artifact.exists && safeDownloadUrl ? (
         <Button variant="outline" size="sm" className="w-full h-7 text-xs" asChild>
-          <a href={artifact.downloadUrl} data-testid={testId}>
+          <a href={safeDownloadUrl} data-testid={testId}>
             下载 {artifact.filename}
           </a>
         </Button>
+      ) : artifact.exists ? (
+        <p className="text-xs text-muted-foreground">服务器未提供安全下载链接。</p>
       ) : (
         <p className="text-xs text-muted-foreground">本次运行未生成该工件。</p>
       )}
@@ -268,7 +283,7 @@ export function RunResultsPage() {
           return;
         }
 
-        setPageError(error instanceof Error ? error.message : '无法加载运行结果。');
+        setPageError(getSafeApiErrorMessage(error, '无法加载运行结果。'));
         setIsLoading(false);
       }
     }
@@ -352,6 +367,11 @@ export function RunResultsPage() {
               Java 版本：{results.selectedJavaVersion}
             </Badge>
           )}
+          {typeof results.queuePosition === 'number' ? (
+            <Badge variant="outline" className="text-xs h-5 px-1.5">
+              队列位置：{results.queuePosition}
+            </Badge>
+          ) : null}
         </div>
       </div>
 

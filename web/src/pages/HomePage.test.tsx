@@ -78,11 +78,447 @@ const defaultConfig = {
       timeout_per_target: 300,
     },
   },
+  deployment: {
+    allow_local_path_mode: false,
+  },
 };
+
+const localPathConfig = {
+  ...defaultConfig,
+  deployment: {
+    allow_local_path_mode: true,
+  },
+};
+
+const defaultUser = { id: 1, username: 'testuser', role: 'user' as const };
+const adminUser = { id: 2, username: 'admin', role: 'admin' as const };
+
+describe('HomePage upload-first UI for ordinary users', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows upload tab as default for ordinary users', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    expect(screen.getByRole('tab', { name: '上传项目', selected: true })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: '本地路径' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'GitHub 仓库' })).not.toBeInTheDocument();
+  });
+
+  it('shows project upload input for ordinary users', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    expect(screen.getByLabelText('上传项目 ZIP')).toBeInTheDocument();
+    expect(screen.getByText('点击上传项目 ZIP')).toBeInTheDocument();
+    expect(screen.getByText('必需，包含 Maven pom.xml 的项目目录')).toBeInTheDocument();
+  });
+
+  it('shows optional bug reports upload input for ordinary users', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    expect(screen.getByLabelText('上传缺陷报告 ZIP')).toBeInTheDocument();
+    expect(screen.getByText('点击上传缺陷报告 ZIP')).toBeInTheDocument();
+    expect(screen.getByText('可选，包含 Markdown 缺陷报告的目录')).toBeInTheDocument();
+  });
+
+  it('does not show local path inputs for ordinary users', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    expect(screen.queryByLabelText('项目路径')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('缺陷报告目录')).not.toBeInTheDocument();
+  });
+
+  it('requires project upload before submit', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    expect(screen.getByRole('button', { name: '请先上传项目' })).toBeDisabled();
+  });
+
+  it('uploads project zip and enables submit', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    vi.spyOn(api, 'uploadProjectZip').mockResolvedValue({
+      uploadId: 'upload-123',
+      kind: 'project',
+      status: 'ready',
+      originalFilename: 'project.zip',
+      extractedRoot: '/sandbox/uploads/upload-123',
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    const file = new File(['test'], 'project.zip', { type: 'application/zip' });
+    const input = screen.getByLabelText('上传项目 ZIP') as HTMLInputElement;
+    await user.upload(input, file);
+
+    await waitFor(() => {
+      expect(screen.getByText('project.zip')).toBeInTheDocument();
+      expect(screen.getByText('已上传')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('button', { name: '启动运行' })).not.toBeDisabled();
+  });
+
+  it('keeps the visible start button inside the upload source section after upload', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    vi.spyOn(api, 'uploadProjectZip').mockResolvedValue({
+      uploadId: 'upload-123',
+      kind: 'project',
+      status: 'ready',
+      originalFilename: 'project.zip',
+      extractedRoot: '/sandbox/uploads/upload-123',
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    await user.upload(
+      screen.getByLabelText('上传项目 ZIP') as HTMLInputElement,
+      new File(['test'], 'project.zip', { type: 'application/zip' }),
+    );
+
+    const sourceSection = await screen.findByTestId('target-source-section');
+    const startButton = await screen.findByRole('button', { name: '启动运行' });
+
+    expect(sourceSection).toContainElement(startButton);
+    expect(startButton).not.toBeDisabled();
+  });
+
+  it('uploads bug reports zip optionally', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    vi.spyOn(api, 'uploadProjectZip').mockResolvedValue({
+      uploadId: 'upload-123',
+      kind: 'project',
+      status: 'ready',
+      originalFilename: 'project.zip',
+      extractedRoot: '/sandbox/uploads/upload-123',
+    });
+    vi.spyOn(api, 'uploadBugReportsZip').mockResolvedValue({
+      uploadId: 'upload-456',
+      kind: 'bug_reports',
+      status: 'ready',
+      originalFilename: 'bug-reports.zip',
+      extractedRoot: '/sandbox/uploads/upload-456',
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    const projectFile = new File(['test'], 'project.zip', { type: 'application/zip' });
+    const projectInput = screen.getByLabelText('上传项目 ZIP') as HTMLInputElement;
+    await user.upload(projectInput, projectFile);
+
+    await waitFor(() => {
+      expect(screen.getByText('project.zip')).toBeInTheDocument();
+    });
+
+    const bugReportsFile = new File(['test'], 'bug-reports.zip', { type: 'application/zip' });
+    const bugReportsInput = screen.getByLabelText('上传缺陷报告 ZIP') as HTMLInputElement;
+    await user.upload(bugReportsInput, bugReportsFile);
+
+    await waitFor(() => {
+      expect(screen.getByText('bug-reports.zip')).toBeInTheDocument();
+      expect(screen.getByText('缺陷报告 bug-reports.zip 已上传。')).toBeInTheDocument();
+    });
+  });
+
+  it('submits run with upload IDs', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    vi.spyOn(api, 'uploadProjectZip').mockResolvedValue({
+      uploadId: 'upload-123',
+      kind: 'project',
+      status: 'ready',
+      originalFilename: 'project.zip',
+      extractedRoot: '/sandbox/uploads/upload-123',
+    });
+    vi.spyOn(api, 'uploadBugReportsZip').mockResolvedValue({
+      uploadId: 'upload-456',
+      kind: 'bug_reports',
+      status: 'ready',
+      originalFilename: 'bug-reports.zip',
+      extractedRoot: '/sandbox/uploads/upload-456',
+    });
+    const createRunSpy = vi.spyOn(api, 'createRun').mockResolvedValue({
+      runId: 'run-upload-1',
+      status: 'pending',
+      mode: 'upload',
+      queuePosition: 1,
+    });
+    vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue({
+      runId: 'run-upload-1',
+      status: 'pending',
+      mode: 'upload',
+      iteration: 0,
+      llmCalls: 0,
+      budget: 1000,
+      decisionReasoning: null,
+      currentTarget: null,
+      previousTarget: null,
+      recentImprovements: [],
+      improvementSummary: { count: 0, latest: null },
+      metrics: {
+        mutationScore: 0,
+        globalMutationScore: 0,
+        lineCoverage: 0,
+        branchCoverage: 0,
+        totalTests: 0,
+        totalMutants: 0,
+        globalTotalMutants: 0,
+        killedMutants: 0,
+        globalKilledMutants: 0,
+        survivedMutants: 0,
+        globalSurvivedMutants: 0,
+        currentMethodCoverage: null,
+      },
+      phase: { key: 'pending', label: 'Pending' },
+      artifacts: {},
+    });
+    vi.spyOn(api, 'subscribeToRunEvents').mockReturnValue(() => {});
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    const projectFile = new File(['test'], 'project.zip', { type: 'application/zip' });
+    const projectInput = screen.getByLabelText('上传项目 ZIP') as HTMLInputElement;
+    await user.upload(projectInput, projectFile);
+
+    await waitFor(() => {
+      expect(screen.getByText('project.zip')).toBeInTheDocument();
+    });
+
+    const bugReportsFile = new File(['test'], 'bug-reports.zip', { type: 'application/zip' });
+    const bugReportsInput = screen.getByLabelText('上传缺陷报告 ZIP') as HTMLInputElement;
+    await user.upload(bugReportsInput, bugReportsFile);
+
+    await waitFor(() => {
+      expect(screen.getByText('bug-reports.zip')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: '启动运行' }));
+
+    await waitFor(() => {
+      expect(createRunSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectUploadId: 'upload-123',
+          bugReportsUploadId: 'upload-456',
+          config: expect.any(Object),
+        }),
+      );
+    });
+  });
+
+  it('shows validation error when project upload is missing', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    const submitButton = screen.getByRole('button', { name: '请先上传项目' });
+    expect(submitButton).toBeDisabled();
+  });
+});
+
+describe('HomePage admin local path and GitHub modes', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not show local path tab for admins when the server disables local path mode', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    expect(screen.getByRole('tab', { name: '上传项目' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: '本地路径' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('项目路径')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'GitHub 仓库' })).toBeInTheDocument();
+  });
+
+  it('shows local path and GitHub tabs for admins when the server enables local path mode', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: localPathConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    expect(screen.getByRole('tab', { name: '上传项目' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '本地路径' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'GitHub 仓库' })).toBeInTheDocument();
+  });
+
+  it('shows admin restriction notice in local path mode', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: localPathConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    const localTab = screen.getByRole('tab', { name: '本地路径' });
+    await user.click(localTab);
+
+    await waitFor(() => {
+      expect(screen.getByText('本地路径模式仅限管理员使用。服务端限制。')).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText('项目路径')).toBeInTheDocument();
+  });
+
+  it('renders server config policy annotations with service-side limit copy', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({
+      config: defaultConfig,
+      configPolicy: {
+        overriddenFields: ['preprocessing.max_workers'],
+        clampedFields: ['evolution.budget_llm_calls'],
+        redactedFields: ['llm.api_key'],
+      },
+    });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    expect(
+      screen.getByText('服务端限制：此字段由服务端固定，提交时会使用后端值。'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('服务端限制：超过部署上限时会由服务端自动收紧。')).toBeInTheDocument();
+    expect(screen.getByText('服务端限制：敏感值已隐藏，不会在前端显示。')).toBeInTheDocument();
+  });
+
+  it('shows admin restriction notice in GitHub mode', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
+    vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({
+      connected: false,
+      requiresReauth: false,
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
+    await user.click(githubTab);
+
+    await waitFor(() => {
+      expect(screen.getByText('GitHub 仓库模式仅限管理员使用。服务端限制。')).toBeInTheDocument();
+    });
+  });
+});
 
 describe('HomePage GitHub auth flow', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
   });
 
   afterEach(() => {
@@ -102,7 +538,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
@@ -126,7 +562,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
@@ -149,7 +585,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
@@ -173,7 +609,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
@@ -209,7 +645,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
@@ -237,7 +673,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -313,7 +749,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -363,7 +799,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -404,7 +840,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -480,7 +916,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -525,7 +961,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -556,7 +992,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -586,7 +1022,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -621,7 +1057,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -656,7 +1092,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -679,7 +1115,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     expect(screen.queryByLabelText('目标项目 Java 版本')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('8 | 11 | 17 | 21 | 25')).not.toBeInTheDocument();
@@ -702,7 +1138,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
@@ -725,7 +1161,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
@@ -770,7 +1206,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -812,7 +1248,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await userEvent.click(githubTab);
@@ -848,7 +1284,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);
@@ -896,7 +1332,7 @@ describe('HomePage GitHub auth flow', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText('项目路径');
+    await screen.findByLabelText('上传项目 ZIP');
 
     const githubTab = screen.getByRole('tab', { name: 'GitHub 仓库' });
     await user.click(githubTab);

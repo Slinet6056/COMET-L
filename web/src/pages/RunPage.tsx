@@ -16,7 +16,10 @@ import {
 } from '@/components/ui/table';
 import {
   fetchRunSnapshot,
+  getSafeApiErrorMessage,
+  isTerminalRunStatus,
   subscribeToRunEvents,
+  translateRunStatus,
   type RunEvent,
   type RunActiveTarget,
   type RunMetrics,
@@ -57,15 +60,6 @@ type WorkerOutputRow = {
   methodCoverage: number | null;
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  created: '已创建',
-  queued: '排队中',
-  preprocessing: '预处理中',
-  running: '运行中',
-  completed: '已完成',
-  failed: '失败',
-};
-
 const CONNECTION_LABELS: Record<ConnectionState, string> = {
   idle: '空闲',
   connecting: '连接中',
@@ -76,10 +70,6 @@ const CONNECTION_LABELS: Record<ConnectionState, string> = {
 };
 
 const WORKER_OUTPUT_PAGE_SIZE = 15;
-
-function isTerminalRunStatus(status: string | null | undefined): boolean {
-  return status === 'completed' || status === 'failed';
-}
 
 const KEY_LABELS: Record<string, string> = {
   mutation_score_delta: '变异分数提升',
@@ -93,6 +83,8 @@ const KEY_LABELS: Record<string, string> = {
   started: '运行开始',
   completed: '运行完成',
   failed: '运行失败',
+  cancelled: '运行取消',
+  stale: '运行失效',
 };
 
 function formatPercent(value: number | null | undefined): string {
@@ -156,7 +148,7 @@ function translateStatus(value: string | null | undefined): string {
     return '未知';
   }
 
-  return STATUS_LABELS[value] ?? value;
+  return translateRunStatus(value);
 }
 
 function translatePhaseLabel(phase: Pick<RunPhase, 'key' | 'label'> | null | undefined): string {
@@ -164,7 +156,11 @@ function translatePhaseLabel(phase: Pick<RunPhase, 'key' | 'label'> | null | und
     return '未知';
   }
 
-  return STATUS_LABELS[phase.key] ?? STATUS_LABELS[phase.label.toLowerCase()] ?? phase.label;
+  return translateRunStatus(phase.key) !== phase.key
+    ? translateRunStatus(phase.key)
+    : translateRunStatus(phase.label.toLowerCase()) !== phase.label.toLowerCase()
+      ? translateRunStatus(phase.label.toLowerCase())
+      : phase.label;
 }
 
 function formatValue(value: unknown): string {
@@ -432,7 +428,26 @@ function applyRunEvent(snapshot: RunSnapshot, event: RunEvent): RunSnapshot {
     });
   }
 
-  if (event.type === 'run.started' && snapshotWithParallel.phase.key === 'queued') {
+  if (event.type === 'run.cancelled') {
+    snapshotWithParallel.status = 'cancelled';
+    snapshotWithParallel.phase = mergePhase(snapshotWithParallel.phase, {
+      key: 'cancelled',
+      label: '已取消',
+    });
+  }
+
+  if (event.type === 'run.stale') {
+    snapshotWithParallel.status = 'stale';
+    snapshotWithParallel.phase = mergePhase(snapshotWithParallel.phase, {
+      key: 'stale',
+      label: '已失效',
+    });
+  }
+
+  if (
+    event.type === 'run.started' &&
+    (snapshotWithParallel.phase.key === 'queued' || snapshotWithParallel.phase.key === 'pending')
+  ) {
     snapshotWithParallel.phase = mergePhase(snapshotWithParallel.phase, {
       key: 'running',
       label: '运行中',
@@ -550,6 +565,11 @@ function StandardRunView(props: {
           <Badge variant="outline" className="text-xs h-5 px-1.5">
             实时连接：{CONNECTION_LABELS[connectionState]}
           </Badge>
+          {typeof snapshot.queuePosition === 'number' ? (
+            <Badge variant="outline" className="text-xs h-5 px-1.5">
+              队列位置：{snapshot.queuePosition}
+            </Badge>
+          ) : null}
         </div>
       </div>
 
@@ -710,6 +730,11 @@ function ParallelRunView(props: {
           <Badge variant="outline" className="text-xs h-5 px-1.5">
             实时连接：{CONNECTION_LABELS[connectionState]}
           </Badge>
+          {typeof snapshot.queuePosition === 'number' ? (
+            <Badge variant="outline" className="text-xs h-5 px-1.5">
+              队列位置：{snapshot.queuePosition}
+            </Badge>
+          ) : null}
         </div>
       </div>
 
@@ -990,7 +1015,9 @@ export function RunPage() {
               if (
                 isTerminalRunStatus(event.status) ||
                 event.type === 'run.completed' ||
-                event.type === 'run.failed'
+                event.type === 'run.failed' ||
+                event.type === 'run.cancelled' ||
+                event.type === 'run.stale'
               ) {
                 setConnectionState('ended');
                 return;
@@ -1012,7 +1039,7 @@ export function RunPage() {
           return;
         }
 
-        setPageError(error instanceof Error ? error.message : '无法加载运行快照。');
+        setPageError(getSafeApiErrorMessage(error, '无法加载运行快照。'));
         setIsLoading(false);
         setConnectionState('error');
       }
@@ -1061,7 +1088,7 @@ export function RunPage() {
           return;
         }
 
-        setPageError(error instanceof Error ? error.message : '无法刷新运行快照。');
+        setPageError(getSafeApiErrorMessage(error, '无法刷新运行快照。'));
       }
     }
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -24,18 +26,79 @@ class HealthResponse(BaseModel):
     activeRunId: str | None = Field(default=None)
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AuthUser(BaseModel):
+    id: int
+    username: str
+    role: Literal["admin", "user"]
+
+
+class AuthResponse(BaseModel):
+    user: AuthUser
+
+
+class AdminUserResponse(BaseModel):
+    id: int
+    username: str
+    role: Literal["admin", "user"]
+    isActive: bool
+    createdAt: str
+    updatedAt: str
+    disabledAt: str | None = None
+    passwordChangedAt: str
+
+
+class AdminUserListResponse(BaseModel):
+    users: list[AdminUserResponse] = Field(default_factory=list)
+
+
+class AdminCreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: Literal["admin", "user"] = "user"
+
+
+class AdminResetPasswordRequest(BaseModel):
+    password: str
+
+
+class AdminUpdateRoleRequest(BaseModel):
+    role: Literal["admin", "user"]
+
+
+class PublicDeploymentConfigResponse(BaseModel):
+    deployment: dict[str, object]
+
+
 class ConfigPayload(BaseModel):
     config: dict[str, object]
+    configPolicy: dict[str, list[str]] | None = None
 
 
 class ConfigParseResponse(ConfigPayload):
     pass
 
 
+class UploadCreateResponse(BaseModel):
+    uploadId: str
+    kind: Literal["project", "bug_reports"]
+    status: str
+    originalFilename: str
+    extractedRoot: str
+
+
 class RunCreateResponse(BaseModel):
     runId: str
     status: str
     mode: str
+    queuePosition: int | None = None
+    configPolicy: dict[str, list[str]] | None = None
+    effectiveConfig: dict[str, object] | None = None
+    uploadSource: dict[str, object] | None = None
 
 
 class RunRequestPayload(BaseModel):
@@ -111,12 +174,16 @@ class RunSnapshotResponse(BaseModel):
     phase: RunPhase
     artifacts: dict[str, ArtifactSummary]
     isHistorical: bool = False
+    queuePosition: int | None = None
+    cancelRequested: bool = False
+    cancellationReason: str | None = None
 
 
 class RunHistoryEntry(BaseModel):
     runId: str
     status: str
     mode: str
+    projectSourceType: Literal["local", "upload", "github"] | str = "local"
     selectedJavaVersion: str | None = None
     mutationEnabled: bool | None = None
     projectPath: str
@@ -133,6 +200,9 @@ class RunHistoryEntry(BaseModel):
     metrics: RunMetrics
     artifacts: dict[str, RunHistoryArtifactSummary]
     isHistorical: bool = False
+    queuePosition: int | None = None
+    cancelRequested: bool = False
+    cancellationReason: str | None = None
 
 
 class RunHistoryResponse(BaseModel):

@@ -105,6 +105,11 @@ describe('Run results page', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse(buildResults());
         }
@@ -147,6 +152,11 @@ describe('Run results page', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse(
             buildResults({
@@ -196,6 +206,11 @@ describe('Run results page', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse(
             buildResults({
@@ -267,6 +282,11 @@ describe('Run results page', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse(
             buildResults({
@@ -339,6 +359,11 @@ describe('Run results page', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse(
             buildResults({
@@ -377,6 +402,11 @@ describe('Run results page', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse(
             buildResults({
@@ -419,6 +449,11 @@ describe('Run results page', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse(
             buildResults({
@@ -455,6 +490,11 @@ describe('Run results page', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse(
             buildResults({
@@ -482,6 +522,11 @@ describe('Run results page', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
         if (url === '/api/runs/run-42/results') {
           return jsonResponse(buildResults());
         }
@@ -498,5 +543,164 @@ describe('Run results page', () => {
 
     expect(await screen.findByRole('heading', { name: '最终统计' })).toBeInTheDocument();
     expect(screen.queryByTestId('java-version-badge')).not.toBeInTheDocument();
+  });
+
+  it('renders pending, stale, cancelled, and succeeded statuses with Chinese copy', async () => {
+    const statuses = [
+      ['pending', '状态：等待中'],
+      ['stale', '状态：已失效'],
+      ['cancelled', '状态：已取消'],
+      ['succeeded', '状态：已完成'],
+    ];
+
+    for (const [status, label] of statuses) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: string | URL | Request) => {
+          const url = typeof input === 'string' ? input : input.toString();
+          if (url === '/api/auth/me') {
+            return jsonResponse({
+              user: { id: 1, username: 'tester', role: 'user' },
+            });
+          }
+          if (url === '/api/runs/run-42/results') {
+            return jsonResponse(
+              buildResults({
+                status,
+                phase: { key: status, label: status },
+              }),
+            );
+          }
+
+          throw new Error(`Unexpected request: ${url}`);
+        }),
+      );
+
+      const view = render(
+        <MemoryRouter initialEntries={['/runs/run-42/results']}>
+          <App />
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText(label)).toBeInTheDocument();
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses a generic not-found message for cross-user 404 without leaking backend details', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
+        if (url === '/api/runs/secret-run/results') {
+          return jsonResponse(
+            {
+              error: {
+                code: 'run_not_found',
+                message: 'Run secret-run not found under /home/comet/state/users/alice',
+                fieldErrors: [],
+              },
+            },
+            404,
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/secret-run/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('任务不存在或无权访问');
+    expect(screen.queryByText(/secret-run/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\/home|state\/users|alice/)).not.toBeInTheDocument();
+  });
+
+  it('returns to the login view when a results request reports an expired session', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            {
+              error: {
+                code: 'auth_required',
+                message: '请先登录',
+                fieldErrors: [],
+              },
+            },
+            401,
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('登录状态已过期，请重新登录。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '登录' })).toBeInTheDocument();
+  });
+
+  it('does not create download links for artifacts missing a server-provided URL', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              reportArtifact: {
+                exists: true,
+                filename: 'report.md',
+                contentType: 'text/markdown',
+                sizeBytes: 512,
+                updatedAt: '2026-03-10T10:05:02Z',
+                path: '/home/comet/output/users/alice/report.md',
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '工件下载' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '下载 report.md' })).not.toBeInTheDocument();
+    expect(screen.getByText('服务器未提供安全下载链接。')).toBeInTheDocument();
+    expect(screen.queryByText(/\/home|output\/users/)).not.toBeInTheDocument();
   });
 });

@@ -25,6 +25,10 @@ import {
   fetchGitHubRepositories,
   handleGitHubAuthCallback,
   parseConfigFile,
+  uploadBugReportsZip,
+  uploadProjectZip,
+  type AuthUser,
+  type ConfigPolicy,
   type GitHubAuthStatus,
   type GitHubRepository,
 } from '../lib/api';
@@ -114,15 +118,42 @@ function getFieldHintId(path: string[]): string {
   return `field-hint-${getFieldKey(path).replaceAll('.', '-')}`;
 }
 
-type SourceMode = 'local' | 'github';
+function getPolicyFields(fields: string[] | undefined): Set<string> {
+  return new Set(fields ?? []);
+}
+
+function isLocalPathModeEnabled(config: ConfigValue): boolean {
+  return getNestedValue(config, ['deployment', 'allow_local_path_mode']) === true;
+}
+
+function getFieldPolicyNotes(fieldKey: string, configPolicy: ConfigPolicy | null): string[] {
+  if (!configPolicy) {
+    return [];
+  }
+
+  const notes: string[] = [];
+  if (getPolicyFields(configPolicy.overriddenFields).has(fieldKey)) {
+    notes.push('服务端限制：此字段由服务端固定，提交时会使用后端值。');
+  }
+  if (getPolicyFields(configPolicy.clampedFields).has(fieldKey)) {
+    notes.push('服务端限制：超过部署上限时会由服务端自动收紧。');
+  }
+  if (getPolicyFields(configPolicy.redactedFields).has(fieldKey)) {
+    notes.push('服务端限制：敏感值已隐藏，不会在前端显示。');
+  }
+  return notes;
+}
+
+type SourceMode = 'upload' | 'local' | 'github';
 
 const JAVA_VERSION_OPTIONS = ['8', '11', '17', '21', '25'];
 
-export function HomePage() {
+export function HomePage({ user }: { user: AuthUser }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [config, setConfig] = useState<ConfigValue | null>(null);
-  const [sourceMode, setSourceMode] = useState<SourceMode>('local');
+  const [configPolicy, setConfigPolicy] = useState<ConfigPolicy | null>(null);
+  const [sourceMode, setSourceMode] = useState<SourceMode>('upload');
   const [projectPath, setProjectPath] = useState('');
   const [bugReportsDir, setBugReportsDir] = useState('');
   const [githubRepoUrl, setGithubRepoUrl] = useState('');
@@ -139,6 +170,16 @@ export function HomePage() {
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [isLoadingDefaults, setIsLoadingDefaults] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [projectUploadId, setProjectUploadId] = useState<string | null>(null);
+  const [bugReportsUploadId, setBugReportsUploadId] = useState<string | null>(null);
+  const [projectUploadFile, setProjectUploadFile] = useState<File | null>(null);
+  const [bugReportsUploadFile, setBugReportsUploadFile] = useState<File | null>(null);
+  const [isUploadingProject, setIsUploadingProject] = useState(false);
+  const [isUploadingBugReports, setIsUploadingBugReports] = useState(false);
+  const allowLocalPathMode = useMemo(
+    () => config !== null && user.role === 'admin' && isLocalPathModeEnabled(config),
+    [config, user.role],
+  );
 
   useEffect(() => {
     let active = true;
@@ -150,6 +191,7 @@ export function HomePage() {
           return;
         }
         setConfig(payload.config);
+        setConfigPolicy(payload.configPolicy ?? null);
       } catch (error) {
         if (!active) {
           return;
@@ -168,6 +210,12 @@ export function HomePage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (sourceMode === 'local' && !allowLocalPathMode) {
+      setSourceMode('upload');
+    }
+  }, [allowLocalPathMode, sourceMode]);
 
   useEffect(() => {
     let active = true;
@@ -338,6 +386,7 @@ export function HomePage() {
     try {
       const payload = await parseConfigFile(file);
       setConfig(payload.config);
+      setConfigPolicy(payload.configPolicy ?? null);
       setUploadNotice(`${file.name} 已解析并回填到表单中。`);
     } catch (error) {
       if (error instanceof ApiError) {
@@ -347,6 +396,66 @@ export function HomePage() {
         setPageError('无法解析上传的配置文件。');
       }
     } finally {
+      event.target.value = '';
+    }
+  }
+
+  async function handleProjectUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setPageError(null);
+    setFieldErrors({});
+    setIsUploadingProject(true);
+
+    try {
+      const response = await uploadProjectZip(file);
+      setProjectUploadId(response.uploadId);
+      setProjectUploadFile(file);
+      setUploadNotice(`项目 ${file.name} 已上传。`);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setFieldErrors(buildFieldErrors(error));
+        setPageError(error.message);
+      } else {
+        setPageError('无法上传项目文件。');
+      }
+      setProjectUploadId(null);
+      setProjectUploadFile(null);
+    } finally {
+      setIsUploadingProject(false);
+      event.target.value = '';
+    }
+  }
+
+  async function handleBugReportsUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setPageError(null);
+    setFieldErrors({});
+    setIsUploadingBugReports(true);
+
+    try {
+      const response = await uploadBugReportsZip(file);
+      setBugReportsUploadId(response.uploadId);
+      setBugReportsUploadFile(file);
+      setUploadNotice(`缺陷报告 ${file.name} 已上传。`);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setFieldErrors(buildFieldErrors(error));
+        setPageError(error.message);
+      } else {
+        setPageError('无法上传缺陷报告文件。');
+      }
+      setBugReportsUploadId(null);
+      setBugReportsUploadFile(null);
+    } finally {
+      setIsUploadingBugReports(false);
       event.target.value = '';
     }
   }
@@ -403,6 +512,13 @@ export function HomePage() {
     const hasManualTargetJavaHome =
       typeof targetJavaHome === 'string' && targetJavaHome.trim().length > 0;
 
+    if (sourceMode === 'upload') {
+      if (!projectUploadId) {
+        setFieldErrors({ projectUpload: '请上传项目 ZIP 文件。' });
+        return;
+      }
+    }
+
     if (sourceMode === 'github') {
       if (!githubAuthStatus?.connected || githubAuthStatus.requiresReauth) {
         setPageError('请先连接 GitHub 账户后再使用仓库模式。');
@@ -431,6 +547,8 @@ export function HomePage() {
         githubRepoUrl: sourceMode === 'github' ? githubRepoUrl : null,
         githubBaseBranch: sourceMode === 'github' ? githubBaseBranch : null,
         selectedJavaVersion: sourceMode === 'github' ? selectedJavaVersion || null : null,
+        projectUploadId: sourceMode === 'upload' ? projectUploadId : null,
+        bugReportsUploadId: sourceMode === 'upload' ? bugReportsUploadId : null,
         config,
       });
       navigate(`/runs/${response.runId}`);
@@ -523,7 +641,7 @@ export function HomePage() {
       ) : null}
 
       {/* 目标来源 */}
-      <Card>
+      <Card data-testid="target-source-section">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">目标来源</CardTitle>
@@ -535,19 +653,124 @@ export function HomePage() {
         <CardContent>
           <Tabs
             value={sourceMode}
-            onValueChange={(value) => setSourceMode(value as SourceMode)}
+            onValueChange={(value) => {
+              if (value === 'local' && !allowLocalPathMode) {
+                setSourceMode('upload');
+                return;
+              }
+              setSourceMode(value as SourceMode);
+            }}
             className="space-y-4"
           >
             <TabsList className="h-8">
-              <TabsTrigger value="local" className="text-xs h-6">
-                本地路径
+              <TabsTrigger value="upload" className="text-xs h-6">
+                上传项目
               </TabsTrigger>
-              <TabsTrigger value="github" className="text-xs h-6">
-                GitHub 仓库
-              </TabsTrigger>
+              {allowLocalPathMode ? (
+                <TabsTrigger value="local" className="text-xs h-6">
+                  本地路径
+                </TabsTrigger>
+              ) : null}
+              {user.role === 'admin' ? (
+                <TabsTrigger value="github" className="text-xs h-6">
+                  GitHub 仓库
+                </TabsTrigger>
+              ) : null}
             </TabsList>
 
+            <TabsContent value="upload" className="space-y-3 mt-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="project-upload" className="text-xs">
+                  项目 ZIP 文件
+                </Label>
+                <label
+                  className={`flex flex-col items-center justify-center border border-dashed border-border rounded-lg px-4 py-6 text-sm hover:bg-accent transition-colors cursor-pointer ${
+                    isUploadingProject ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
+                  htmlFor="project-upload"
+                >
+                  {projectUploadFile ? (
+                    <div className="text-center">
+                      <div className="font-medium text-primary">{projectUploadFile.name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">已上传</div>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <div className="font-medium">
+                        {isUploadingProject ? '上传中...' : '点击上传项目 ZIP'}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        必需，包含 Maven pom.xml 的项目目录
+                      </div>
+                    </div>
+                  )}
+                  <input
+                    id="project-upload"
+                    name="projectUpload"
+                    type="file"
+                    aria-label="上传项目 ZIP"
+                    accept=".zip,application/zip,application/x-zip-compressed"
+                    className="hidden"
+                    onChange={handleProjectUpload}
+                    disabled={isUploadingProject}
+                  />
+                </label>
+                {fieldErrors.projectUpload ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    {fieldErrors.projectUpload}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="bug-reports-upload" className="text-xs">
+                  缺陷报告 ZIP 文件
+                </Label>
+                <label
+                  className={`flex flex-col items-center justify-center border border-dashed border-border rounded-lg px-4 py-6 text-sm hover:bg-accent transition-colors cursor-pointer ${
+                    isUploadingBugReports ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
+                  htmlFor="bug-reports-upload"
+                >
+                  {bugReportsUploadFile ? (
+                    <div className="text-center">
+                      <div className="font-medium text-primary">{bugReportsUploadFile.name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">已上传</div>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <div className="font-medium">
+                        {isUploadingBugReports ? '上传中...' : '点击上传缺陷报告 ZIP'}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        可选，包含 Markdown 缺陷报告的目录
+                      </div>
+                    </div>
+                  )}
+                  <input
+                    id="bug-reports-upload"
+                    name="bugReportsUpload"
+                    type="file"
+                    aria-label="上传缺陷报告 ZIP"
+                    accept=".zip,application/zip,application/x-zip-compressed"
+                    className="hidden"
+                    onChange={handleBugReportsUpload}
+                    disabled={isUploadingBugReports}
+                  />
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  可选的 Markdown 缺陷报告目录，会为本次运行的知识库建立索引。
+                </p>
+              </div>
+            </TabsContent>
+
             <TabsContent value="local" className="space-y-3 mt-3">
+              <Alert>
+                <AlertDescription className="text-xs">
+                  本地路径模式仅限管理员使用。服务端限制。
+                </AlertDescription>
+              </Alert>
+
               <div className="space-y-1.5">
                 <Label htmlFor="project-path" className="text-xs">
                   项目路径
@@ -628,6 +851,12 @@ export function HomePage() {
             </TabsContent>
 
             <TabsContent value="github" className="space-y-3 mt-3">
+              <Alert>
+                <AlertDescription className="text-xs">
+                  GitHub 仓库模式仅限管理员使用。服务端限制。
+                </AlertDescription>
+              </Alert>
+
               {/* GitHub 授权状态 */}
               <div className="flex items-center justify-between py-2 px-3 rounded-md bg-muted/50">
                 <div className="flex items-center gap-2">
@@ -889,6 +1118,25 @@ export function HomePage() {
               ) : null}
             </TabsContent>
           </Tabs>
+          <div className="flex justify-end pt-4">
+            <Button
+              type="button"
+              onClick={handleSubmit}
+              disabled={
+                isSubmitting ||
+                (sourceMode === 'upload' && !projectUploadId) ||
+                (sourceMode === 'github' && !githubConnected)
+              }
+            >
+              {isSubmitting
+                ? '正在启动运行...'
+                : sourceMode === 'upload' && !projectUploadId
+                  ? '请先上传项目'
+                  : sourceMode === 'github' && !githubConnected
+                    ? '请先连接 GitHub'
+                    : '启动运行'}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -907,6 +1155,7 @@ export function HomePage() {
                 const hintId = getFieldHintId(field.path);
                 const value = getNestedValue(config, field.path);
                 const error = fieldErrors[fieldKey];
+                const policyNotes = getFieldPolicyNotes(fieldKey, configPolicy);
 
                 return (
                   <div key={fieldKey} className="space-y-1">
@@ -968,6 +1217,21 @@ export function HomePage() {
                     <p id={hintId} className="text-xs text-muted-foreground leading-tight">
                       {field.description}
                     </p>
+                    {policyNotes.length > 0 ? (
+                      <div className="space-y-1" aria-label={`${field.label} 服务端限制`}>
+                        {policyNotes.map((note) => (
+                          <div
+                            key={note}
+                            className="flex items-start gap-1.5 text-xs text-muted-foreground"
+                          >
+                            <Badge variant="outline" className="h-4 px-1 text-[0.65rem]">
+                              服务端限制
+                            </Badge>
+                            <span className="leading-tight">{note}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                     {error ? <p className="text-xs text-destructive">{error}</p> : null}
                   </div>
                 );
@@ -976,21 +1240,6 @@ export function HomePage() {
           </CardContent>
         </Card>
       ))}
-
-      {/* 提交按钮 */}
-      <div className="flex justify-end pt-2">
-        <Button
-          type="button"
-          onClick={handleSubmit}
-          disabled={isSubmitting || (sourceMode === 'github' && !githubConnected)}
-        >
-          {isSubmitting
-            ? '正在启动运行...'
-            : sourceMode === 'github' && !githubConnected
-              ? '请先连接 GitHub'
-              : '启动运行'}
-        </Button>
-      </div>
     </div>
   );
 }

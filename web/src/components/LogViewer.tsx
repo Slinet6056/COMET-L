@@ -5,8 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
+  ApiError,
   fetchRunLogs,
   fetchRunLogsForTask,
+  SAFE_RUN_NOT_FOUND_MESSAGE,
+  translateRunStatus,
   type RunLogEntry,
   type RunLogStream,
   type RunLogsStreamResponse,
@@ -42,10 +45,15 @@ function formatStatusLabel(value: string): string {
   }
 
   const labels: Record<string, string> = {
-    pending: '等待中',
-    running: '运行中',
-    completed: '已完成',
-    failed: '失败',
+    pending: translateRunStatus('pending'),
+    starting: translateRunStatus('starting'),
+    running: translateRunStatus('running'),
+    cancelling: translateRunStatus('cancelling'),
+    cancelled: translateRunStatus('cancelled'),
+    completed: translateRunStatus('completed'),
+    succeeded: translateRunStatus('succeeded'),
+    failed: translateRunStatus('failed'),
+    stale: translateRunStatus('stale'),
   };
 
   return labels[value] ?? value;
@@ -135,7 +143,10 @@ function getStreamStatusTone(status: string): 'success' | 'error' | 'running' {
 }
 
 function normalizeStreamStatus(stream: RunLogStream, runStatus: string): string {
-  if (runStatus === 'completed' && stream.status === 'running') {
+  if (
+    (runStatus === 'completed' || runStatus === 'succeeded') &&
+    (stream.status === 'running' || stream.status === 'starting' || stream.status === 'cancelling')
+  ) {
     return 'completed';
   }
 
@@ -143,15 +154,24 @@ function normalizeStreamStatus(stream: RunLogStream, runStatus: string): string 
     return 'failed';
   }
 
+  if (runStatus === 'cancelled' && stream.status !== 'completed' && stream.status !== 'failed') {
+    return 'cancelled';
+  }
+
   return stream.status;
 }
 
 function getStreamStatusBucket(status: string, runStatus: string): number {
-  if (runStatus === 'completed' || runStatus === 'failed') {
+  if (runStatus === 'completed' || runStatus === 'succeeded' || runStatus === 'failed') {
     return 0;
   }
 
-  return status === 'completed' || status === 'failed' ? 1 : 0;
+  return status === 'completed' ||
+    status === 'succeeded' ||
+    status === 'failed' ||
+    status === 'cancelled'
+    ? 1
+    : 0;
 }
 
 function getStreamLogStateLabel(stream: RunLogStream, runStatus: string): string {
@@ -293,7 +313,13 @@ function getViewEmptyState(view: Exclude<LogViewerView, 'main'>): {
 }
 
 function isTerminalRun(runStatus: string): boolean {
-  return runStatus === 'completed' || runStatus === 'failed';
+  return (
+    runStatus === 'completed' ||
+    runStatus === 'succeeded' ||
+    runStatus === 'failed' ||
+    runStatus === 'cancelled' ||
+    runStatus === 'stale'
+  );
 }
 
 function isRunningStream(stream: RunLogStream, runStatus: string): boolean {
@@ -301,7 +327,20 @@ function isRunningStream(stream: RunLogStream, runStatus: string): boolean {
     return false;
   }
 
-  return stream.status === 'running' || stream.status === 'pending';
+  return (
+    stream.status === 'pending' ||
+    stream.status === 'starting' ||
+    stream.status === 'running' ||
+    stream.status === 'cancelling'
+  );
+}
+
+function getSafeLogErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiError && error.status === 404) {
+    return SAFE_RUN_NOT_FOUND_MESSAGE;
+  }
+
+  return error instanceof Error ? error.message : fallback;
 }
 
 function isFinishedStream(stream: RunLogStream, runStatus: string): boolean {
@@ -382,7 +421,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
           return;
         }
 
-        setSummaryError(loadError instanceof Error ? loadError.message : '无法加载运行日志。');
+        setSummaryError(getSafeLogErrorMessage(loadError, '无法加载运行日志。'));
       } finally {
         if (active && showLoading) {
           setIsSummaryLoading(false);
@@ -552,7 +591,7 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
           } catch (loadError) {
             return {
               taskId,
-              error: loadError instanceof Error ? loadError.message : '无法加载日志流详情。',
+              error: getSafeLogErrorMessage(loadError, '无法加载日志流详情。'),
             };
           }
         }),

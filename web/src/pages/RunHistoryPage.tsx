@@ -12,17 +12,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { fetchRunHistory, type RunHistoryEntry } from '../lib/api';
+import { fetchRunHistory, translateRunStatus, type RunHistoryEntry } from '../lib/api';
 
 const STATUS_LABELS: Record<string, string> = {
-  created: '已创建',
-  queued: '排队中',
-  preprocessing: '预处理中',
-  running: '运行中',
-  completed: '已完成',
-  failed: '失败',
   standard: '标准',
   parallel: '并行',
+  upload: '上传',
+  local: '本地路径',
+  github: 'GitHub',
 };
 
 function translateLabel(value: string | null | undefined): string {
@@ -30,7 +27,7 @@ function translateLabel(value: string | null | undefined): string {
     return '未知';
   }
 
-  return STATUS_LABELS[value] ?? value;
+  return STATUS_LABELS[value] ?? translateRunStatus(value);
 }
 
 function formatPercent(value: number | null | undefined): string {
@@ -66,6 +63,22 @@ function buildEndedAt(entry: RunHistoryEntry): string | null {
   return entry.completedAt ?? entry.failedAt ?? null;
 }
 
+function buildRunSource(entry: RunHistoryEntry): string {
+  if (entry.projectSourceType === 'upload') {
+    return '上传项目';
+  }
+
+  if (entry.projectSourceType === 'github') {
+    return 'GitHub 仓库';
+  }
+
+  if (entry.projectSourceType === 'local') {
+    return '本地路径';
+  }
+
+  return `${translateLabel(entry.mode)}运行`;
+}
+
 function buildDuration(entry: RunHistoryEntry): string {
   if (!entry.startedAt) {
     return '未开始';
@@ -98,8 +111,10 @@ function statusVariant(
   status: string | null | undefined,
 ): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (status === 'completed') return 'default';
+  if (status === 'succeeded') return 'default';
   if (status === 'failed') return 'destructive';
-  if (status === 'running') return 'secondary';
+  if (status === 'cancelled' || status === 'stale') return 'destructive';
+  if (status === 'running' || status === 'starting' || status === 'cancelling') return 'secondary';
   return 'outline';
 }
 
@@ -141,7 +156,9 @@ export function RunHistoryPage() {
   }, []);
 
   const completedCount = useMemo(
-    () => entries.filter((entry) => entry.status === 'completed').length,
+    () =>
+      entries.filter((entry) => entry.status === 'completed' || entry.status === 'succeeded')
+        .length,
     [entries],
   );
 
@@ -215,7 +232,7 @@ export function RunHistoryPage() {
             <TableHeader>
               <TableRow>
                 <TableHead className="text-xs">运行 ID</TableHead>
-                <TableHead className="text-xs">项目路径</TableHead>
+                <TableHead className="text-xs">运行来源</TableHead>
                 <TableHead className="text-xs">状态</TableHead>
                 <TableHead className="text-xs">模式</TableHead>
                 <TableHead className="text-xs">变异分数</TableHead>
@@ -231,7 +248,7 @@ export function RunHistoryPage() {
                 <TableRow key={entry.runId}>
                   <TableCell className="text-xs font-mono">{entry.runId}</TableCell>
                   <TableCell className="text-xs max-w-[180px] truncate text-muted-foreground">
-                    {entry.projectPath}
+                    {buildRunSource(entry)}
                   </TableCell>
                   <TableCell>
                     <Badge variant={statusVariant(entry.status)} className="text-xs h-5 px-1.5">

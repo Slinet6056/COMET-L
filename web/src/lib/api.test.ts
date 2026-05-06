@@ -1,6 +1,54 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createRun, fetchGitHubRepositories, fetchRunLogsForTask } from './api';
+import {
+  ApiError,
+  createRun,
+  fetchConfigDefaults,
+  fetchGitHubRepositories,
+  fetchRunResults,
+  fetchRunSnapshot,
+  fetchRunLogsForTask,
+  getCurrentUser,
+  login,
+  logout,
+  uploadBugReportsZip,
+  uploadProjectZip,
+} from './api';
+
+describe('fetchConfigDefaults', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('preserves config policy annotations from the defaults endpoint', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          config: {
+            deployment: {
+              allow_local_path_mode: false,
+            },
+          },
+          configPolicy: {
+            overriddenFields: ['preprocessing.max_workers'],
+            clampedFields: ['evolution.budget_llm_calls'],
+            redactedFields: ['llm.api_key'],
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    const result = await fetchConfigDefaults();
+
+    expect(result.configPolicy?.overriddenFields).toEqual(['preprocessing.max_workers']);
+    expect(result.configPolicy?.clampedFields).toEqual(['evolution.budget_llm_calls']);
+    expect(result.configPolicy?.redactedFields).toEqual(['llm.api_key']);
+  });
+});
 
 describe('fetchRunLogsForTask', () => {
   afterEach(() => {
@@ -43,6 +91,63 @@ describe('fetchRunLogsForTask', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/runs/run-1/logs/Pre%3AProductService.addProduct%23abc123',
     );
+  });
+});
+
+describe('run visibility API errors', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('exposes 401 status and stable auth code without losing the safe message', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'auth_required',
+            message: '请先登录',
+            fieldErrors: [],
+          },
+        }),
+        {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    await expect(fetchRunSnapshot('run-private')).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 401,
+      code: 'auth_required',
+      message: '请先登录',
+    });
+  });
+
+  it('exposes 404 status and not-found code so pages can render cross-user copy safely', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'run_not_found',
+            message: 'Run run-secret was not found at /home/comet/state/users/alice/run-secret',
+            fieldErrors: [],
+          },
+        }),
+        {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    const error = await fetchRunResults('run-secret').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 404,
+      code: 'run_not_found',
+    });
   });
 });
 
@@ -125,6 +230,188 @@ describe('createRun', () => {
   });
 });
 
+describe('uploadProjectZip', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uploads project zip to the uploads endpoint', async () => {
+    let capturedBody: unknown = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      capturedBody = (init?.body ?? null) as FormData | null;
+      return new Response(
+        JSON.stringify({
+          uploadId: 'upload-123',
+          kind: 'project',
+          status: 'ready',
+          originalFilename: 'project.zip',
+          extractedRoot: '/sandbox/uploads/upload-123',
+        }),
+        {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
+    });
+
+    const file = new File(['test content'], 'project.zip', { type: 'application/zip' });
+    const result = await uploadProjectZip(file);
+
+    expect(capturedBody instanceof FormData).toBe(true);
+    if (!(capturedBody instanceof FormData)) {
+      throw new Error('expected FormData body');
+    }
+    const payload = capturedBody;
+    expect(payload.get('file')).toBe(file);
+    expect(result.uploadId).toBe('upload-123');
+    expect(result.kind).toBe('project');
+    expect(result.originalFilename).toBe('project.zip');
+  });
+
+  it('throws ApiError on upload failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'invalid_zip',
+            message: '上传的文件不是有效的 ZIP 文件',
+            fieldErrors: [],
+          },
+        }),
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    const file = new File(['invalid'], 'invalid.zip', { type: 'application/zip' });
+    await expect(uploadProjectZip(file)).rejects.toThrow('上传的文件不是有效的 ZIP 文件');
+  });
+});
+
+describe('uploadBugReportsZip', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uploads bug reports zip to the uploads endpoint', async () => {
+    let capturedBody: unknown = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      capturedBody = (init?.body ?? null) as FormData | null;
+      return new Response(
+        JSON.stringify({
+          uploadId: 'upload-456',
+          kind: 'bug_reports',
+          status: 'ready',
+          originalFilename: 'bug-reports.zip',
+          extractedRoot: '/sandbox/uploads/upload-456',
+        }),
+        {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
+    });
+
+    const file = new File(['test content'], 'bug-reports.zip', { type: 'application/zip' });
+    const result = await uploadBugReportsZip(file);
+
+    expect(capturedBody instanceof FormData).toBe(true);
+    if (!(capturedBody instanceof FormData)) {
+      throw new Error('expected FormData body');
+    }
+    const payload = capturedBody;
+    expect(payload.get('file')).toBe(file);
+    expect(result.uploadId).toBe('upload-456');
+    expect(result.kind).toBe('bug_reports');
+    expect(result.originalFilename).toBe('bug-reports.zip');
+  });
+});
+
+describe('createRun with upload IDs', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('submits upload IDs for upload-mode runs', async () => {
+    let capturedBody: unknown = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      capturedBody = (init?.body ?? null) as FormData | null;
+      return new Response(
+        JSON.stringify({
+          runId: 'run-upload-1',
+          status: 'pending',
+          mode: 'upload',
+          queuePosition: 1,
+          effectiveConfig: { llm: { api_key: '[REDACTED]' } },
+          configPolicy: {},
+          uploadSource: {
+            projectUploadId: 'upload-123',
+            bugReportsUploadId: 'upload-456',
+          },
+        }),
+        {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
+    });
+
+    await createRun({
+      projectUploadId: 'upload-123',
+      bugReportsUploadId: 'upload-456',
+      config: {
+        llm: { api_key: 'test-key' },
+      },
+    });
+
+    expect(capturedBody instanceof FormData).toBe(true);
+    if (!(capturedBody instanceof FormData)) {
+      throw new Error('expected FormData body');
+    }
+    const payload = capturedBody;
+    expect(payload.get('projectUploadId')).toBe('upload-123');
+    expect(payload.get('bugReportsUploadId')).toBe('upload-456');
+    expect(payload.get('projectPath')).toBeNull();
+  });
+
+  it('omits empty upload IDs', async () => {
+    let capturedBody: unknown = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      capturedBody = (init?.body ?? null) as FormData | null;
+      return new Response(
+        JSON.stringify({
+          runId: 'run-upload-2',
+          status: 'pending',
+          mode: 'upload',
+          queuePosition: 2,
+        }),
+        {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
+    });
+
+    await createRun({
+      projectUploadId: 'upload-789',
+      bugReportsUploadId: null,
+      config: {
+        llm: { api_key: 'test-key' },
+      },
+    });
+
+    expect(capturedBody instanceof FormData).toBe(true);
+    if (!(capturedBody instanceof FormData)) {
+      throw new Error('expected FormData body');
+    }
+    const payload = capturedBody;
+    expect(payload.get('projectUploadId')).toBe('upload-789');
+    expect(payload.get('bugReportsUploadId')).toBeNull();
+  });
+});
+
 describe('fetchGitHubRepositories', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -186,5 +473,142 @@ describe('fetchGitHubRepositories', () => {
     );
 
     await expect(fetchGitHubRepositories()).rejects.toThrow('GitHub authorization required');
+  });
+});
+
+describe('login', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('posts username and password to auth endpoint', async () => {
+    let capturedInit: RequestInit | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      capturedInit = init;
+      return new Response(
+        JSON.stringify({
+          user: { id: 1, username: 'testuser', role: 'admin' },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
+    });
+
+    const result = await login('testuser', 'password123');
+
+    expect(capturedInit?.method).toBe('POST');
+    expect(capturedInit?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(capturedInit?.body).toBe(
+      JSON.stringify({ username: 'testuser', password: 'password123' }),
+    );
+    expect(result.user.id).toBe(1);
+    expect(result.user.username).toBe('testuser');
+    expect(result.user.role).toBe('admin');
+  });
+
+  it('throws ApiError on invalid credentials', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'invalid_credentials',
+            message: '用户名或密码错误',
+            fieldErrors: [],
+          },
+        }),
+        {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    await expect(login('wrong', 'wrong')).rejects.toThrow('用户名或密码错误');
+  });
+});
+
+describe('logout', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('posts to logout endpoint', async () => {
+    let capturedInit: RequestInit | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      capturedInit = init;
+      return new Response(null, { status: 200 });
+    });
+
+    await logout();
+
+    expect(capturedInit?.method).toBe('POST');
+  });
+
+  it('throws ApiError on logout failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'auth_required',
+            message: '未登录',
+            fieldErrors: [],
+          },
+        }),
+        {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    await expect(logout()).rejects.toThrow('未登录');
+  });
+});
+
+describe('getCurrentUser', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('fetches current user from auth me endpoint', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          user: { id: 2, username: 'regularuser', role: 'user' },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    const result = await getCurrentUser();
+
+    expect(result.user.id).toBe(2);
+    expect(result.user.username).toBe('regularuser');
+    expect(result.user.role).toBe('user');
+  });
+
+  it('throws ApiError when not authenticated', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'auth_required',
+            message: '请先登录',
+            fieldErrors: [],
+          },
+        }),
+        {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    await expect(getCurrentUser()).rejects.toThrow('请先登录');
   });
 });

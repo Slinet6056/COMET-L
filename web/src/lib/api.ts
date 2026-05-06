@@ -14,6 +14,13 @@ export type ApiErrorPayload = {
 
 export type ConfigPayload = {
   config: Record<string, unknown>;
+  configPolicy?: ConfigPolicy;
+};
+
+export type ConfigPolicy = {
+  overriddenFields?: string[];
+  clampedFields?: string[];
+  redactedFields?: string[];
 };
 
 export type RunConfigPayload = Record<string, unknown> & {
@@ -22,18 +29,35 @@ export type RunConfigPayload = Record<string, unknown> & {
   };
 };
 
+export type UploadResponse = {
+  uploadId: string;
+  kind: 'project' | 'bug_reports';
+  status: string;
+  originalFilename: string;
+  extractedRoot: string;
+};
+
 export type RunCreateResponse = {
   runId: string;
   status: string;
   mode: string;
+  queuePosition?: number | null;
+  effectiveConfig?: Record<string, unknown>;
+  configPolicy?: Record<string, unknown>;
+  uploadSource?: {
+    projectUploadId?: string | null;
+    bugReportsUploadId?: string | null;
+  } | null;
 };
 
 export type RunHistoryEntry = {
   runId: string;
   status: string;
   mode: string;
+  projectSourceType?: 'local' | 'upload' | 'github' | string;
   projectPath: string;
   configPath: string;
+  queuePosition?: number | null;
   createdAt: string;
   startedAt?: string | null;
   completedAt?: string | null;
@@ -205,6 +229,7 @@ export type RunResultsResponse = {
   runId: string;
   status: string;
   mode: string;
+  queuePosition?: number | null;
   iteration: number;
   llmCalls: number;
   budget: number;
@@ -222,6 +247,7 @@ export type RunSnapshot = {
   runId: string;
   status: string;
   mode: string;
+  queuePosition?: number | null;
   selectedJavaVersion?: string | null;
   iteration: number;
   llmCalls: number;
@@ -291,10 +317,79 @@ export class ApiError extends Error {
   }
 }
 
-async function parseJsonResponse<T>(response: Response): Promise<T> {
+export const AUTH_EXPIRED_EVENT = 'comet:auth-expired';
+
+export const SAFE_RUN_NOT_FOUND_MESSAGE = '任务不存在或无权访问';
+export const SESSION_EXPIRED_MESSAGE = '登录状态已过期，请重新登录。';
+
+export const RUN_STATUS_LABELS: Record<string, string> = {
+  created: '已创建',
+  queued: '排队中',
+  preprocessing: '预处理中',
+  pending: '等待中',
+  starting: '启动中',
+  running: '运行中',
+  cancelling: '取消中',
+  cancelled: '已取消',
+  failed: '失败',
+  completed: '已完成',
+  succeeded: '已完成',
+  stale: '已失效',
+};
+
+export function translateRunStatus(value: string | null | undefined): string {
+  if (!value) {
+    return '未知';
+  }
+
+  return RUN_STATUS_LABELS[value] ?? value;
+}
+
+export function isTerminalRunStatus(value: string | null | undefined): boolean {
+  return (
+    value === 'completed' ||
+    value === 'succeeded' ||
+    value === 'failed' ||
+    value === 'cancelled' ||
+    value === 'stale'
+  );
+}
+
+export function getSafeApiErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiError) {
+    if (error.status === 404) {
+      return SAFE_RUN_NOT_FOUND_MESSAGE;
+    }
+
+    if (error.status === 401) {
+      return SESSION_EXPIRED_MESSAGE;
+    }
+
+    return error.message;
+  }
+
+  return error instanceof Error ? error.message : fallback;
+}
+
+function notifyAuthExpired() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+}
+
+async function parseJsonResponse<T>(
+  response: Response,
+  options: { notifyAuthExpired?: boolean } = {},
+): Promise<T> {
   const payload = (await response.json()) as T | ApiErrorPayload;
 
   if (!response.ok) {
+    if (response.status === 401 && options.notifyAuthExpired !== false) {
+      notifyAuthExpired();
+    }
+
     throw new ApiError(response.status, payload as ApiErrorPayload);
   }
 
@@ -318,16 +413,42 @@ export async function parseConfigFile(file: File): Promise<ConfigPayload> {
   return parseJsonResponse<ConfigPayload>(response);
 }
 
+export async function uploadProjectZip(file: File): Promise<UploadResponse> {
+  const formData = new FormData();
+  formData.set('file', file);
+
+  const response = await fetch('/api/uploads/project', {
+    method: 'POST',
+    body: formData,
+  });
+
+  return parseJsonResponse<UploadResponse>(response);
+}
+
+export async function uploadBugReportsZip(file: File): Promise<UploadResponse> {
+  const formData = new FormData();
+  formData.set('file', file);
+
+  const response = await fetch('/api/uploads/bug-reports', {
+    method: 'POST',
+    body: formData,
+  });
+
+  return parseJsonResponse<UploadResponse>(response);
+}
+
 export async function createRun(options: {
-  projectPath: string;
+  projectPath?: string;
   bugReportsDir?: string | null;
   githubRepoUrl?: string | null;
   githubBaseBranch?: string | null;
   selectedJavaVersion?: string | null;
+  projectUploadId?: string | null;
+  bugReportsUploadId?: string | null;
   config: RunConfigPayload;
 }): Promise<RunCreateResponse> {
   const formData = new FormData();
-  if (options.projectPath.trim().length > 0) {
+  if (options.projectPath && options.projectPath.trim().length > 0) {
     formData.set('projectPath', options.projectPath);
   }
   if (options.bugReportsDir && options.bugReportsDir.trim().length > 0) {
@@ -341,6 +462,12 @@ export async function createRun(options: {
   }
   if (options.selectedJavaVersion && options.selectedJavaVersion.trim().length > 0) {
     formData.set('selectedJavaVersion', options.selectedJavaVersion.trim());
+  }
+  if (options.projectUploadId && options.projectUploadId.trim().length > 0) {
+    formData.set('projectUploadId', options.projectUploadId.trim());
+  }
+  if (options.bugReportsUploadId && options.bugReportsUploadId.trim().length > 0) {
+    formData.set('bugReportsUploadId', options.bugReportsUploadId.trim());
   }
   if (typeof options.config.evolution?.mutation_enabled === 'boolean') {
     formData.set('mutationEnabled', String(options.config.evolution.mutation_enabled));
@@ -396,14 +523,24 @@ type RunEventsSubscription = {
 export function subscribeToRunEvents(runId: string, handlers: RunEventsSubscription): () => void {
   const eventSource = new EventSource(`/api/runs/${runId}/events`);
   const listener = (message: MessageEvent<string>) => {
-    handlers.onEvent(JSON.parse(message.data) as RunEvent);
+    try {
+      handlers.onEvent(JSON.parse(message.data) as RunEvent);
+    } catch {
+      handlers.onError?.();
+    }
   };
 
-  ['run.snapshot', 'run.started', 'run.phase', 'run.completed', 'run.failed'].forEach(
-    (eventName) => {
-      eventSource.addEventListener(eventName, listener as EventListener);
-    },
-  );
+  [
+    'run.snapshot',
+    'run.started',
+    'run.phase',
+    'run.completed',
+    'run.failed',
+    'run.cancelled',
+    'run.stale',
+  ].forEach((eventName) => {
+    eventSource.addEventListener(eventName, listener as EventListener);
+  });
 
   eventSource.onerror = () => {
     handlers.onError?.();
@@ -478,4 +615,40 @@ export type GitHubRepositoriesResponse = {
 export async function fetchGitHubRepositories(): Promise<GitHubRepositoriesResponse> {
   const response = await fetch('/api/github/repositories');
   return parseJsonResponse<GitHubRepositoriesResponse>(response);
+}
+
+export type AuthUser = {
+  id: number;
+  username: string;
+  role: 'admin' | 'user';
+};
+
+export type AuthResponse = {
+  user: AuthUser;
+};
+
+export async function login(username: string, password: string): Promise<AuthResponse> {
+  const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ username, password }),
+  });
+  return parseJsonResponse<AuthResponse>(response);
+}
+
+export async function logout(): Promise<void> {
+  const response = await fetch('/api/auth/logout', {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const payload = (await response.json()) as ApiErrorPayload;
+    throw new ApiError(response.status, payload);
+  }
+}
+
+export async function getCurrentUser(): Promise<AuthResponse> {
+  const response = await fetch('/api/auth/me');
+  return parseJsonResponse<AuthResponse>(response, { notifyAuthExpired: false });
 }

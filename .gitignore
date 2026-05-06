@@ -24,6 +24,8 @@ MANIFEST
 venv/
 ENV/
 env/
+.ruff_cache/
+.pytest_cache/
 
 # IDE
 .vscode/

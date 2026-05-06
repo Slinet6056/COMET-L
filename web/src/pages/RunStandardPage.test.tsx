@@ -103,7 +103,14 @@ describe('Run page standard mode', () => {
     MockEventSource.instances = [];
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => jsonResponse(buildSnapshot())),
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
+
+        return jsonResponse(buildSnapshot());
+      }),
     );
     vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
   });
@@ -225,8 +232,13 @@ describe('Run page standard mode', () => {
   it('marks initially completed runs as having ended realtime updates', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        jsonResponse(
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
+
+        return jsonResponse(
           buildSnapshot({
             status: 'completed',
             phase: {
@@ -238,8 +250,8 @@ describe('Run page standard mode', () => {
               failedAt: null,
             },
           }),
-        ),
-      ),
+        );
+      }),
     );
 
     render(
@@ -270,8 +282,13 @@ describe('Run page standard mode', () => {
   it('shows disabled mutation copy only when mutationEnabled is explicitly false', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        jsonResponse(
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
+
+        return jsonResponse(
           buildSnapshot({
             mutationEnabled: false,
             metrics: {
@@ -289,8 +306,8 @@ describe('Run page standard mode', () => {
               currentMethodCoverage: 0.75,
             },
           }),
-        ),
-      ),
+        );
+      }),
     );
 
     render(
@@ -312,8 +329,11 @@ describe('Run page standard mode', () => {
       'fetch',
       vi.fn(async () => {
         fetchCalls += 1;
+        if (fetchCalls === 1) {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
         return jsonResponse(
-          fetchCalls === 1
+          fetchCalls === 2
             ? buildSnapshot()
             : buildSnapshot({
                 iteration: 4,
@@ -358,6 +378,9 @@ describe('Run page standard mode', () => {
       'fetch',
       vi.fn(async () => {
         fetchCalls += 1;
+        if (fetchCalls === 1) {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
         return jsonResponse(buildSnapshot());
       }),
     );
@@ -383,7 +406,7 @@ describe('Run page standard mode', () => {
       await vi.advanceTimersByTimeAsync(1600);
     });
 
-    expect(fetchCalls).toBe(2);
+    expect(fetchCalls).toBe(3);
     expect(onRender).toHaveBeenCalledTimes(renderCountAfterLoad);
   });
 
@@ -397,6 +420,10 @@ describe('Run page standard mode', () => {
         fetchCalls += 1;
 
         if (fetchCalls === 1) {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
+
+        if (fetchCalls === 2) {
           return jsonResponse(buildSnapshot());
         }
 
@@ -424,11 +451,77 @@ describe('Run page standard mode', () => {
       await vi.advanceTimersByTimeAsync(1600);
     });
 
-    expect(fetchCalls).toBe(2);
+    expect(fetchCalls).toBe(3);
     expect(screen.getByRole('heading', { name: '决策面板' })).toBeInTheDocument();
     expect(
       screen.getByText('Prioritize Calculator.add because recent mutants survived.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('fallback poll failed');
+  });
+
+  it('shows pending queue position without subscribing to a missing event history', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
+
+        return jsonResponse(
+          buildSnapshot({
+            status: 'pending',
+            queuePosition: 3,
+            phase: { key: 'pending', label: 'Pending' },
+            decisionReasoning: null,
+          }),
+        );
+      }),
+    );
+    vi.stubGlobal('EventSource', undefined);
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('状态：等待中')).toBeInTheDocument();
+    expect(screen.getByText('阶段：等待中')).toBeInTheDocument();
+    expect(screen.getByText('队列位置：3')).toBeInTheDocument();
+    expect(screen.getByText('实时连接：不可用')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '决策面板' })).toBeInTheDocument();
+  });
+
+  it('uses generic not-found copy for inaccessible run detail pages', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
+
+        return jsonResponse(
+          {
+            error: {
+              code: 'run_not_found',
+              message: 'Run secret-run not found under /home/comet/state/users/alice',
+              fieldErrors: [],
+            },
+          },
+          404,
+        );
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/secret-run']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('任务不存在或无权访问');
+    expect(screen.queryByText(/secret-run|\/home|state\/users|alice/)).not.toBeInTheDocument();
   });
 });

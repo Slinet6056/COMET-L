@@ -5,15 +5,16 @@ import shutil
 import sqlite3
 import sys
 import threading
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
 from comet.agent.state import AgentState, ParallelAgentState
 from comet.config import Settings
-from comet.config.settings import GitHubConfig
+from comet.config.policy import enforce_deployment_policy, redacted_settings_dict
+from comet.config.settings import DeploymentPolicyConfig, GitHubConfig
 from comet.utils.log_context import ContextFilter
 from comet.web.git_pr_service import GitHubPullRequestService, GitPullRequestError
 from comet.web.log_router import RunLogRouter
@@ -31,10 +32,37 @@ from comet.web.runtime_protocol import (
     build_run_snapshot,
     normalize_mutation_metrics,
 )
+from comet.web.storage import RunRecord, WebDatabase, WebDatabaseError
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 LOG_DATE_FORMAT = "%H:%M:%S"
+PENDING_STATUSES = {"pending"}
+RUNNING_STATUSES = {"starting", "running", "cancelling"}
+BOOT_STALE_STATUSES = {"starting", "running", "cancelling"}
+TERMINAL_STATUSES = {"completed", "failed", "cancelled", "stale"}
 logger = logging.getLogger(__name__)
+SAFE_ARTIFACTS = {
+    "final-state": {
+        "filename": "final_state.json",
+        "content_type": "application/json",
+        "root": "output",
+    },
+    "run-log": {
+        "filename": "run.log",
+        "content_type": "text/plain; charset=utf-8",
+        "root": "log",
+    },
+    "report": {
+        "filename": "report.md",
+        "content_type": "text/markdown; charset=utf-8",
+        "root": "output",
+    },
+    "resolved-config": {
+        "filename": "resolved_config.json",
+        "content_type": "application/json",
+        "root": "output",
+    },
+}
 
 
 SystemInitializer = Callable[..., dict[str, Any]]
@@ -85,7 +113,7 @@ class ColoredFormatter(logging.Formatter):
 @dataclass(slots=True)
 class RunRequest:
     project_path: str
-    config_path: str = "config.yaml"
+    config_path: str | None = "config.yaml"
     max_iterations: Optional[int] = None
     budget: Optional[int] = None
     mutation_enabled: Optional[bool] = None
@@ -100,6 +128,7 @@ class RunRequest:
     log_file: Optional[str] = None
     runtime_roots: dict[str, str] = field(default_factory=dict)
     observer: Optional[Callable[[dict[str, object]], None]] = None
+    source_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -115,11 +144,26 @@ class RunSession:
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     failed_at: Optional[str] = None
+    project_source_type: str = "local"
+    bug_reports_path: Optional[str] = None
     error: Optional[str] = None
+    queue_position: Optional[int] = None
+    cancel_requested: bool = False
+    cancellation_reason: Optional[str] = None
     is_historical: bool = False
+    user_id: Optional[int] = None
+    source_metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def finished_at(self) -> Optional[str]:
+        return self.completed_at or self.failed_at
 
 
 class ActiveRunConflictError(RuntimeError):
+    pass
+
+
+class QueueLimitExceededError(RuntimeError):
     pass
 
 
@@ -166,6 +210,7 @@ class RunLifecycleService:
         *,
         repo_import_service: GitHubRepoImportService | None = None,
         pull_request_service: GitHubPullRequestService | None = None,
+        web_database: WebDatabase | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self._lock = threading.RLock()
@@ -175,10 +220,23 @@ class RunLifecycleService:
         self._log_routers: dict[str, RunLogRouter] = {}
         self._runtime_snapshots: dict[str, dict[str, Any]] = {}
         self._threads: dict[str, threading.Thread] = {}
+        self._run_controls: dict[str, threading.Event] = {}
+        self._scheduler_specs: dict[
+            str, tuple[SettingsLoader, SystemInitializer, EvolutionRunner]
+        ] = {}
         self._active_run_id: Optional[str] = None
         self._repo_import_service = repo_import_service
         self._pull_request_service = pull_request_service
-        self._load_persisted_sessions()
+        self._web_database = web_database or WebDatabase.for_workspace(self.workspace_root)
+        try:
+            self._web_database.bootstrap()
+        except WebDatabaseError:
+            if web_database is not None:
+                raise
+            logger.warning("跳过不兼容的默认 Web 数据库: %s", self._web_database.db_path)
+            self._web_database = None
+        if self._web_database is not None:
+            self._load_persisted_sessions()
 
     def set_repo_import_service(self, repo_import_service: GitHubRepoImportService) -> None:
         self._repo_import_service = repo_import_service
@@ -186,27 +244,28 @@ class RunLifecycleService:
     def set_pull_request_service(self, pull_request_service: GitHubPullRequestService) -> None:
         self._pull_request_service = pull_request_service
 
+    def set_web_database(self, web_database: WebDatabase) -> None:
+        self._web_database = web_database
+        self._web_database.bootstrap()
+        self._load_persisted_sessions()
+
     def create_run(
         self,
         request: RunRequest,
         *,
+        user_id: int | None = None,
         settings_loader: Callable[[Optional[str]], Settings] = Settings.from_yaml_or_default,
     ) -> RunSession:
         with self._lock:
-            if self._active_run_id is not None:
-                active = self._sessions[self._active_run_id]
-                if active.status in {"created", "running"}:
-                    raise ActiveRunConflictError(
-                        f"active run already exists: {self._active_run_id}"
-                    )
-
             run_id = self._new_run_id()
-            scoped_paths = self._build_scoped_paths(run_id)
+            scoped_paths = self._build_scoped_paths(run_id, user_id=user_id)
 
             config = settings_loader(request.config_path)
+            self._assert_queue_capacity(config, user_id=user_id)
             scoped_request = self._build_scoped_request(request, scoped_paths)
             apply_scoped_runtime_paths(config, scoped_paths)
             apply_run_overrides(config, scoped_request)
+            enforce_deployment_policy(config)
             config.ensure_directories()
 
             if scoped_request.github_repo_url is not None:
@@ -236,14 +295,17 @@ class RunLifecycleService:
                 config.github.repo_url = scoped_request.github_repo_url
 
             self._ensure_scoped_directories(scoped_paths)
-            self._write_config_snapshot(config, scoped_paths["resolved_config"])
+            safe_config_snapshot, _ = redacted_settings_dict(config)
+            self._write_config_snapshot(safe_config_snapshot, scoped_paths["resolved_config"])
+            scoped_request.config_path = scoped_paths["resolved_config"]
 
             session = RunSession(
                 run_id=run_id,
-                status="created",
+                status="pending",
+                user_id=user_id,
                 created_at=_utc_now_iso(),
-                project_path=request.project_path,
-                config_path=request.config_path,
+                project_path=scoped_request.project_path,
+                config_path=scoped_request.config_path,
                 paths=scoped_paths,
                 path_snapshot={
                     "state": scoped_paths["state"],
@@ -252,7 +314,12 @@ class RunLifecycleService:
                     "log": scoped_paths["log"],
                     "database": scoped_paths["database"],
                 },
-                config_snapshot=config.to_dict(),
+                config_snapshot=safe_config_snapshot,
+                project_source_type="github"
+                if scoped_request.github_repo_url is not None
+                else _normalize_project_source_type(scoped_request.source_metadata),
+                bug_reports_path=scoped_request.bug_reports_dir,
+                source_metadata=copy.deepcopy(scoped_request.source_metadata),
             )
 
             self._sessions[run_id] = session
@@ -264,7 +331,8 @@ class RunLifecycleService:
             )
             self._runtime_snapshots[run_id] = self._build_runtime_snapshot(run_id)
             self._active_run_id = run_id
-            self._persist_session_manifest(session)
+            self._persist_session(session)
+            self._refresh_queue_positions_locked()
             return session
 
     def get_run_request(self, run_id: str) -> RunRequest:
@@ -273,23 +341,80 @@ class RunLifecycleService:
     def get_session(self, run_id: str) -> RunSession:
         return self._sessions[run_id]
 
+    def get_visible_session(
+        self,
+        run_id: str,
+        *,
+        user_id: int,
+        include_all: bool = False,
+    ) -> RunSession:
+        if self._web_database is None:
+            session = self._sessions[run_id]
+            if include_all or session.user_id == user_id:
+                return session
+            raise KeyError(run_id)
+
+        record = self._web_database.get_run_record(run_id)
+        if record is None:
+            raise KeyError(run_id)
+        if not include_all and record.user_id != user_id:
+            raise KeyError(run_id)
+
+        try:
+            session = self._session_from_record(record)
+            self._validate_session_paths(session)
+        except (TypeError, ValueError) as exc:
+            logger.warning("跳过损坏的 SQLite 运行记录 %s: %s", record.id, exc)
+            raise KeyError(run_id) from exc
+
+        with self._lock:
+            existing = self._sessions.get(run_id)
+            if existing is not None:
+                session.is_historical = existing.is_historical
+            self._sessions[run_id] = session
+            self._requests[run_id] = self._build_restored_request(session)
+            event_bus = self._event_buses.setdefault(run_id, RuntimeEventBus())
+            del event_bus
+            log_router = self._log_routers.setdefault(run_id, RunLogRouter())
+            log_router.ensure_stream(
+                "main",
+                status=self._session_to_stream_status(session.status),
+                started_at=session.started_at or session.created_at,
+                ended_at=session.completed_at or session.failed_at,
+                completed_at=session.completed_at,
+            )
+            if run_id not in self._runtime_snapshots:
+                try:
+                    self._runtime_snapshots[run_id] = self._build_runtime_snapshot(run_id)
+                except Exception as exc:
+                    logger.warning("恢复运行 %s 的快照失败: %s", run_id, exc)
+                    self._runtime_snapshots[run_id] = build_run_snapshot(
+                        run_id,
+                        session.status,
+                        self._new_state_for_run(run_id),
+                        log_router=log_router,
+                    )
+        return session
+
     def get_event_bus(self, run_id: str) -> RuntimeEventBus:
-        return self._event_buses[run_id]
+        return self._event_buses.setdefault(run_id, RuntimeEventBus())
 
     def get_log_router(self, run_id: str) -> RunLogRouter:
-        return self._log_routers[run_id]
+        return self._log_routers.setdefault(run_id, RunLogRouter())
 
     def active_run_id(self) -> Optional[str]:
         with self._lock:
-            if self._active_run_id is None:
-                return None
-            session = self._sessions.get(self._active_run_id)
-            if session is None:
+            candidates = [
+                session for session in self._sessions.values() if session.status in RUNNING_STATUSES
+            ]
+            if not candidates:
                 self._active_run_id = None
                 return None
-            if session.status in {"created", "running"}:
-                return self._active_run_id
-            return None
+            candidates.sort(
+                key=lambda session: (session.started_at or session.created_at, session.run_id)
+            )
+            self._active_run_id = candidates[-1].run_id
+            return self._active_run_id
 
     def run_mode(self, run_id: str) -> str:
         request = self._requests[run_id]
@@ -327,6 +452,9 @@ class RunLifecycleService:
         snapshot["artifacts"] = self._build_artifacts(session)
         snapshot["logStreams"] = self.get_log_streams_snapshot(run_id)
         snapshot["isHistorical"] = session.is_historical
+        snapshot["queuePosition"] = session.queue_position
+        snapshot["cancelRequested"] = session.cancel_requested
+        snapshot["cancellationReason"] = session.cancellation_reason
         self._apply_mutation_semantics(run_id, snapshot)
         return snapshot
 
@@ -353,8 +481,16 @@ class RunLifecycleService:
                     "createdAt": session.created_at,
                     "startedAt": session.started_at,
                     "completedAt": session.completed_at,
+                    "finishedAt": session.finished_at,
                     "failedAt": session.failed_at,
                     "error": session.error,
+                    "userId": session.user_id,
+                    "projectSourceType": session.project_source_type,
+                    "bugReportsPath": session.bug_reports_path,
+                    "pathSnapshot": session.path_snapshot,
+                    "queuePosition": session.queue_position,
+                    "cancelRequested": session.cancel_requested,
+                    "cancellationReason": session.cancellation_reason,
                     "iteration": snapshot["iteration"],
                     "llmCalls": snapshot["llmCalls"],
                     "budget": snapshot["budget"],
@@ -367,9 +503,65 @@ class RunLifecycleService:
             )
         return summaries
 
+    def list_runs_for_user(
+        self, *, user_id: int, include_all: bool = False
+    ) -> list[dict[str, Any]]:
+        if self._web_database is None:
+            return []
+        records = self._web_database.list_run_records(user_id=user_id, include_all=include_all)
+        summaries: list[dict[str, Any]] = []
+        for record in records:
+            if record.id not in self._sessions:
+                try:
+                    session = self._session_from_record(record)
+                    session = self._normalize_restored_session(session)
+                    session.is_historical = True
+                    self._sessions[record.id] = session
+                    self._requests[record.id] = self._build_restored_request(session)
+                    self._event_buses[record.id] = RuntimeEventBus()
+                    self._log_routers[record.id] = RunLogRouter()
+                    self._runtime_snapshots[record.id] = self._build_runtime_snapshot(record.id)
+                except (TypeError, ValueError) as exc:
+                    logger.warning("跳过损坏的 SQLite 运行记录 %s: %s", record.id, exc)
+                    continue
+            snapshot = self.build_snapshot(record.id)
+            session = self._sessions[record.id]
+            summaries.append(
+                {
+                    "runId": record.id,
+                    "status": session.status,
+                    "mode": snapshot["mode"],
+                    "mutationEnabled": snapshot.get("mutationEnabled"),
+                    "projectPath": session.project_path,
+                    "configPath": session.config_path,
+                    "createdAt": session.created_at,
+                    "startedAt": session.started_at,
+                    "completedAt": session.completed_at,
+                    "finishedAt": session.finished_at,
+                    "failedAt": session.failed_at,
+                    "error": session.error,
+                    "iteration": snapshot["iteration"],
+                    "llmCalls": snapshot["llmCalls"],
+                    "budget": snapshot["budget"],
+                    "selectedJavaVersion": snapshot.get("selectedJavaVersion"),
+                    "phase": snapshot["phase"],
+                    "metrics": snapshot["metrics"],
+                    "artifacts": snapshot["artifacts"],
+                    "isHistorical": session.is_historical,
+                    "userId": session.user_id,
+                    "projectSourceType": session.project_source_type,
+                    "bugReportsPath": session.bug_reports_path,
+                    "pathSnapshot": session.path_snapshot,
+                    "queuePosition": session.queue_position,
+                    "cancelRequested": session.cancel_requested,
+                    "cancellationReason": session.cancellation_reason,
+                }
+            )
+        return summaries
+
     def get_log_streams_snapshot(self, run_id: str) -> dict[str, Any]:
         session = self._sessions[run_id]
-        log_router = self._log_routers[run_id]
+        log_router = self.get_log_router(run_id)
         state = self._load_state_snapshot(run_id)
         if isinstance(state, ParallelAgentState):
             log_router.sync_parallel_state(state)
@@ -381,12 +573,14 @@ class RunLifecycleService:
             main_duration = max((ended_at - started_at).total_seconds(), 0.0)
 
         main_status = "running"
-        if session.status == "created":
+        if session.status in {"created", "pending", "starting"}:
             main_status = "pending"
         elif session.status == "completed":
             main_status = "completed"
-        elif session.status == "failed":
+        elif session.status in {"failed", "stale"}:
             main_status = "failed"
+        elif session.status == "cancelled":
+            main_status = "cancelled"
 
         log_router.ensure_stream(
             "main",
@@ -399,7 +593,7 @@ class RunLifecycleService:
         return log_router.snapshot()
 
     def get_task_log_payload(self, run_id: str, task_id: str) -> dict[str, Any]:
-        log_router = self._log_routers[run_id]
+        log_router = self.get_log_router(run_id)
         streams = self.get_log_streams_snapshot(run_id)
         stream = streams["byTaskId"].get(task_id)
         if stream is None:
@@ -466,6 +660,9 @@ class RunLifecycleService:
             snapshot["selectedJavaVersion"] = self._resolve_selected_java_version(run_id)
             snapshot["artifacts"] = self._build_artifacts(session)
             snapshot["logStreams"] = self.get_log_streams_snapshot(run_id)
+            snapshot["queuePosition"] = session.queue_position
+            snapshot["cancelRequested"] = session.cancel_requested
+            snapshot["cancellationReason"] = session.cancellation_reason
 
             for key, value in snapshot_updates.items():
                 snapshot[key] = value
@@ -492,24 +689,19 @@ class RunLifecycleService:
         artifact_summary = {
             "finalState": self._build_download_artifact(
                 run_id,
-                session.paths["final_state"],
-                content_type="application/json",
-                download_name="final_state.json",
                 artifact_slug="final-state",
             ),
             "runLog": self._build_download_artifact(
                 run_id,
-                session.paths["log"],
-                content_type="text/plain; charset=utf-8",
-                download_name="run.log",
                 artifact_slug="run-log",
+            ),
+            "resolvedConfig": self._build_download_artifact(
+                run_id,
+                artifact_slug="resolved-config",
             ),
         }
         report_artifact = self._build_download_artifact(
             run_id,
-            session.paths["report_artifact"],
-            content_type="text/markdown; charset=utf-8",
-            download_name="report.md",
             artifact_slug="report",
         )
         pull_request_url = snapshot.get("pullRequestUrl")
@@ -554,42 +746,49 @@ class RunLifecycleService:
         }
 
     def get_download_artifact(self, run_id: str, artifact_slug: str) -> dict[str, Any]:
-        session = self._sessions[run_id]
-        artifact_map = {
-            "final-state": self._build_download_artifact(
-                run_id,
-                session.paths["final_state"],
-                content_type="application/json",
-                download_name="final_state.json",
-                artifact_slug="final-state",
-                include_file_path=True,
-            ),
-            "run-log": self._build_download_artifact(
-                run_id,
-                session.paths["log"],
-                content_type="text/plain; charset=utf-8",
-                download_name="run.log",
-                artifact_slug="run-log",
-                include_file_path=True,
-            ),
-            "report": self._build_download_artifact(
-                run_id,
-                session.paths["report_artifact"],
-                content_type="text/markdown; charset=utf-8",
-                download_name="report.md",
-                artifact_slug="report",
-                include_file_path=True,
-            ),
-        }
-        if artifact_slug not in artifact_map:
+        if artifact_slug not in SAFE_ARTIFACTS:
             raise KeyError(artifact_slug)
-        return artifact_map[artifact_slug]
+        return self._build_download_artifact(
+            run_id,
+            artifact_slug=artifact_slug,
+            include_file_path=True,
+        )
 
     def start_run(
         self,
         run_id: str,
         *,
         settings_loader: SettingsLoader = Settings.from_yaml_or_default,
+        system_initializer: SystemInitializer,
+        evolution_runner: EvolutionRunner,
+    ) -> None:
+        with self._lock:
+            self._scheduler_specs[run_id] = (
+                settings_loader,
+                system_initializer,
+                evolution_runner,
+            )
+        self.dispatch_pending_runs()
+
+    def dispatch_pending_runs(self) -> None:
+        # 单 FastAPI 进程假设：本调度器只在当前进程内领取 SQLite pending 运行。
+        while True:
+            dispatch: tuple[str, SettingsLoader, SystemInitializer, EvolutionRunner] | None = None
+            with self._lock:
+                self._refresh_queue_positions_locked()
+                run_id = self._claim_next_pending_run_locked()
+                if run_id is None:
+                    return
+                spec = self._scheduler_specs.get(run_id)
+                if spec is None:
+                    return
+                dispatch = (run_id, *spec)
+            self._start_claimed_run(*dispatch)
+
+    def _start_claimed_run(
+        self,
+        run_id: str,
+        settings_loader: SettingsLoader,
         system_initializer: SystemInitializer,
         evolution_runner: EvolutionRunner,
     ) -> None:
@@ -605,22 +804,58 @@ class RunLifecycleService:
             name=f"comet-web-{run_id}",
         )
         with self._lock:
+            self._run_controls[run_id] = threading.Event()
             self._threads[run_id] = thread
         thread.start()
+
+    def cancel_run(self, run_id: str, *, reason: str = "用户取消运行。") -> RunSession:
+        with self._lock:
+            session = self._sessions[run_id]
+            session.cancel_requested = True
+            session.cancellation_reason = reason
+            if session.status == "pending":
+                session.status = "cancelled"
+                session.failed_at = _utc_now_iso()
+                session.queue_position = None
+                self._scheduler_specs.pop(run_id, None)
+            elif session.status in {"starting", "running"}:
+                session.status = "cancelling"
+            control = self._run_controls.get(run_id)
+            if control is not None:
+                control.set()
+            self._persist_session(session)
+            self._refresh_queue_positions_locked()
+        self.publish_runtime_snapshot(run_id)
+        self.dispatch_pending_runs()
+        return session
 
     def mark_running(self, run_id: str) -> None:
         with self._lock:
             session = self._sessions[run_id]
+            if session.cancel_requested:
+                session.status = "cancelled"
+                session.failed_at = _utc_now_iso()
+                session.queue_position = None
+                self._persist_session(session)
+                return
             session.status = "running"
             session.started_at = _utc_now_iso()
+            session.queue_position = None
             self._log_routers[run_id].ensure_stream(
                 "main", status="running", started_at=session.started_at
             )
-            self._persist_session_manifest(session)
+            self._persist_session(session)
         self.publish_runtime_snapshot(run_id)
 
     def mark_completed(self, run_id: str, *, completed_at: str | None = None) -> None:
         completion_time = completed_at or _utc_now_iso()
+        with self._lock:
+            session = self._sessions[run_id]
+            if session.cancel_requested or session.status == "cancelling":
+                self._finish_cancelled_run_locked(session, completed_at=completion_time)
+                self.publish_runtime_snapshot(run_id)
+                self.dispatch_pending_runs()
+                return
         self._generate_report_artifact(run_id, completed_at=completion_time)
         pull_request_url: str | None = None
         pull_request_error: str | None = None
@@ -663,12 +898,15 @@ class RunLifecycleService:
             )
             if self._active_run_id == run_id:
                 self._active_run_id = None
-            self._persist_session_manifest(session)
+            self._persist_session(session)
+            self._scheduler_specs.pop(run_id, None)
+            self._run_controls.pop(run_id, None)
         self.publish_runtime_snapshot(
             run_id,
             state=self._load_state_snapshot(run_id),
             **preserved_snapshot_fields,
         )
+        self.dispatch_pending_runs()
 
     def mark_failed(self, run_id: str, error: str) -> None:
         with self._lock:
@@ -694,8 +932,11 @@ class RunLifecycleService:
             session.error = error
             if self._active_run_id == run_id:
                 self._active_run_id = None
-            self._persist_session_manifest(session)
+            self._persist_session(session)
+            self._scheduler_specs.pop(run_id, None)
+            self._run_controls.pop(run_id, None)
         self.publish_runtime_snapshot(run_id, state=self._load_state_snapshot(run_id), error=error)
+        self.dispatch_pending_runs()
 
     def _run_in_background(
         self,
@@ -709,6 +950,13 @@ class RunLifecycleService:
         request = self._requests[run_id]
         event_bus = self._event_buses[run_id]
         log_router = self._log_routers[run_id]
+        run_control = self._run_controls[run_id]
+        timeout_seconds = self._resolve_run_timeout_seconds(run_id)
+        timeout_deadline = (
+            datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
+            if timeout_seconds is not None
+            else None
+        )
 
         try:
             run_request(
@@ -723,11 +971,107 @@ class RunLifecycleService:
                 runtime_snapshot_publisher=(
                     lambda **payload: self.publish_runtime_snapshot(run_id, **payload)
                 ),
+                run_control=run_control,
+                timeout_deadline=timeout_deadline,
             )
+            if timeout_deadline is not None and datetime.now(timezone.utc) >= timeout_deadline:
+                self.mark_failed(run_id, "run_timeout")
+                return
             self.mark_completed(run_id)
         except Exception as exc:
+            if timeout_deadline is not None and datetime.now(timezone.utc) >= timeout_deadline:
+                self.mark_failed(run_id, "run_timeout")
+                return
             self.mark_failed(run_id, str(exc))
             return
+
+    def _claim_next_pending_run_locked(self) -> str | None:
+        for session in sorted(
+            self._sessions.values(),
+            key=lambda current: (current.created_at, current.run_id),
+        ):
+            if session.status != "pending":
+                continue
+            if session.run_id not in self._scheduler_specs:
+                continue
+            if session.cancel_requested:
+                session.status = "cancelled"
+                session.failed_at = _utc_now_iso()
+                session.queue_position = None
+                self._persist_session(session)
+                continue
+            if not self._can_start_session_locked(session):
+                continue
+            session.status = "starting"
+            session.started_at = _utc_now_iso()
+            session.queue_position = None
+            self._active_run_id = session.run_id
+            self._persist_session(session)
+            self.publish_runtime_snapshot(session.run_id)
+            return session.run_id
+        return None
+
+    def _can_start_session_locked(self, session: RunSession) -> bool:
+        policy = self._queue_policy_for_session(session)
+        running_sessions = [
+            current for current in self._sessions.values() if current.status in RUNNING_STATUSES
+        ]
+        if len(running_sessions) >= policy.global_max_running_tasks:
+            return False
+        user_running = [
+            current
+            for current in running_sessions
+            if current.user_id is not None and current.user_id == session.user_id
+        ]
+        return len(user_running) < policy.per_user_max_running_tasks
+
+    def _queue_policy_for_session(self, session: RunSession):
+        deployment_snapshot = session.config_snapshot.get("deployment", {})
+        if not isinstance(deployment_snapshot, dict):
+            return DeploymentPolicyConfig()
+        return DeploymentPolicyConfig.model_validate(deployment_snapshot)
+
+    def assert_queue_capacity(self, settings: Settings, *, user_id: int | None) -> None:
+        with self._lock:
+            self._assert_queue_capacity(settings, user_id=user_id)
+
+    def _assert_queue_capacity(self, settings: Settings, *, user_id: int | None) -> None:
+        if self._web_database is None:
+            return
+        policy = settings.deployment
+        global_pending = self._web_database.count_run_records_by_statuses(PENDING_STATUSES)
+        if global_pending >= policy.global_max_pending_tasks:
+            raise QueueLimitExceededError("全局排队任务数量已达上限。")
+        if user_id is not None:
+            user_pending = self._web_database.count_run_records_by_statuses(
+                PENDING_STATUSES,
+                user_id=user_id,
+            )
+            if user_pending >= policy.per_user_max_pending_tasks:
+                raise QueueLimitExceededError("当前用户排队任务数量已达上限。")
+
+    def _refresh_queue_positions_locked(self) -> None:
+        pending_sessions = sorted(
+            (
+                session
+                for session in self._sessions.values()
+                if session.status == "pending" and not session.cancel_requested
+            ),
+            key=lambda current: (current.created_at, current.run_id),
+        )
+        pending_ids = {session.run_id for session in pending_sessions}
+        for position, session in enumerate(pending_sessions, start=1):
+            if session.queue_position == position:
+                continue
+            session.queue_position = position
+            if self._web_database is not None:
+                self._web_database.update_run_queue_position(session.run_id, position)
+        for session in self._sessions.values():
+            if session.run_id in pending_ids or session.queue_position is None:
+                continue
+            session.queue_position = None
+            if self._web_database is not None:
+                self._web_database.update_run_queue_position(session.run_id, None)
 
     def _new_state_for_run(self, run_id: str) -> AgentState:
         if self.run_mode(run_id) == "parallel":
@@ -768,7 +1112,12 @@ class RunLifecycleService:
     def _build_phase(self, session: RunSession) -> dict[str, str | None]:
         phase_map = {
             "created": ("queued", "Queued"),
+            "pending": ("queued", "Queued"),
+            "starting": ("starting", "Starting"),
             "running": ("running", "Running"),
+            "cancelling": ("cancelling", "Cancelling"),
+            "cancelled": ("cancelled", "Cancelled"),
+            "stale": ("stale", "Stale"),
             "completed": ("completed", "Completed"),
             "failed": ("failed", "Failed"),
         }
@@ -797,6 +1146,9 @@ class RunLifecycleService:
         self._apply_mutation_semantics(run_id, snapshot, state=state)
         snapshot["phase"] = self._build_phase(session)
         snapshot["artifacts"] = self._build_artifacts(session)
+        snapshot["queuePosition"] = session.queue_position
+        snapshot["cancelRequested"] = session.cancel_requested
+        snapshot["cancellationReason"] = session.cancellation_reason
         return snapshot
 
     def _resolve_mutation_enabled(
@@ -848,28 +1200,39 @@ class RunLifecycleService:
         artifacts: dict[str, dict[str, object]] = {}
         for name, path in paths.items():
             artifacts[name] = {"exists": Path(path).exists()}
+        artifacts["finalState"] = {"exists": self._safe_artifact_exists(session, "final-state")}
+        artifacts["log"] = {"exists": self._safe_artifact_exists(session, "run-log")}
+        artifacts["reportArtifact"] = {"exists": self._safe_artifact_exists(session, "report")}
+        artifacts["resolvedConfig"] = {
+            "exists": self._safe_artifact_exists(session, "resolved-config")
+        }
         artifacts["finalState"]["downloadUrl"] = f"/api/runs/{session.run_id}/artifacts/final-state"
         artifacts["log"]["downloadUrl"] = f"/api/runs/{session.run_id}/artifacts/run-log"
         artifacts["reportArtifact"]["downloadUrl"] = f"/api/runs/{session.run_id}/artifacts/report"
+        artifacts["resolvedConfig"]["downloadUrl"] = (
+            f"/api/runs/{session.run_id}/artifacts/resolved-config"
+        )
         return artifacts
 
     def _build_download_artifact(
         self,
         run_id: str,
-        artifact_path: str,
         *,
-        content_type: str,
-        download_name: str,
         artifact_slug: str,
         include_file_path: bool = False,
     ) -> dict[str, Any]:
-        resolved_path = Path(artifact_path)
-        exists = resolved_path.exists()
-        stat = resolved_path.stat() if exists else None
+        spec = SAFE_ARTIFACTS[artifact_slug]
+        download_name = str(spec["filename"])
+        try:
+            resolved_path = self._resolve_safe_artifact_path(run_id, artifact_slug)
+        except KeyError:
+            resolved_path = None
+        exists = resolved_path is not None
+        stat = resolved_path.stat() if resolved_path is not None else None
         artifact = {
             "exists": exists,
             "filename": download_name,
-            "contentType": content_type,
+            "contentType": str(spec["content_type"]),
             "sizeBytes": stat.st_size if stat is not None else None,
             "updatedAt": (
                 datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
@@ -878,9 +1241,61 @@ class RunLifecycleService:
             ),
             "downloadUrl": f"/api/runs/{run_id}/artifacts/{artifact_slug}",
         }
-        if include_file_path:
+        if include_file_path and resolved_path is not None:
             artifact["filePath"] = str(resolved_path)
         return artifact
+
+    def _resolve_safe_artifact_path(self, run_id: str, artifact_slug: str) -> Path:
+        session = self._sessions[run_id]
+        spec = SAFE_ARTIFACTS[artifact_slug]
+        filename = str(spec["filename"])
+        root_name = str(spec["root"])
+        if root_name == "log":
+            artifact_path = Path(session.path_snapshot.get("log") or session.paths["log"])
+            if artifact_path.name != filename:
+                raise KeyError(artifact_slug)
+            root = Path(session.paths["log"]).parent
+            return self._resolve_existing_safe_artifact_file(
+                artifact_path,
+                root=root,
+                artifact_slug=artifact_slug,
+            )
+
+        root_value = session.path_snapshot.get(root_name) or session.paths[root_name]
+        root = Path(root_value)
+        artifact_path = root / filename
+        canonical_root = Path(session.paths[root_name])
+        return self._resolve_existing_safe_artifact_file(
+            artifact_path,
+            root=canonical_root,
+            artifact_slug=artifact_slug,
+        )
+
+    def _resolve_existing_safe_artifact_file(
+        self,
+        artifact_path: Path,
+        *,
+        root: Path,
+        artifact_slug: str,
+    ) -> Path:
+        try:
+            resolved_root = root.expanduser().resolve(strict=True)
+            if artifact_path.is_symlink():
+                raise KeyError(artifact_slug)
+            resolved_path = artifact_path.expanduser().resolve(strict=True)
+            if not resolved_path.is_relative_to(resolved_root):
+                raise KeyError(artifact_slug)
+            if not resolved_path.is_file():
+                raise KeyError(artifact_slug)
+        except OSError as exc:
+            raise KeyError(artifact_slug) from exc
+        return resolved_path
+
+    def _safe_artifact_exists(self, session: RunSession, artifact_slug: str) -> bool:
+        try:
+            return self._resolve_safe_artifact_path(session.run_id, artifact_slug).exists()
+        except KeyError:
+            return False
 
     def _generate_report_artifact(self, run_id: str, *, completed_at: str) -> None:
         session = self._sessions[run_id]
@@ -1131,28 +1546,85 @@ class RunLifecycleService:
     def _new_run_id(self) -> str:
         return f"run-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
 
-    def _session_manifest_path(self, run_id: str) -> Path:
-        return self.workspace_root / "state" / "runs" / run_id / "session.json"
+    def _persist_session(self, session: RunSession) -> None:
+        if self._web_database is None:
+            return
+        if session.status == "cancelled":
+            finished_at = session.failed_at or session.completed_at or session.finished_at
+        else:
+            finished_at = session.finished_at
+        path_metadata = {
+            "paths": session.paths,
+            "pathSnapshot": session.path_snapshot,
+            "sourceMetadata": session.source_metadata,
+        }
+        upload_source = session.source_metadata.get("uploadSource")
+        if isinstance(upload_source, dict):
+            path_metadata["uploadSource"] = copy.deepcopy(upload_source)
+        existing = self._web_database.get_run_record(session.run_id)
+        if existing is None:
+            self._web_database.create_run_record(
+                run_id=session.run_id,
+                user_id=session.user_id,
+                status=session.status,
+                created_at=session.created_at,
+                started_at=session.started_at,
+                finished_at=finished_at,
+                project_source_type=session.project_source_type,
+                project_path=session.project_path,
+                bug_reports_path=session.bug_reports_path,
+                path_metadata=path_metadata,
+                paths=session.paths,
+                path_snapshot=session.path_snapshot,
+                config_snapshot=session.config_snapshot,
+                config_path=_normalize_config_path(session.config_path),
+                error=session.error,
+                queue_position=session.queue_position,
+                cancel_requested=session.cancel_requested,
+                cancellation_reason=session.cancellation_reason,
+            )
+            return
 
-    def _persist_session_manifest(self, session: RunSession) -> None:
-        manifest_path = self._session_manifest_path(session.run_id)
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        manifest_path.write_text(
-            json.dumps(asdict(session), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        self._web_database.update_run_record(
+            session.run_id,
+            status=session.status,
+            started_at=session.started_at,
+            finished_at=finished_at,
+            path_metadata=path_metadata,
+            paths=session.paths,
+            path_snapshot=session.path_snapshot,
+            config_snapshot=session.config_snapshot,
+            config_path=_normalize_config_path(session.config_path),
+            error=session.error,
+            queue_position=session.queue_position,
+            cancel_requested=session.cancel_requested,
+            cancellation_reason=session.cancellation_reason,
         )
 
     def _load_persisted_sessions(self) -> None:
-        manifests_root = self.workspace_root / "state" / "runs"
-        if not manifests_root.is_dir():
+        if self._web_database is None:
             return
+        self._web_database.mark_stale_run_records(
+            BOOT_STALE_STATUSES,
+            error="运行在 Web 服务重启后无法恢复，已标记为 stale。",
+        )
+        self._web_database.mark_stale_run_records(
+            PENDING_STATUSES,
+            error="排队运行在 Web 服务重启后缺少调度上下文，已标记为 stale。",
+        )
+        self._sessions.clear()
+        self._requests.clear()
+        self._event_buses.clear()
+        self._log_routers.clear()
+        self._runtime_snapshots.clear()
+        self._active_run_id = None
 
-        for manifest_path in sorted(manifests_root.glob("*/session.json")):
+        for record in self._web_database.list_run_records(include_all=True):
             try:
-                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-                session = self._deserialize_session(payload, manifest_path)
-            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
-                logger.warning("跳过损坏的运行记录清单 %s: %s", manifest_path, exc)
+                session = self._session_from_record(record)
+                self._validate_session_paths(session)
+            except (TypeError, ValueError) as exc:
+                logger.warning("跳过损坏的 SQLite 运行记录 %s: %s", record.id, exc)
                 continue
 
             session = self._normalize_restored_session(session)
@@ -1179,26 +1651,38 @@ class RunLifecycleService:
                 session.error = session.error or "历史运行恢复失败，请检查状态文件是否损坏。"
                 self._runtime_snapshots[run_id] = self._build_runtime_snapshot(run_id)
 
-            self._persist_session_manifest(session)
+            self._persist_session(session)
+        with self._lock:
+            self._refresh_queue_positions_locked()
 
-    def _deserialize_session(self, payload: object, manifest_path: Path) -> RunSession:
-        if not isinstance(payload, dict):
-            raise ValueError("session manifest must be an object")
-
-        session = RunSession(**payload)
-        self._backfill_legacy_session_paths(session)
-        self._validate_restored_session_paths(session, manifest_path)
-        return session
-
-    def _backfill_legacy_session_paths(self, session: RunSession) -> None:
-        if "report_artifact" in session.paths:
-            return
-
-        session.paths["report_artifact"] = str(
-            self.workspace_root / "output" / "runs" / session.run_id / "report.md"
+    def _session_from_record(self, record: RunRecord) -> RunSession:
+        failed_at = record.finished_at if record.status == "failed" else None
+        completed_at = record.finished_at if record.status == "completed" else None
+        if record.status in {"cancelled", "stale"}:
+            failed_at = record.finished_at
+        return RunSession(
+            run_id=record.id,
+            user_id=record.user_id,
+            status=record.status,
+            created_at=record.created_at,
+            started_at=record.started_at,
+            completed_at=completed_at,
+            failed_at=failed_at,
+            project_path=record.project_path,
+            config_path=record.config_path,
+            paths=record.paths,
+            path_snapshot=record.path_snapshot,
+            config_snapshot=record.config_snapshot,
+            project_source_type=record.project_source_type,
+            bug_reports_path=record.bug_reports_path,
+            error=record.error,
+            queue_position=record.queue_position,
+            cancel_requested=record.cancel_requested,
+            cancellation_reason=record.cancellation_reason,
+            source_metadata=_extract_source_metadata(record.path_metadata),
         )
 
-    def _validate_restored_session_paths(self, session: RunSession, manifest_path: Path) -> None:
+    def _validate_session_paths(self, session: RunSession) -> None:
         required_paths = {
             "state",
             "output",
@@ -1214,29 +1698,154 @@ class RunLifecycleService:
         if missing_paths:
             raise ValueError(f"missing paths: {sorted(missing_paths)}")
 
-        expected_run_dir = manifest_path.parent.resolve()
-        if expected_run_dir.name != session.run_id:
-            raise ValueError("run id does not match manifest directory")
-
         allowed_roots = (
-            self.workspace_root / "state",
-            self.workspace_root / "output",
-            self.workspace_root / "sandbox",
-            self.workspace_root / "logs",
+            self.workspace_root / "state" / "users",
+            self.workspace_root / "output" / "users",
+            self.workspace_root / "sandbox" / "users",
+            self.workspace_root / "logs" / "users",
         )
         for path_value in session.paths.values():
-            path = Path(path_value).expanduser().resolve()
-            if not any(path.is_relative_to(root.resolve()) for root in allowed_roots):
-                raise ValueError(f"path escapes workspace roots: {path}")
+            path = Path(path_value).expanduser()
+            if not self._path_string_is_relative_to_allowed_root(path, allowed_roots):
+                raise ValueError(f"path escapes user-scoped roots: {path}")
+
+    def _path_string_is_relative_to_allowed_root(
+        self,
+        path: Path,
+        allowed_roots: tuple[Path, ...],
+    ) -> bool:
+        absolute_path = path if path.is_absolute() else (self.workspace_root / path)
+        normalized_parts: list[str] = []
+        for part in absolute_path.parts:
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if normalized_parts:
+                    normalized_parts.pop()
+                continue
+            normalized_parts.append(part)
+        normalized_path = Path(*normalized_parts)
+        if absolute_path.is_absolute():
+            normalized_path = Path(absolute_path.anchor, *normalized_parts[1:])
+        return any(normalized_path.is_relative_to(root.resolve()) for root in allowed_roots)
 
     def _normalize_restored_session(self, session: RunSession) -> RunSession:
-        if session.status not in {"created", "running"}:
+        if session.status == "created":
+            session.status = "pending"
+            return session
+        if session.status not in BOOT_STALE_STATUSES:
             return session
 
-        session.status = "failed"
+        session.status = "stale"
         session.failed_at = session.failed_at or _utc_now_iso()
-        session.error = session.error or "运行在 Web 服务重启后无法恢复，已标记为失败。"
+        session.error = session.error or "运行在 Web 服务重启后无法恢复，已标记为 stale。"
         return session
+
+    def _finish_cancelled_run_locked(
+        self,
+        session: RunSession,
+        *,
+        completed_at: str | None = None,
+    ) -> None:
+        session.status = "cancelled"
+        session.completed_at = None
+        session.failed_at = completed_at or _utc_now_iso()
+        session.queue_position = None
+        session.error = None
+        self._log_routers[session.run_id].ensure_stream(
+            "main",
+            status="cancelled",
+            started_at=session.started_at or session.created_at,
+            ended_at=session.failed_at,
+            completed_at=None,
+        )
+        if self._active_run_id == session.run_id:
+            self._active_run_id = None
+        self._persist_session(session)
+        self._scheduler_specs.pop(session.run_id, None)
+        self._run_controls.pop(session.run_id, None)
+
+    def _resolve_run_timeout_seconds(self, run_id: str) -> int | None:
+        session = self._sessions.get(run_id)
+        if session is None:
+            return None
+        timeout = session.config_snapshot.get("execution", {}).get("timeout")
+        if isinstance(timeout, int) and timeout > 0:
+            return timeout
+        return None
+
+    def cleanup_workspace(
+        self,
+        *,
+        now: datetime | None = None,
+        upload_retention_hours: int = 24,
+        run_artifact_retention_days: int = 30,
+    ) -> dict[str, list[str]]:
+        current_time = now or datetime.now(timezone.utc)
+        report: dict[str, list[str]] = {"uploads": [], "artifacts": []}
+        if self._web_database is None:
+            return report
+
+        upload_cutoff = current_time - timedelta(hours=upload_retention_hours)
+        for upload in self._web_database.list_upload_records(include_all=True):
+            if upload.used_at is not None:
+                continue
+            if datetime.fromisoformat(upload.created_at) > upload_cutoff:
+                continue
+            upload_root = Path(upload.storage_path).expanduser().resolve(strict=False).parent.parent
+            self._safe_remove_path(upload_root, self.workspace_root / "sandbox" / "users")
+            _ = self._web_database.delete_upload_record(upload.id)
+            report["uploads"].append(upload.id)
+
+        artifact_cutoff = current_time - timedelta(days=run_artifact_retention_days)
+        for session in self._web_database.list_run_records(include_all=True):
+            if session.status not in TERMINAL_STATUSES:
+                continue
+            finished_at = session.finished_at or session.updated_at or session.created_at
+            if datetime.fromisoformat(finished_at) > artifact_cutoff:
+                continue
+            self._safe_remove_path(
+                Path(session.paths["state"]), self.workspace_root / "state" / "users"
+            )
+            self._safe_remove_path(
+                Path(session.paths["output"]), self.workspace_root / "output" / "users"
+            )
+            self._safe_remove_path(
+                Path(session.paths["sandbox"]), self.workspace_root / "sandbox" / "users"
+            )
+            self._safe_remove_path(
+                Path(session.paths["log"]).parent, self.workspace_root / "logs" / "users"
+            )
+            report["artifacts"].append(session.id)
+
+        return report
+
+    def _safe_remove_path(self, target: Path, allowed_root: Path) -> bool:
+        try:
+            resolved_root = allowed_root.expanduser().resolve(strict=True)
+            resolved_target = target.expanduser().resolve(strict=False)
+            if not resolved_target.is_relative_to(resolved_root):
+                return False
+            if any(
+                Path(session.paths[root_key])
+                .expanduser()
+                .resolve(strict=False)
+                .is_relative_to(resolved_target)
+                for session in self._sessions.values()
+                if session.status in {"pending", "starting", "running", "cancelling"}
+                for root_key in ("state", "output", "sandbox")
+            ):
+                return False
+            if resolved_target.is_dir():
+                shutil.rmtree(resolved_target)
+            elif resolved_target.exists():
+                resolved_target.unlink()
+            return True
+        except OSError:
+            return False
+
+    def cleanup_user_root(self, *, now: datetime | None = None) -> dict[str, list[str]]:
+        return self.cleanup_workspace(now=now)
 
     def _build_restored_request(self, session: RunSession) -> RunRequest:
         parallel_config = session.config_snapshot.get("agent", {}).get("parallel", {})
@@ -1260,13 +1869,16 @@ class RunLifecycleService:
                 "output": session.paths["output"],
                 "sandbox": session.paths["sandbox"],
             },
+            source_metadata=copy.deepcopy(session.source_metadata),
         )
 
     def _session_to_stream_status(self, status: str) -> str:
-        if status == "created":
+        if status in {"created", "pending", "starting"}:
             return "pending"
-        if status in {"completed", "failed", "running"}:
+        if status in {"completed", "failed", "running", "cancelled", "stale"}:
             return status
+        if status == "cancelling":
+            return "running"
         return "pending"
 
     def _resolve_selected_java_version(self, run_id: str) -> str | None:
@@ -1290,11 +1902,14 @@ class RunLifecycleService:
                 return normalized
         return None
 
-    def _build_scoped_paths(self, run_id: str) -> dict[str, str]:
-        state_root = self.workspace_root / "state" / "runs" / run_id
-        output_root = self.workspace_root / "output" / "runs" / run_id
-        sandbox_root = self.workspace_root / "sandbox" / "runs" / run_id
-        log_file = self.workspace_root / "logs" / "runs" / run_id / "run.log"
+    def _build_scoped_paths(self, run_id: str, *, user_id: int | None = None) -> dict[str, str]:
+        user_segment = str(user_id) if user_id is not None else "anonymous"
+        state_root = self.workspace_root / "state" / "users" / user_segment / "runs" / run_id
+        output_root = self.workspace_root / "output" / "users" / user_segment / "runs" / run_id
+        sandbox_root = self.workspace_root / "sandbox" / "users" / user_segment / "runs" / run_id
+        log_file = (
+            self.workspace_root / "logs" / "users" / user_segment / "runs" / run_id / "run.log"
+        )
 
         return {
             "state": str(state_root),
@@ -1333,6 +1948,7 @@ class RunLifecycleService:
                 "sandbox": scoped_paths["sandbox"],
             },
             observer=request.observer,
+            source_metadata=copy.deepcopy(request.source_metadata),
         )
 
     def _ensure_scoped_directories(self, scoped_paths: dict[str, str]) -> None:
@@ -1340,11 +1956,15 @@ class RunLifecycleService:
             Path(scoped_paths[key]).mkdir(parents=True, exist_ok=True)
         Path(scoped_paths["log"]).parent.mkdir(parents=True, exist_ok=True)
 
-    def _write_config_snapshot(self, config: Settings, config_snapshot_path: str) -> None:
+    def _write_config_snapshot(
+        self,
+        config_snapshot: dict[str, Any],
+        config_snapshot_path: str,
+    ) -> None:
         snapshot_path = Path(config_snapshot_path)
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_path.write_text(
-            json.dumps(config.to_dict(), ensure_ascii=False, indent=2),
+            json.dumps(config_snapshot, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
@@ -1358,6 +1978,27 @@ def _normalize_optional_text(value: Any) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _normalize_config_path(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _extract_source_metadata(path_metadata: dict[str, Any]) -> dict[str, Any]:
+    source_metadata = path_metadata.get("sourceMetadata")
+    if isinstance(source_metadata, dict):
+        return copy.deepcopy(source_metadata)
+    upload_source = path_metadata.get("uploadSource")
+    if isinstance(upload_source, dict):
+        return {"uploadSource": copy.deepcopy(upload_source)}
+    return {}
+
+
+def _normalize_project_source_type(source_metadata: dict[str, Any]) -> str:
+    upload_source = source_metadata.get("uploadSource")
+    if isinstance(upload_source, dict) and upload_source.get("mode") == "upload":
+        return "upload"
+    return "local"
 
 
 def emit_event(
@@ -1591,6 +2232,8 @@ def run_request(
     runtime_snapshot_publisher: Optional[Callable[..., None]] = None,
     repo_import_service: GitHubRepoImportService | None = None,
     source_run_id: str | None = None,
+    run_control: threading.Event | None = None,
+    timeout_deadline: datetime | None = None,
 ) -> int:
     runtime_logger = logger or logging.getLogger(__name__)
     event_sink = observer or request.observer
@@ -1598,6 +2241,7 @@ def run_request(
     config = settings_loader(request.config_path)
     apply_runtime_roots(config, request.runtime_roots)
     apply_run_overrides(config, request)
+    enforce_deployment_policy(config)
 
     log_level = "DEBUG" if request.debug else config.logging.level
     resolved_log_path = configure_logging(
@@ -1641,6 +2285,9 @@ def run_request(
             components["runtime_snapshot_publisher"] = runtime_snapshot_publisher
         if isinstance(components, dict) and log_router is not None:
             components["log_router"] = log_router
+        if isinstance(components, dict):
+            components["run_control"] = run_control
+            components["timeout_deadline"] = timeout_deadline
         evolution_runner(project_path, components, request.resume_state)
     except Exception as exc:
         emit_event(

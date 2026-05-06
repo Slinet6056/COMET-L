@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -91,6 +92,213 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function authErrorResponse(message: string, code = 'auth_required'): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        code,
+        message,
+        fieldErrors: [],
+      },
+    }),
+    {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    },
+  );
+}
+
+describe('App auth flow', () => {
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', IdleEventSource as unknown as typeof EventSource);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('shows login page when unauthenticated', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return authErrorResponse('请先登录');
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'COMET-L 登录' })).toBeInTheDocument();
+    expect(screen.getByLabelText('用户名')).toBeInTheDocument();
+    expect(screen.getByLabelText('密码')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '登录' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('项目路径')).not.toBeInTheDocument();
+  });
+
+  it('shows authenticated shell after successful login', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return authErrorResponse('请先登录');
+        }
+        if (url === '/api/auth/login') {
+          const body = init?.body as string;
+          const parsed = JSON.parse(body);
+          if (parsed.username === 'admin' && parsed.password === 'password') {
+            return jsonResponse({
+              user: { id: 1, username: 'admin', role: 'admin' },
+            });
+          }
+          return authErrorResponse('用户名或密码错误', 'invalid_credentials');
+        }
+        if (url === '/api/config/defaults') {
+          return jsonResponse({ config: defaultConfig });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'COMET-L 登录' })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('用户名'), 'admin');
+    await user.type(screen.getByLabelText('密码'), 'password');
+    await user.click(screen.getByRole('button', { name: '登录' }));
+
+    expect(await screen.findByLabelText('上传项目 ZIP')).toBeInTheDocument();
+    expect(screen.getByText('admin')).toBeInTheDocument();
+    expect(screen.getByText('管理员')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '注销' })).toBeInTheDocument();
+  });
+
+  it('shows user role badge for non-admin users', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return authErrorResponse('请先登录');
+        }
+        if (url === '/api/auth/login') {
+          return jsonResponse({
+            user: { id: 2, username: 'regularuser', role: 'user' },
+          });
+        }
+        if (url === '/api/config/defaults') {
+          return jsonResponse({ config: defaultConfig });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'COMET-L 登录' })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('用户名'), 'regularuser');
+    await user.type(screen.getByLabelText('密码'), 'password');
+    await user.click(screen.getByRole('button', { name: '登录' }));
+
+    expect(await screen.findByLabelText('上传项目 ZIP')).toBeInTheDocument();
+    expect(screen.getByText('regularuser')).toBeInTheDocument();
+    expect(screen.getByText('用户')).toBeInTheDocument();
+  });
+
+  it('returns to login view after logout', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return authErrorResponse('请先登录');
+        }
+        if (url === '/api/auth/login') {
+          return jsonResponse({
+            user: { id: 1, username: 'admin', role: 'admin' },
+          });
+        }
+        if (url === '/api/auth/logout') {
+          return new Response(null, { status: 200 });
+        }
+        if (url === '/api/config/defaults') {
+          return jsonResponse({ config: defaultConfig });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'COMET-L 登录' })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('用户名'), 'admin');
+    await user.type(screen.getByLabelText('密码'), 'password');
+    await user.click(screen.getByRole('button', { name: '登录' }));
+
+    expect(await screen.findByLabelText('上传项目 ZIP')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '注销' }));
+
+    expect(await screen.findByRole('heading', { name: 'COMET-L 登录' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('项目路径')).not.toBeInTheDocument();
+  });
+
+  it('shows authenticated shell directly when already logged in', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'admin', role: 'admin' },
+          });
+        }
+        if (url === '/api/config/defaults') {
+          return jsonResponse({ config: defaultConfig });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText('上传项目 ZIP')).toBeInTheDocument();
+    expect(screen.getByText('admin')).toBeInTheDocument();
+    expect(screen.getByText('管理员')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '注销' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'COMET-L 登录' })).not.toBeInTheDocument();
+  });
+});
+
 describe('App routing scaffold', () => {
   beforeEach(() => {
     vi.stubGlobal('EventSource', IdleEventSource as unknown as typeof EventSource);
@@ -98,6 +306,11 @@ describe('App routing scaffold', () => {
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'admin', role: 'admin' },
+          });
+        }
         if (url === '/api/config/defaults') {
           return jsonResponse({ config: defaultConfig });
         }
@@ -181,8 +394,9 @@ describe('App routing scaffold', () => {
                 runId: 'run-42',
                 status: 'completed',
                 mode: 'standard',
-                projectPath: 'examples/calculator-demo',
-                configPath: 'config.yaml',
+                projectSourceType: 'upload',
+                projectPath: '/home/comet/state/users/admin/examples/calculator-demo',
+                configPath: '/home/comet/config.yaml',
                 createdAt: '2026-03-10T10:00:00Z',
                 startedAt: '2026-03-10T10:01:00Z',
                 completedAt: '2026-03-10T10:05:00Z',
@@ -309,7 +523,7 @@ describe('App routing scaffold', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByLabelText('项目路径')).toBeInTheDocument();
+    expect(await screen.findByLabelText('上传项目 ZIP')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '运行记录' })).toHaveAttribute('href', '/runs/history');
   });
 
@@ -350,5 +564,19 @@ describe('App routing scaffold', () => {
       'href',
       '/api/runs/run-42/artifacts/final-state',
     );
+  });
+
+  it('renders history without leaking raw server paths', async () => {
+    render(
+      <MemoryRouter initialEntries={['/runs/history']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('历史运行', { selector: 'h1' })).toBeInTheDocument();
+    expect(screen.getByText('运行来源')).toBeInTheDocument();
+    expect(screen.getByText('上传项目')).toBeInTheDocument();
+    expect(screen.queryByText('标准运行')).not.toBeInTheDocument();
+    expect(screen.queryByText(/\/home|state\/users|config\.yaml/)).not.toBeInTheDocument();
   });
 });

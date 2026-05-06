@@ -1,10 +1,15 @@
 import json
 import logging
+import os
+import sqlite3
+import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -13,6 +18,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
 from comet.agent.state import AgentState, ParallelAgentState, WorkerResult
@@ -25,13 +31,64 @@ from comet.utils.method_keys import build_method_key
 from comet.web.app import app, create_app
 from comet.web.github_auth_service import GitHubAuthStatus, GitHubOAuthService, GitHubTokenStorage
 from comet.web.log_router import RunLogRouter
-from comet.web.run_service import RunLifecycleService, RunRequest
+from comet.web.routes import ApiErrorException, require_admin
+from comet.web.run_service import InvalidJavaVersionError, RunLifecycleService, RunRequest
 from comet.web.runtime_protocol import RuntimeEventBus, build_run_snapshot
+from comet.web.storage import AuthenticatedUser, DuplicateUserError, WebDatabase
+
+TEST_PASSWORD_HASHER = PasswordHasher()
+TEST_PASSWORD = "correct-password"
+
+
+def login_test_user(
+    client: TestClient,
+    database: WebDatabase,
+    *,
+    username: str = "alice",
+    role: str = "user",
+    password: str = TEST_PASSWORD,
+) -> int:
+    try:
+        user_id = database.create_user(
+            username=username,
+            password_hash=TEST_PASSWORD_HASHER.hash(password),
+            role=role,
+        )
+    except DuplicateUserError:
+        existing_user = database.get_user_by_username(username)
+        assert existing_user is not None
+        user_id = existing_user.id
+    response = client.post(
+        "/api/auth/login",
+        json={"username": username, "password": password},
+    )
+    assert response.status_code == 200, response.text
+    client.headers.update({"origin": "http://testserver"})
+    return user_id
+
+
+def authenticated_client(
+    *,
+    run_service: RunLifecycleService | None = None,
+    default_config_path: Path | None = None,
+) -> TestClient:
+    owned_temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    if run_service is None:
+        owned_temp_dir = tempfile.TemporaryDirectory()
+        resolved_run_service = RunLifecycleService(workspace_root=owned_temp_dir.name)
+    else:
+        resolved_run_service = run_service
+    client = TestClient(
+        create_app(run_service=resolved_run_service, default_config_path=default_config_path)
+    )
+    client.__dict__["_comet_owned_temp_dir"] = owned_temp_dir
+    login_test_user(client, WebDatabase.for_workspace(resolved_run_service.workspace_root))
+    return client
 
 
 class HealthApiTests(unittest.TestCase):
     def test_health_endpoint_returns_ok(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.get("/api/health")
 
@@ -39,12 +96,586 @@ class HealthApiTests(unittest.TestCase):
         self.assertEqual(response.json(), {"status": "ok", "activeRunId": None})
 
 
+class IdentitySchemaBootstrapTests(unittest.TestCase):
+    def test_identity_schema_bootstraps_clean_web_database(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "state" / "web" / "comet-web.sqlite3"
+            run_service = RunLifecycleService(workspace_root=root)
+
+            client = TestClient(create_app(run_service=run_service))
+
+            response = client.get("/api/health")
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(db_path.is_file())
+
+            with sqlite3.connect(db_path) as connection:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                self.assertEqual(
+                    {"users", "sessions", "runs", "uploads", "audit_events"},
+                    tables,
+                )
+                self.assertEqual(
+                    connection.execute("PRAGMA journal_mode").fetchone()[0].lower(),
+                    "wal",
+                )
+                self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 5000)
+                user_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()
+                }
+                self.assertEqual(
+                    {
+                        "id",
+                        "username",
+                        "password_hash",
+                        "role",
+                        "is_active",
+                        "created_at",
+                        "updated_at",
+                        "disabled_at",
+                        "password_changed_at",
+                    },
+                    user_columns,
+                )
+
+    def test_identity_schema_rejects_incompatible_existing_database(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "state" / "web" / "comet-web.sqlite3"
+            db_path.parent.mkdir(parents=True)
+            with sqlite3.connect(db_path) as connection:
+                connection.execute("CREATE TABLE legacy_runs (id TEXT PRIMARY KEY)")
+
+            with self.assertRaisesRegex(RuntimeError, "incompatible.*clean database"):
+                create_app(run_service=RunLifecycleService(workspace_root=root))
+
+    def test_admin_bootstrap_cli_creates_secure_admin_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "comet-web.sqlite3"
+            env = {**os.environ, "COMET_WEB_DB_PATH": str(db_path)}
+            password = "admin-secret-123"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "comet.web.admin",
+                    "create-admin",
+                    "--username",
+                    "Admin",
+                    "--password",
+                    password,
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with sqlite3.connect(db_path) as connection:
+                row = connection.execute(
+                    "SELECT username, password_hash, role, is_active FROM users"
+                ).fetchone()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row[0], "admin")
+            self.assertNotEqual(row[1], password)
+            self.assertTrue(str(row[1]).startswith("$argon2id$"))
+            self.assertEqual(row[2], "admin")
+            self.assertEqual(row[3], 1)
+
+    def test_admin_bootstrap_cli_rejects_duplicate_username(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "comet-web.sqlite3"
+            env = {**os.environ, "COMET_WEB_DB_PATH": str(db_path)}
+            command = [
+                sys.executable,
+                "-m",
+                "comet.web.admin",
+                "create-admin",
+                "--username",
+                "admin",
+                "--password",
+                "admin-secret-123",
+            ]
+
+            first = subprocess.run(
+                command,
+                cwd=Path(__file__).resolve().parents[1],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            second = subprocess.run(
+                command,
+                cwd=Path(__file__).resolve().parents[1],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertNotEqual(second.returncode, 0)
+            self.assertIn("already exists", second.stderr)
+            with sqlite3.connect(db_path) as connection:
+                admin_count = connection.execute(
+                    "SELECT COUNT(*) FROM users WHERE username = 'admin'"
+                ).fetchone()[0]
+            self.assertEqual(admin_count, 1)
+
+    def test_admin_user_management_cli_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "comet-web.sqlite3"
+            env = {**os.environ, "COMET_WEB_DB_PATH": str(db_path)}
+            cwd = Path(__file__).resolve().parents[1]
+
+            def run_admin_command(*args: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sys.executable, "-m", "comet.web.admin", *args],
+                    cwd=cwd,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+            create_admin = run_admin_command(
+                "create-admin",
+                "--username",
+                "admin",
+                "--password",
+                "admin-secret-123",
+            )
+            create_user = run_admin_command(
+                "create-user",
+                "--username",
+                "operator",
+                "--password",
+                "operator-secret-123",
+            )
+            self.assertEqual(create_admin.returncode, 0, create_admin.stderr)
+            self.assertEqual(create_user.returncode, 0, create_user.stderr)
+            operator = json.loads(create_user.stdout)
+            operator_id = str(operator["id"])
+
+            promote = run_admin_command("promote-user", "--user-id", operator_id)
+            reset = run_admin_command(
+                "reset-password",
+                "--user-id",
+                operator_id,
+                "--password",
+                "changed-secret-123",
+            )
+            demote = run_admin_command("demote-user", "--user-id", operator_id)
+            disable = run_admin_command("disable-user", "--user-id", operator_id)
+            list_users = run_admin_command("list-users")
+
+            self.assertEqual(promote.returncode, 0, promote.stderr)
+            self.assertEqual(reset.returncode, 0, reset.stderr)
+            self.assertEqual(demote.returncode, 0, demote.stderr)
+            self.assertEqual(disable.returncode, 0, disable.stderr)
+            self.assertEqual(list_users.returncode, 0, list_users.stderr)
+            self.assertEqual(json.loads(promote.stdout)["role"], "admin")
+            self.assertEqual(json.loads(demote.stdout)["role"], "user")
+            self.assertFalse(json.loads(disable.stdout)["isActive"])
+            serialized = list_users.stdout.lower()
+            self.assertIn("operator", serialized)
+            self.assertNotIn("password_hash", serialized)
+            self.assertNotIn("token", serialized)
+
+            with sqlite3.connect(db_path) as connection:
+                row = connection.execute(
+                    "SELECT password_hash, is_active FROM users WHERE username = 'operator'"
+                ).fetchone()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertTrue(TEST_PASSWORD_HASHER.verify(row[0], "changed-secret-123"))
+            self.assertEqual(row[1], 0)
+
+
+class LocalAuthApiTests(unittest.TestCase):
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    root: Path | None = None
+    default_config_path: Path | None = None
+    database: WebDatabase | None = None
+    client: TestClient | None = None
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.default_config_path = self.root / "config.example.yaml"
+        self.default_config_path.write_text(
+            "llm:\n  api_key: default-key\n  model: gpt-4\n",
+            encoding="utf-8",
+        )
+        run_service = RunLifecycleService(workspace_root=self.root)
+        self.client = TestClient(
+            create_app(run_service=run_service, default_config_path=self.default_config_path)
+        )
+        self.database = WebDatabase.for_workspace(self.root)
+
+    def tearDown(self) -> None:
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
+
+    def _create_user(
+        self,
+        *,
+        username: str = "alice",
+        password: str = "correct-password",
+        role: str = "user",
+        is_active: bool = True,
+    ) -> int:
+        assert self.database is not None
+        return self.database.create_user(
+            username=username,
+            password_hash=TEST_PASSWORD_HASHER.hash(password),
+            role=role,
+            is_active=is_active,
+        )
+
+    def test_auth_lifecycle_sets_hash_only_session_cookie_and_revokes_on_logout(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        user_id = self._create_user(username="Admin", password="secret-123", role="admin")
+
+        login_response = self.client.post(
+            "/api/auth/login",
+            json={"username": "ADMIN", "password": "secret-123"},
+        )
+
+        self.assertEqual(login_response.status_code, 200)
+        self.assertEqual(
+            login_response.json(),
+            {"user": {"id": user_id, "username": "admin", "role": "admin"}},
+        )
+        self.assertIn("comet_session", login_response.cookies)
+        set_cookie = login_response.headers["set-cookie"]
+        self.assertIn("comet_session=", set_cookie)
+        self.assertIn("HttpOnly", set_cookie)
+        self.assertIn("samesite=lax", set_cookie.lower())
+        self.assertIn("Path=/", set_cookie)
+        self.assertNotIn("Secure", set_cookie)
+        session_token = login_response.cookies["comet_session"]
+
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT token_hash, expires_at, revoked_at FROM sessions"
+            ).fetchone()
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertNotEqual(row["token_hash"], session_token)
+        self.assertEqual(len(row["token_hash"]), 64)
+        self.assertIsNone(row["revoked_at"])
+        self.assertGreater(
+            datetime.fromisoformat(row["expires_at"]).timestamp() - time.time(),
+            6 * 24 * 60 * 60,
+        )
+
+        me_response = self.client.get("/api/auth/me")
+        self.assertEqual(me_response.status_code, 200)
+        self.assertEqual(me_response.json()["user"]["username"], "admin")
+
+        logout_response = self.client.post(
+            "/api/auth/logout",
+            headers={"origin": "http://testserver"},
+        )
+        self.assertEqual(logout_response.status_code, 200)
+        self.assertIn("comet_session=", logout_response.headers["set-cookie"])
+
+        me_after_logout = self.client.get("/api/auth/me")
+        self.assertEqual(me_after_logout.status_code, 401)
+        self.assertEqual(me_after_logout.json()["error"]["code"], "auth_required")
+        with self.database.connect() as connection:
+            revoked_at = connection.execute("SELECT revoked_at FROM sessions").fetchone()[0]
+        self.assertIsNotNone(revoked_at)
+
+    def test_auth_rejects_disabled_users_and_throttles_failed_logins(self) -> None:
+        assert self.client is not None
+        self._create_user(username="disabled", password="secret-123", is_active=False)
+        disabled_response = self.client.post(
+            "/api/auth/login",
+            json={"username": "disabled", "password": "secret-123"},
+        )
+        self.assertEqual(disabled_response.status_code, 401)
+        self.assertEqual(disabled_response.json()["error"]["code"], "invalid_credentials")
+
+        self._create_user(username="throttle", password="secret-123")
+        statuses = [
+            self.client.post(
+                "/api/auth/login",
+                json={"username": "throttle", "password": "wrong-password"},
+            ).status_code
+            for _ in range(5)
+        ]
+        self.assertEqual(statuses[:4], [401, 401, 401, 401])
+        self.assertEqual(statuses[4], 429)
+
+        locked_response = self.client.post(
+            "/api/auth/login",
+            json={"username": "throttle", "password": "secret-123"},
+        )
+        self.assertEqual(locked_response.status_code, 429)
+        self.assertEqual(locked_response.json()["error"]["code"], "login_locked")
+
+    def test_origin_guard_rejects_cookie_authenticated_mutation_before_logout_revocation(
+        self,
+    ) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        self._create_user(username="origin-user", password="secret-123")
+        login_response = self.client.post(
+            "/api/auth/login",
+            json={"username": "origin-user", "password": "secret-123"},
+        )
+        self.assertEqual(login_response.status_code, 200)
+
+        hostile_logout = self.client.post(
+            "/api/auth/logout",
+            headers={"origin": "https://evil.example"},
+        )
+
+        self.assertEqual(hostile_logout.status_code, 403)
+        self.assertEqual(hostile_logout.json()["error"]["code"], "csrf_origin_forbidden")
+        with self.database.connect() as connection:
+            revoked_at = connection.execute("SELECT revoked_at FROM sessions").fetchone()[0]
+        self.assertIsNone(revoked_at)
+
+        allowed_logout = self.client.post(
+            "/api/auth/logout",
+            headers={"referer": "http://testserver/settings"},
+        )
+        self.assertEqual(allowed_logout.status_code, 200)
+
+
+class AdminUserManagementApiTests(unittest.TestCase):
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    root: Path | None = None
+    default_config_path: Path | None = None
+    database: WebDatabase | None = None
+    client: TestClient | None = None
+    admin_id: int | None = None
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.default_config_path = self.root / "config.example.yaml"
+        self.default_config_path.write_text(
+            (
+                "llm:\n"
+                "  api_key: default-key\n"
+                "github:\n"
+                "  oauth_client_secret: yaml-secret\n"
+                "deployment:\n"
+                "  secure_auth_cookies: false\n"
+                "  allowed_origins:\n"
+                "    - https://console.example\n"
+                "  allow_local_path_mode: true\n"
+                f"  local_path_allowlist:\n    - {self.root.as_posix()}\n"
+                "  global_max_running_tasks: 3\n"
+                "  per_user_max_running_tasks: 2\n"
+                "  global_max_pending_tasks: 7\n"
+                "  per_user_max_pending_tasks: 4\n"
+                "  upload_retention_hours: 12\n"
+                "  run_artifact_retention_days: 9\n"
+            ),
+            encoding="utf-8",
+        )
+        run_service = RunLifecycleService(workspace_root=self.root)
+        self.client = TestClient(
+            create_app(run_service=run_service, default_config_path=self.default_config_path)
+        )
+        self.database = WebDatabase.for_workspace(self.root)
+        self.admin_id = login_test_user(
+            self.client,
+            self.database,
+            username="admin-manager",
+            role="admin",
+        )
+
+    def tearDown(self) -> None:
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
+
+    def test_admin_user_management_create_list_role_reset_and_disable_are_safe(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+
+        created_response = self.client.post(
+            "/api/admin/users",
+            json={"username": "Managed", "password": "managed-secret", "role": "user"},
+        )
+        self.assertEqual(created_response.status_code, 201, created_response.text)
+        created = created_response.json()
+        user_id = created["id"]
+        self.assertEqual(created["username"], "managed")
+        self.assertEqual(created["role"], "user")
+        self.assertTrue(created["isActive"])
+        created_serialized = json.dumps(created).lower()
+        self.assertNotIn("managed-secret", created_serialized)
+        self.assertNotIn("password_hash", created_serialized)
+        self.assertNotIn("hash", created_serialized)
+        self.assertNotIn("token", created_serialized)
+
+        list_response = self.client.get("/api/admin/users")
+        self.assertEqual(list_response.status_code, 200)
+        users_payload = list_response.json()["users"]
+        self.assertIn("managed", {user["username"] for user in users_payload})
+        serialized = json.dumps(users_payload, ensure_ascii=False).lower()
+        self.assertNotIn("password_hash", serialized)
+        self.assertNotIn("token_hash", serialized)
+        self.assertNotIn("comet_session", serialized)
+
+        promote_response = self.client.post(
+            f"/api/admin/users/{user_id}/role",
+            json={"role": "admin"},
+        )
+        self.assertEqual(promote_response.status_code, 200)
+        self.assertEqual(promote_response.json()["role"], "admin")
+
+        reset_response = self.client.post(
+            f"/api/admin/users/{user_id}/reset-password",
+            json={"password": "new-managed-secret"},
+        )
+        self.assertEqual(reset_response.status_code, 200)
+        managed_user = self.database.get_user_by_username("managed")
+        self.assertIsNotNone(managed_user)
+        assert managed_user is not None
+        self.assertTrue(
+            TEST_PASSWORD_HASHER.verify(managed_user.password_hash, "new-managed-secret")
+        )
+
+        demote_response = self.client.post(
+            f"/api/admin/users/{user_id}/role",
+            json={"role": "user"},
+        )
+        self.assertEqual(demote_response.status_code, 200)
+        self.assertEqual(demote_response.json()["role"], "user")
+
+        disable_response = self.client.post(f"/api/admin/users/{user_id}/disable")
+        self.assertEqual(disable_response.status_code, 200)
+        self.assertFalse(disable_response.json()["isActive"])
+
+    def test_user_management_admin_required_for_ordinary_users(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        login_test_user(self.client, self.database, username="regular-manager", role="user")
+
+        response = self.client.get("/api/admin/users")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["error"]["code"], "admin_required")
+
+    def test_disabled_session_returns_401_immediately_after_admin_disable(self) -> None:
+        assert self.root is not None
+        assert self.database is not None
+        assert self.default_config_path is not None
+        user_client = TestClient(
+            create_app(
+                run_service=RunLifecycleService(workspace_root=self.root),
+                default_config_path=self.default_config_path,
+            )
+        )
+        user_id = login_test_user(user_client, self.database, username="disable-me", role="user")
+        active_before = user_client.get("/api/auth/me")
+        self.assertEqual(active_before.status_code, 200)
+
+        assert self.client is not None
+        disable_response = self.client.post(f"/api/admin/users/{user_id}/disable")
+        self.assertEqual(disable_response.status_code, 200)
+
+        after_disable = user_client.get("/api/auth/me")
+        self.assertEqual(after_disable.status_code, 401)
+        self.assertEqual(after_disable.json()["error"]["code"], "auth_required")
+
+        evidence_path = Path(".sisyphus/evidence/task-15-disabled-session.json")
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence_path.write_text(
+            json.dumps(
+                {
+                    "userId": user_id,
+                    "beforeStatus": active_before.status_code,
+                    "disableStatus": disable_response.status_code,
+                    "afterStatus": after_disable.status_code,
+                    "afterCode": after_disable.json()["error"]["code"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def test_last_admin_protected_for_disable_and_demote(self) -> None:
+        assert self.client is not None
+        assert self.admin_id is not None
+
+        disable_response = self.client.post(f"/api/admin/users/{self.admin_id}/disable")
+        demote_response = self.client.post(
+            f"/api/admin/users/{self.admin_id}/role",
+            json={"role": "user"},
+        )
+
+        self.assertEqual(disable_response.status_code, 409)
+        self.assertEqual(disable_response.json()["error"]["code"], "last_admin_protected")
+        self.assertEqual(demote_response.status_code, 409)
+        self.assertEqual(demote_response.json()["error"]["code"], "last_admin_protected")
+
+        evidence_path = Path(".sisyphus/evidence/task-15-last-admin.txt")
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence_path.write_text(
+            "disable=last_admin_protected\nrole=last_admin_protected\n",
+            encoding="utf-8",
+        )
+
+    def test_public_config_exposes_deployment_controls_without_secrets(self) -> None:
+        assert self.client is not None
+
+        response = self.client.get("/api/deployment/public-config")
+
+        self.assertEqual(response.status_code, 200)
+        deployment = response.json()["deployment"]
+        self.assertFalse(deployment["secureAuthCookies"])
+        self.assertEqual(deployment["allowedOrigins"], ["https://console.example"])
+        self.assertTrue(deployment["allowLocalPathMode"])
+        self.assertNotIn("localPathAllowlist", deployment)
+        self.assertTrue(deployment["localPathAllowlistConfigured"])
+        self.assertEqual(deployment["localPathAllowlistCount"], 1)
+        self.assertEqual(deployment["globalMaxRunningTasks"], 3)
+        self.assertEqual(deployment["perUserMaxPendingTasks"], 4)
+        self.assertEqual(deployment["uploadRetentionHours"], 12)
+        self.assertEqual(deployment["runArtifactRetentionDays"], 9)
+        serialized = json.dumps(response.json(), ensure_ascii=False).lower()
+        assert self.root is not None
+        self.assertNotIn(self.root.as_posix().lower(), serialized)
+        self.assertNotIn("/home", serialized)
+        self.assertNotIn("state/users", serialized)
+        self.assertNotIn("sandbox/users", serialized)
+        self.assertNotIn("config.yaml", serialized)
+        self.assertNotIn("default-key", serialized)
+        self.assertNotIn("yaml-secret", serialized)
+        self.assertNotIn("oauth", serialized)
+        self.assertNotIn("token", serialized)
+        self.assertNotIn("secret", serialized)
+        self.assertNotIn("api_key", serialized)
+
+
 class ConfigApiTests(unittest.TestCase):
     def test_app_is_importable(self) -> None:
-        self.assertEqual(app.title, "COMET-L Web API")
+        self.assertIsNotNone(app)
+        self.assertTrue(callable(app))
 
     def test_defaults_endpoint_returns_normalized_config(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.get("/api/config/defaults")
 
@@ -57,7 +688,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertNotIn("paths", payload["config"])
 
     def test_parse_valid_yaml_returns_normalized_config(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.post(
             "/api/config/parse",
@@ -87,7 +718,7 @@ class ConfigApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["config"]["llm"]["api_key"], "test-key")
+        self.assertEqual(payload["config"]["llm"]["api_key"], "[REDACTED]")
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4o-mini")
         self.assertEqual(payload["config"]["execution"]["timeout"], 123)
         self.assertTrue(payload["config"]["preprocessing"]["exit_after_preprocessing"])
@@ -96,7 +727,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertNotIn("paths", payload["config"])
 
     def test_parse_yaml_rejects_invalid_mutation_enabled_type(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.post(
             "/api/config/parse",
@@ -124,7 +755,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(error_map[("evolution", "mutation_enabled")], "bool_type")
 
     def test_parse_valid_yaml_accepts_large_parallel_values(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.post(
             "/api/config/parse",
@@ -153,7 +784,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["config"]["agent"]["parallel"]["max_parallel_targets"], 64)
 
     def test_parse_valid_yaml_preserves_nullable_preprocessing_max_workers(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.post(
             "/api/config/parse",
@@ -175,7 +806,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertIsNone(payload["config"]["preprocessing"]["max_workers"])
 
     def test_parse_invalid_yaml_returns_field_errors(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.post(
             "/api/config/parse",
@@ -200,7 +831,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(error_map[("execution", "timeout")], "greater_than_equal")
 
     def test_parse_large_parallel_targets_preserves_lower_bound_validation(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.post(
             "/api/config/parse",
@@ -232,7 +863,7 @@ class ConfigApiTests(unittest.TestCase):
         )
 
     def test_parse_yaml_rejects_removed_paths_field(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.post(
             "/api/config/parse",
@@ -255,7 +886,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertTrue(any(item["path"] == ["paths"] for item in payload["error"]["fieldErrors"]))
 
     def test_parse_yaml_filters_github_deployment_config(self) -> None:
-        client = TestClient(create_app(run_service=RunLifecycleService()))
+        client = authenticated_client()
 
         response = client.post(
             "/api/config/parse",
@@ -292,11 +923,9 @@ class ConfigApiTests(unittest.TestCase):
                 "llm:\n  api_key: default-key\n",
                 encoding="utf-8",
             )
-            client = TestClient(
-                create_app(
-                    run_service=RunLifecycleService(workspace_root=root),
-                    default_config_path=default_config_path,
-                )
+            client = authenticated_client(
+                run_service=RunLifecycleService(workspace_root=root),
+                default_config_path=default_config_path,
             )
 
             with patch.dict(
@@ -314,12 +943,584 @@ class ConfigApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             payload = response.json()["config"]["github"]
             self.assertEqual(payload["oauth_client_id"], "env-client-id")
-            self.assertEqual(payload["oauth_client_secret"], "env-client-secret")
+            self.assertEqual(payload["oauth_client_secret"], "[REDACTED]")
             self.assertEqual(
                 payload["oauth_redirect_uri"],
                 "http://127.0.0.1:9000/api/github/auth/callback",
             )
             self.assertEqual(payload["oauth_scope"], "public_repo")
+
+    def test_policy_redacts_secret_like_config_snapshot_values(self) -> None:
+        settings = Settings.model_validate(
+            {
+                "llm": {"api_key": "llm-secret"},
+                "knowledge": {"embedding": {"api_key": "embedding-secret"}},
+                "github": {
+                    "oauth_client_secret": "oauth-secret",
+                    "encrypted_token_store_path": "/tmp/token.enc",
+                    "encrypted_key_store_path": "/tmp/token.key",
+                },
+            }
+        )
+
+        from comet.config.policy import redacted_settings_dict
+
+        snapshot, annotations = redacted_settings_dict(settings)
+        serialized = json.dumps(snapshot, ensure_ascii=False)
+
+        self.assertNotIn("llm-secret", serialized)
+        self.assertNotIn("embedding-secret", serialized)
+        self.assertNotIn("oauth-secret", serialized)
+        self.assertNotIn("/tmp/token.enc", serialized)
+        self.assertEqual(snapshot["llm"]["api_key"], "[REDACTED]")
+        self.assertIn("github.encrypted_token_store_path", annotations.redacted_fields)
+
+
+def _zip_bytes(entries: dict[str, bytes | str], *, symlink_name: str | None = None) -> BytesIO:
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for name, content in entries.items():
+            payload = content.encode("utf-8") if isinstance(content, str) else content
+            zip_file.writestr(name, payload)
+        if symlink_name is not None:
+            link_info = zipfile.ZipInfo(symlink_name)
+            link_info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zip_file.writestr(link_info, "target.txt")
+    archive.seek(0)
+    return archive
+
+
+class UploadApiTests(unittest.TestCase):
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    root: Path | None = None
+    database: WebDatabase | None = None
+    client: TestClient | None = None
+    user_id: int | None = None
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        default_config_path = self.root / "config.example.yaml"
+        default_config_path.write_text("llm:\n  api_key: default-key\n", encoding="utf-8")
+        run_service = RunLifecycleService(workspace_root=self.root)
+        self.client = TestClient(
+            create_app(run_service=run_service, default_config_path=default_config_path)
+        )
+        self.database = WebDatabase.for_workspace(self.root)
+        self.user_id = login_test_user(self.client, self.database)
+
+    def tearDown(self) -> None:
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
+
+    def _post_upload(self, path: str, archive: BytesIO, filename: str = "upload.zip") -> Any:
+        assert self.client is not None
+        return self.client.post(
+            path,
+            files={"file": (filename, archive, "application/octet-stream")},
+        )
+
+    def _upload_row(self, upload_id: str) -> sqlite3.Row:
+        assert self.database is not None
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM uploads WHERE id = ?",
+                (upload_id,),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        assert row is not None
+        return row
+
+    def test_project_upload_accepts_valid_zip_and_persists_user_scoped_metadata(self) -> None:
+        assert self.root is not None
+        assert self.user_id is not None
+        archive = _zip_bytes(
+            {
+                "sample-project/pom.xml": "<project/>",
+                "sample-project/src/main/java/App.java": "class App {}",
+            }
+        )
+
+        response = self._post_upload("/api/uploads/project", archive, "project.zip")
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        self.assertEqual(payload["kind"], "project")
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["originalFilename"], "project.zip")
+        self.assertEqual(payload["extractedRoot"], "sample-project")
+        self.assertNotIn(str(self.root), response.text)
+
+        upload_root = (
+            self.root / "sandbox" / "users" / str(self.user_id) / "uploads" / payload["uploadId"]
+        )
+        self.assertTrue((upload_root / "raw" / "project.zip").is_file())
+        self.assertTrue((upload_root / "extracted" / "sample-project" / "pom.xml").is_file())
+        row = self._upload_row(payload["uploadId"])
+        self.assertEqual(row["user_id"], self.user_id)
+        self.assertEqual(row["kind"], "project")
+        self.assertEqual(row["status"], "ready")
+        metadata = json.loads(row["path_metadata_json"])
+        self.assertEqual(metadata["original_filename"], "project.zip")
+        self.assertGreater(metadata["size_bytes"], 0)
+
+    def test_bug_reports_upload_accepts_allowed_report_extensions(self) -> None:
+        archive = _zip_bytes(
+            {
+                "reports/bug.md": "# Bug",
+                "reports/fix.patch": "diff --git a/A.java b/A.java",
+                "reports/notes.txt": "plain text",
+            }
+        )
+
+        response = self._post_upload("/api/uploads/bug-reports", archive, "reports.zip")
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        self.assertEqual(payload["kind"], "bug_reports")
+        self.assertEqual(payload["status"], "ready")
+        row = self._upload_row(payload["uploadId"])
+        self.assertEqual(row["kind"], "bug_reports")
+
+    def test_project_upload_rejects_zip_traversal_without_writing_escape(self) -> None:
+        assert self.root is not None
+        archive = _zip_bytes({"../outside.txt": "escape", "pom.xml": "<project/>"})
+
+        response = self._post_upload("/api/uploads/project", archive, "evil.zip")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "unsafe_zip_entry")
+        self.assertFalse((self.root / "outside.txt").exists())
+
+    def test_bug_reports_upload_rejects_unsupported_extension(self) -> None:
+        archive = _zip_bytes({"reports/exploit.sh": "#!/bin/sh"})
+
+        response = self._post_upload("/api/uploads/bug-reports", archive, "reports.zip")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "unsupported_bug_report_file")
+
+    def test_project_upload_rejects_non_zip_content(self) -> None:
+        response = self._post_upload("/api/uploads/project", BytesIO(b"not a zip"), "project.zip")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "invalid_zip")
+
+    def test_project_upload_rejects_symlink_entries(self) -> None:
+        archive = _zip_bytes({"pom.xml": "<project/>"}, symlink_name="linked.txt")
+
+        response = self._post_upload("/api/uploads/project", archive, "symlink.zip")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "unsafe_zip_entry")
+
+    def test_project_upload_rejects_duplicate_normalized_paths(self) -> None:
+        archive = BytesIO()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.writestr("sample-project/pom.xml", "<project/>")
+            zip_file.writestr("sample-project/src/main/java/App.java", "class App {}")
+            zip_file.writestr("sample-project/./src/main/java/App.java", "class App2 {}")
+        archive.seek(0)
+
+        response = self._post_upload("/api/uploads/project", archive, "duplicate.zip")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "unsafe_zip_entry")
+
+
+class UploadRunApiTests(unittest.TestCase):
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    root: Path | None = None
+    project_path: Path | None = None
+    bug_reports_path: Path | None = None
+    default_config_path: Path | None = None
+    release_run: threading.Event | None = None
+    run_started: threading.Event | None = None
+    run_service: RunLifecycleService | None = None
+    database: WebDatabase | None = None
+    client: TestClient | None = None
+    user_id: int | None = None
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.project_path = self.root / "allowlisted-project"
+        self.project_path.mkdir()
+        (self.project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+        self.bug_reports_path = self.root / "allowlisted-reports"
+        self.bug_reports_path.mkdir()
+        (self.bug_reports_path / "bug.md").write_text("# Bug", encoding="utf-8")
+        self.default_config_path = self.root / "config.example.yaml"
+        self.default_config_path.write_text("llm:\n  api_key: default-key\n", encoding="utf-8")
+        self.release_run = threading.Event()
+        self.run_started = threading.Event()
+        self.run_service = RunLifecycleService(workspace_root=self.root)
+
+        def fake_initialize(
+            config: Settings,
+            bug_reports_dir: str | None = None,
+            parallel_mode: bool = False,
+        ) -> dict[str, object]:
+            return {
+                "config": config,
+                "bug_reports_dir": bug_reports_dir,
+                "parallel_mode": parallel_mode,
+            }
+
+        def fake_run(
+            project_path: str,
+            components: dict[str, object],
+            resume_state: str | None = None,
+        ) -> None:
+            del project_path, components, resume_state
+            assert self.run_started is not None
+            assert self.release_run is not None
+            self.run_started.set()
+            if not self.release_run.wait(timeout=5):
+                raise TimeoutError("run release timeout")
+
+        self.client = TestClient(
+            create_app(
+                run_service=self.run_service,
+                default_config_path=self.default_config_path,
+                system_initializer=fake_initialize,
+                evolution_runner=fake_run,
+            )
+        )
+        self.database = WebDatabase.for_workspace(self.root)
+        self.user_id = login_test_user(self.client, self.database)
+
+    def tearDown(self) -> None:
+        if self.release_run is not None:
+            self.release_run.set()
+        if self.run_service is not None:
+            joined: set[str] = set()
+            while True:
+                pending_threads = [
+                    (run_id, thread)
+                    for run_id, thread in self.run_service._threads.items()
+                    if run_id not in joined
+                ]
+                if not pending_threads:
+                    break
+                for run_id, thread in pending_threads:
+                    thread.join(timeout=5)
+                    joined.add(run_id)
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
+
+    def _upload_project(self, filename: str = "project.zip") -> str:
+        assert self.client is not None
+        response = self.client.post(
+            "/api/uploads/project",
+            files={
+                "file": (
+                    filename,
+                    _zip_bytes(
+                        {
+                            "sample-project/pom.xml": "<project/>",
+                            "sample-project/src/main/java/App.java": "class App {}",
+                        }
+                    ),
+                    "application/octet-stream",
+                )
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        return str(response.json()["uploadId"])
+
+    def _upload_bug_reports(self) -> str:
+        assert self.client is not None
+        response = self.client.post(
+            "/api/uploads/bug-reports",
+            files={
+                "file": (
+                    "reports.zip",
+                    _zip_bytes({"reports/bug.md": "# Bug"}),
+                    "application/octet-stream",
+                )
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        return str(response.json()["uploadId"])
+
+    def _upload_row(self, upload_id: str) -> sqlite3.Row:
+        assert self.database is not None
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM uploads WHERE id = ?",
+                (upload_id,),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        assert row is not None
+        return row
+
+    def _run_count(self) -> int:
+        assert self.database is not None
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM runs").fetchone()
+        return int(row["count"])
+
+    def test_run_from_upload_id_marks_uploads_used_and_records_source_metadata(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        project_upload_id = self._upload_project()
+        bug_reports_upload_id = self._upload_bug_reports()
+
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectUploadId": project_upload_id,
+                "bugReportsUploadId": bug_reports_upload_id,
+                "budget": "42",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        self.assertIn(payload["status"], {"pending", "starting", "running"})
+        self.assertIsNotNone(payload["queuePosition"])
+        self.assertIn("configPolicy", payload)
+        self.assertEqual(payload["uploadSource"]["projectUploadId"], project_upload_id)
+        self.assertEqual(payload["uploadSource"]["bugReportsUploadId"], bug_reports_upload_id)
+        self.assertNotIn(str(self.root), response.text)
+
+        project_row = self._upload_row(project_upload_id)
+        reports_row = self._upload_row(bug_reports_upload_id)
+        self.assertIsNotNone(project_row["used_at"])
+        self.assertIsNotNone(reports_row["used_at"])
+        run_id = payload["runId"]
+        run_request = self.run_service.get_run_request(run_id)
+        self.assertEqual(run_request.project_path, project_row["extracted_path"])
+        self.assertEqual(run_request.bug_reports_dir, reports_row["extracted_path"])
+        assert self.database is not None
+        record = self.database.get_run_record(run_id)
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.project_source_type, "upload")
+        self.assertEqual(record.path_metadata["uploadSource"]["projectUploadId"], project_upload_id)
+
+    def test_local_path_forbidden_for_ordinary_user_creates_no_run(self) -> None:
+        assert self.client is not None
+        assert self.project_path is not None
+        assert self.bug_reports_path is not None
+
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectPath": str(self.project_path),
+                "bugReportsDir": str(self.bug_reports_path),
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["error"]["code"], "local_path_forbidden")
+        self.assertEqual(self._run_count(), 0)
+        self.assertNotIn(str(self.project_path), response.text)
+        self.assertNotIn(str(self.bug_reports_path), response.text)
+
+    def test_upload_id_owned_by_alice_is_hidden_from_bob(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        project_upload_id = self._upload_project()
+        login_test_user(self.client, self.database, username="bob")
+
+        response = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": project_upload_id},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["error"]["code"], "upload_not_found")
+        self.assertEqual(self._run_count(), 0)
+        self.assertNotIn("alice", response.text)
+        self.assertNotIn("sandbox", response.text)
+
+    def test_invalid_optional_bug_report_upload_does_not_consume_project_upload(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        project_upload_id = self._upload_project()
+        wrong_kind_bug_reports_upload_id = self._upload_project("wrong-kind-bug-reports.zip")
+
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectUploadId": project_upload_id,
+                "bugReportsUploadId": wrong_kind_bug_reports_upload_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["error"]["code"], "upload_not_found")
+        self.assertEqual(self._run_count(), 0)
+        self.assertIsNone(self._upload_row(project_upload_id)["used_at"])
+
+    def test_queue_limit_failure_does_not_consume_project_upload(self) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        self.default_config_path.write_text(
+            (
+                "llm:\n"
+                "  api_key: default-key\n"
+                "deployment:\n"
+                "  global_max_running_tasks: 1\n"
+                "  per_user_max_running_tasks: 1\n"
+                "  global_max_pending_tasks: 1\n"
+                "  per_user_max_pending_tasks: 1\n"
+            ),
+            encoding="utf-8",
+        )
+        first_upload_id = self._upload_project("first-queue.zip")
+        second_upload_id = self._upload_project("second-queue.zip")
+        third_upload_id = self._upload_project("third-queue.zip")
+        first = self.client.post("/api/runs", data={"projectUploadId": first_upload_id})
+        self.assertEqual(first.status_code, 201, first.text)
+        assert self.run_started is not None
+        self.assertTrue(self.run_started.wait(timeout=5))
+        second = self.client.post("/api/runs", data={"projectUploadId": second_upload_id})
+        self.assertEqual(second.status_code, 201, second.text)
+
+        third = self.client.post("/api/runs", data={"projectUploadId": third_upload_id})
+
+        self.assertEqual(third.status_code, 429)
+        self.assertEqual(third.json()["error"]["code"], "queue_limit_exceeded")
+        self.assertEqual(self._run_count(), 2)
+        self.assertIsNotNone(self._upload_row(first_upload_id)["used_at"])
+        self.assertIsNotNone(self._upload_row(second_upload_id)["used_at"])
+        self.assertIsNone(self._upload_row(third_upload_id)["used_at"])
+
+    def test_upload_id_reuse_is_rejected_without_creating_second_run(self) -> None:
+        assert self.client is not None
+        project_upload_id = self._upload_project()
+        first = self.client.post("/api/runs", data={"projectUploadId": project_upload_id})
+        self.assertEqual(first.status_code, 201, first.text)
+
+        second = self.client.post("/api/runs", data={"projectUploadId": project_upload_id})
+
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.json()["error"]["code"], "upload_already_used")
+        self.assertEqual(self._run_count(), 1)
+
+    def test_upload_consumption_race_failure_leaves_no_orphan_pending_run(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        project_upload_id = self._upload_project("race-lost.zip")
+
+        with patch.object(
+            WebDatabase,
+            "mark_upload_used_once",
+            return_value=None,
+        ):
+            response = self.client.post("/api/runs", data={"projectUploadId": project_upload_id})
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["error"]["code"], "upload_already_used")
+        self.assertEqual(self._run_count(), 0)
+        self.assertIsNone(self._upload_row(project_upload_id)["used_at"])
+
+    def test_create_run_failure_rolls_back_upload_consumption(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        project_upload_id = self._upload_project("create-run-fails.zip")
+
+        with patch.object(
+            self.run_service,
+            "create_run",
+            side_effect=InvalidJavaVersionError("internal selected-java-version detail"),
+        ):
+            response = self.client.post("/api/runs", data={"projectUploadId": project_upload_id})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "invalid_java_version")
+        self.assertEqual(self._run_count(), 0)
+        self.assertIsNone(self._upload_row(project_upload_id)["used_at"])
+        self.assertNotIn("internal selected-java-version detail", response.text)
+
+    def test_second_upload_consumption_failure_rolls_back_first_upload(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        project_upload_id = self._upload_project("partial-project.zip")
+        bug_reports_upload_id = self._upload_bug_reports()
+        original_mark_upload_used_once = self.database.mark_upload_used_once
+
+        def fail_second_mark(
+            *,
+            upload_id: str,
+            user_id: int,
+            kind: str,
+            status: str,
+        ) -> Any:
+            if upload_id == bug_reports_upload_id:
+                return None
+            return original_mark_upload_used_once(
+                upload_id=upload_id,
+                user_id=user_id,
+                kind=kind,
+                status=status,
+            )
+
+        with patch.object(WebDatabase, "mark_upload_used_once", side_effect=fail_second_mark):
+            response = self.client.post(
+                "/api/runs",
+                data={
+                    "projectUploadId": project_upload_id,
+                    "bugReportsUploadId": bug_reports_upload_id,
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["error"]["code"], "upload_already_used")
+        self.assertEqual(self._run_count(), 0)
+        self.assertIsNone(self._upload_row(project_upload_id)["used_at"])
+        self.assertIsNone(self._upload_row(bug_reports_upload_id)["used_at"])
+
+    def test_admin_local_path_mode_disabled_returns_403_and_creates_no_run(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        assert self.project_path is not None
+        login_test_user(self.client, self.database, username="admin", role="admin")
+
+        response = self.client.post("/api/runs", data={"projectPath": str(self.project_path)})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["error"]["code"], "local_path_forbidden")
+        self.assertEqual(self._run_count(), 0)
+        self.assertNotIn(str(self.project_path), response.text)
+
+    def test_admin_local_path_enabled_and_allowlisted_succeeds(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        assert self.default_config_path is not None
+        assert self.project_path is not None
+        assert self.bug_reports_path is not None
+        assert self.root is not None
+        self.default_config_path.write_text(
+            (
+                "llm:\n"
+                "  api_key: default-key\n"
+                "deployment:\n"
+                "  allow_local_path_mode: true\n"
+                f"  local_path_allowlist:\n    - {self.root.as_posix()}\n"
+            ),
+            encoding="utf-8",
+        )
+        login_test_user(self.client, self.database, username="admin-allow", role="admin")
+
+        response = self.client.post(
+            "/api/runs",
+            data={
+                "projectPath": str(self.project_path),
+                "bugReportsDir": str(self.bug_reports_path),
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        self.assertEqual(payload["uploadSource"], {"mode": "local_path"})
+        assert self.run_service is not None
+        run_request = self.run_service.get_run_request(payload["runId"])
+        self.assertEqual(run_request.project_path, str(self.project_path.resolve()))
+        self.assertEqual(run_request.bug_reports_dir, str(self.bug_reports_path.resolve()))
 
 
 class _FailingKeyring:
@@ -444,8 +1645,12 @@ class GitHubAuthApiTests(unittest.TestCase):
                 github_auth_service=self.github_auth_service,
             )
         )
+        login_test_user(self.client, WebDatabase.for_workspace(self.root), role="admin")
 
     def tearDown(self) -> None:
+        if self.run_service is not None:
+            for thread in list(self.run_service._threads.values()):
+                thread.join(timeout=5)
         if self.env_patcher is not None:
             self.env_patcher.stop()
         if self.temp_dir is not None:
@@ -467,6 +1672,31 @@ class GitHubAuthApiTests(unittest.TestCase):
         self.assertFalse(payload["connected"])
         self.assertFalse(payload["requiresReauth"])
         self.assertEqual(payload["provider"], "github-oauth-app")
+
+    def test_github_auth_and_repository_routes_require_admin_for_ordinary_users(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        login_test_user(
+            self.client,
+            WebDatabase.for_workspace(self.root),
+            username="github-ordinary",
+            role="user",
+        )
+
+        responses = [
+            self.client.get("/api/github/auth/status"),
+            self.client.get("/api/github/auth/connect-url"),
+            self.client.get("/api/github/auth/callback?code=ok-code&state=missing-state"),
+            self.client.get("/api/github/repositories"),
+            self.client.post(
+                "/api/github/auth/disconnect",
+                headers={"origin": "http://testserver"},
+            ),
+        ]
+
+        for response in responses:
+            self.assertEqual(response.status_code, 403, response.text)
+            self.assertEqual(response.json()["error"]["code"], "admin_required")
 
     def test_github_repositories_requires_authorization(self) -> None:
         assert self.client is not None
@@ -556,7 +1786,7 @@ class GitHubAuthApiTests(unittest.TestCase):
         self.assertEqual(callback_response.status_code, 303)
         self.assertEqual(
             callback_response.headers["location"],
-            "/?github_oauth=error&message=OAuth+%E5%9B%9E%E8%B0%83%E7%8A%B6%E6%80%81%E6%97%A0%E6%95%88%E6%88%96%E5%B7%B2%E8%BF%87%E6%9C%9F%EF%BC%8C%E8%AF%B7%E9%87%8D%E6%96%B0%E5%8F%91%E8%B5%B7%E6%8E%88%E6%9D%83%E3%80%82",
+            "/?github_oauth=error&message=GitHub+%E6%8E%88%E6%9D%83%E5%A4%B1%E8%B4%A5%EF%BC%8C%E8%AF%B7%E9%87%8D%E6%96%B0%E5%8F%91%E8%B5%B7%E6%8E%88%E6%9D%83%E3%80%82",
         )
 
     def test_github_auth_callback_returns_json_for_generic_accept_header(self) -> None:
@@ -624,6 +1854,7 @@ class GitHubAuthApiTests(unittest.TestCase):
                 github_auth_service=restarted_service,
             )
         )
+        restarted_client.cookies.update(self.client.cookies)
 
         status_response = restarted_client.get("/api/github/auth/status")
         self.assertEqual(status_response.status_code, 200)
@@ -646,7 +1877,10 @@ class GitHubAuthApiTests(unittest.TestCase):
         callback_response = self.client.get(f"/api/github/auth/callback?code=ok-code&state={state}")
         self.assertEqual(callback_response.status_code, 200)
 
-        disconnect_response = self.client.post("/api/github/auth/disconnect")
+        disconnect_response = self.client.post(
+            "/api/github/auth/disconnect",
+            headers={"origin": "http://testserver"},
+        )
         self.assertEqual(disconnect_response.status_code, 200)
         self.assertFalse(disconnect_response.json()["connected"])
 
@@ -780,8 +2014,12 @@ class GitHubRepoImportRunApiTests(unittest.TestCase):
                 evolution_runner=fake_run,
             )
         )
+        login_test_user(self.client, WebDatabase.for_workspace(self.root), role="admin")
 
     def tearDown(self) -> None:
+        if self.run_service is not None:
+            for thread in list(self.run_service._threads.values()):
+                thread.join(timeout=5)
         if self.env_patcher is not None:
             self.env_patcher.stop()
         if self.temp_dir is not None:
@@ -863,6 +2101,28 @@ class GitHubRepoImportRunApiTests(unittest.TestCase):
         self.assertTrue((imported_path / "src" / "main" / "java").exists())
         self.assertEqual(run_request.github_base_branch, "develop")
         self.assertTrue(mocked_clone.called)
+
+    def test_post_runs_github_repo_requires_admin_for_ordinary_users(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        database = WebDatabase.for_workspace(self.root)
+        login_test_user(
+            self.client,
+            database,
+            username="github-run-ordinary",
+            role="user",
+        )
+
+        response = self.client.post(
+            "/api/runs",
+            data={"githubRepoUrl": "https://github.com/openai/example-repo.git"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["error"]["code"], "admin_required")
+        with database.connect() as connection:
+            run_count = connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        self.assertEqual(run_count, 0)
 
     def test_post_runs_imports_github_repo_without_project_path_field(self) -> None:
         assert self.client is not None
@@ -953,7 +2213,7 @@ class GitHubRepoImportRunApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["error"]["code"], "git_clone_failed")
         self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "git_clone_failed")
-        self.assertIn("缺少 git", payload["error"]["fieldErrors"][0]["message"])
+        self.assertEqual(payload["error"]["fieldErrors"][0]["message"], "仓库克隆失败。")
 
 
 class SnapshotTests(unittest.TestCase):
@@ -1145,6 +2405,7 @@ class StreamingApiTests(unittest.TestCase):
     default_config_path: Path | None = None
     run_service: RunLifecycleService | None = None
     client: TestClient | None = None
+    user_id: int | None = None
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -1172,6 +2433,7 @@ class StreamingApiTests(unittest.TestCase):
                 default_config_path=self.default_config_path,
             )
         )
+        self.user_id = login_test_user(self.client, WebDatabase.for_workspace(self.root))
 
     def tearDown(self) -> None:
         if self.temp_dir is not None:
@@ -1182,6 +2444,7 @@ class StreamingApiTests(unittest.TestCase):
         assert self.project_path is not None
         session = self.run_service.create_run(
             RunRequest(project_path=str(self.project_path)),
+            user_id=self.user_id,
             settings_loader=lambda _config_path: Settings.model_validate(
                 {"llm": {"api_key": "default-key", "model": "gpt-4"}}
             ),
@@ -1318,6 +2581,32 @@ class StreamingApiTests(unittest.TestCase):
         self.assertEqual(zero_log_payload["stream"]["bufferedEntryCount"], 0)
         self.assertEqual(zero_log_payload["stream"]["status"], "running")
 
+    def test_restarted_log_and_event_endpoints_tolerate_missing_runtime_routers(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        self.run_service.mark_completed(run_id)
+        restarted_service = RunLifecycleService(workspace_root=self.root)
+        restarted_service._event_buses.pop(run_id, None)
+        restarted_service._log_routers.pop(run_id, None)
+        restarted_client = TestClient(create_app(run_service=restarted_service))
+        restarted_client.cookies.update(self.client.cookies)
+
+        logs_response = restarted_client.get(f"/api/runs/{run_id}/logs")
+        main_log_response = restarted_client.get(f"/api/runs/{run_id}/logs/main")
+        events_response = restarted_client.get(f"/api/runs/{run_id}/events")
+
+        self.assertEqual(logs_response.status_code, 200)
+        self.assertEqual(logs_response.json()["streams"]["taskIds"], ["main"])
+        self.assertEqual(main_log_response.status_code, 200)
+        self.assertEqual(main_log_response.json()["entries"], [])
+        self.assertEqual(events_response.status_code, 200)
+        events = self._parse_sse(events_response.text)
+        self.assertGreaterEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "run.snapshot")
+        self.assertEqual(events[0]["data"]["snapshot"]["status"], "completed")
+
 
 class RunApiTests(unittest.TestCase):
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
@@ -1329,6 +2618,7 @@ class RunApiTests(unittest.TestCase):
     run_started: threading.Event | None = None
     run_service: RunLifecycleService | None = None
     client: TestClient | None = None
+    user_id: int | None = None
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -1340,7 +2630,14 @@ class RunApiTests(unittest.TestCase):
         self.non_maven_path.mkdir()
         self.default_config_path = self.root / "config.example.yaml"
         self.default_config_path.write_text(
-            ("llm:\n  api_key: default-key\n  model: gpt-4\n"),
+            (
+                "llm:\n"
+                "  api_key: default-key\n"
+                "  model: gpt-4\n"
+                "deployment:\n"
+                "  max_budget: 500\n"
+                "  max_run_timeout_seconds: 7200\n"
+            ),
             encoding="utf-8",
         )
         self.release_run = threading.Event()
@@ -1417,10 +2714,24 @@ class RunApiTests(unittest.TestCase):
                 evolution_runner=fake_run,
             )
         )
+        self.user_id = login_test_user(self.client, WebDatabase.for_workspace(self.root))
 
     def tearDown(self) -> None:
         if self.release_run is not None:
             self.release_run.set()
+        if self.run_service is not None:
+            joined: set[str] = set()
+            while True:
+                pending_threads = [
+                    (run_id, thread)
+                    for run_id, thread in self.run_service._threads.items()
+                    if run_id not in joined
+                ]
+                if not pending_threads:
+                    break
+                for run_id, thread in pending_threads:
+                    thread.join(timeout=5)
+                    joined.add(run_id)
         if self.temp_dir is not None:
             self.temp_dir.cleanup()
 
@@ -1432,6 +2743,205 @@ class RunApiTests(unittest.TestCase):
                 return
             time.sleep(0.01)
         self.fail(f"run {run_id} did not reach status {expected}")
+
+    def _create_owned_run(self, user_id: int) -> str:
+        assert self.run_service is not None
+        assert self.project_path is not None
+        session = self.run_service.create_run(
+            RunRequest(project_path=str(self.project_path)),
+            user_id=user_id,
+            settings_loader=lambda _config_path: Settings.model_validate(
+                {"llm": {"api_key": "default-key", "model": "gpt-4"}}
+            ),
+        )
+        self.run_service.mark_completed(session.run_id)
+        return session.run_id
+
+    def _upload_project_for_run(self, filename: str = "project.zip") -> str:
+        assert self.client is not None
+        response = self.client.post(
+            "/api/uploads/project",
+            files={
+                "file": (
+                    filename,
+                    _zip_bytes(
+                        {
+                            "sample-project/pom.xml": "<project/>",
+                            "sample-project/src/main/java/App.java": "class App {}",
+                        }
+                    ),
+                    "application/octet-stream",
+                )
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        return str(response.json()["uploadId"])
+
+    def test_run_routes_require_authentication_by_default(self) -> None:
+        assert self.client is not None
+        self.client.cookies.clear()
+
+        response = self.client.get("/api/runs/history")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["error"]["code"], "auth_required")
+
+    def test_cross_user_run_access_is_hidden_without_paths_or_usernames(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        database = WebDatabase.for_workspace(self.root)
+        other_user_id = database.create_user(
+            username="bob",
+            password_hash=TEST_PASSWORD_HASHER.hash(TEST_PASSWORD),
+        )
+        run_id = self._create_owned_run(other_user_id)
+
+        response = self.client.get(f"/api/runs/{run_id}/results")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["error"]["code"], "run_not_found")
+        body = response.text
+        for forbidden in [
+            "/home",
+            "state/runs",
+            "sandbox",
+            "output",
+            "config.yaml",
+            "bob",
+        ]:
+            self.assertNotIn(forbidden, body)
+
+    def test_cross_user_logs_events_results_and_artifacts_use_persisted_owner(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        database = WebDatabase.for_workspace(self.root)
+        other_user_id = database.create_user(
+            username="bob-task8",
+            password_hash=TEST_PASSWORD_HASHER.hash(TEST_PASSWORD),
+        )
+        run_id = self._create_owned_run(other_user_id)
+        session = self.run_service.get_session(run_id)
+        Path(session.paths["final_state"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(session.paths["final_state"]).write_text(
+            '{"secret": "other-user-file"}',
+            encoding="utf-8",
+        )
+        Path(session.paths["log"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(session.paths["log"]).write_text("other-user-log\n", encoding="utf-8")
+        session.user_id = self.user_id
+
+        responses = [
+            self.client.get(f"/api/runs/{run_id}/logs"),
+            self.client.get(f"/api/runs/{run_id}/logs/main"),
+            self.client.get(f"/api/runs/{run_id}/results"),
+            self.client.get(f"/api/runs/{run_id}/artifacts/final-state"),
+            self.client.get(f"/api/runs/{run_id}/events"),
+        ]
+
+        for response in responses:
+            self.assertEqual(response.status_code, 404)
+            self.assertEqual(response.json()["error"]["code"], "run_not_found")
+            body = response.text
+            self.assertNotIn("other-user-file", body)
+            self.assertNotIn("other-user-log", body)
+            self.assertNotIn("bob-task8", body)
+            self.assertNotIn(f'"userId":{other_user_id}', body)
+            self.assertNotIn("owner", body.lower())
+
+    def test_run_cancel_is_hidden_from_cross_user_and_visible_to_admin(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        database = WebDatabase.for_workspace(self.root)
+        other_user_id = database.create_user(
+            username="bob-cancel",
+            password_hash=TEST_PASSWORD_HASHER.hash(TEST_PASSWORD),
+        )
+        run_id = self.run_service.create_run(
+            RunRequest(project_path=str(self.project_path)),
+            user_id=other_user_id,
+            settings_loader=lambda _config_path: Settings.model_validate(
+                {"llm": {"api_key": "default-key", "model": "gpt-4"}}
+            ),
+        ).run_id
+
+        hidden_response = self.client.post(f"/api/runs/{run_id}/cancel")
+        self.assertEqual(hidden_response.status_code, 404)
+        self.assertEqual(hidden_response.json()["error"]["code"], "run_not_found")
+
+        login_test_user(self.client, database, username="admin-cancel", role="admin")
+        allowed_response = self.client.post(f"/api/runs/{run_id}/cancel")
+
+        self.assertEqual(allowed_response.status_code, 200)
+        self.assertEqual(allowed_response.json()["status"], "cancelled")
+
+    def test_pending_cancel_prevents_later_dispatch(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        assert self.default_config_path is not None
+        self.default_config_path.write_text(
+            (
+                "llm:\n"
+                "  api_key: default-key\n"
+                "deployment:\n"
+                "  global_max_running_tasks: 1\n"
+                "  per_user_max_running_tasks: 1\n"
+            ),
+            encoding="utf-8",
+        )
+        first_run_id = self.run_service.create_run(
+            RunRequest(project_path=str(self.project_path)),
+            user_id=self.user_id,
+            settings_loader=lambda _config_path: Settings.model_validate(
+                {"llm": {"api_key": "default-key", "model": "gpt-4"}}
+            ),
+        ).run_id
+        second_run_id = self.run_service.create_run(
+            RunRequest(project_path=str(self.project_path)),
+            user_id=self.user_id,
+            settings_loader=lambda _config_path: Settings.model_validate(
+                {"llm": {"api_key": "default-key", "model": "gpt-4"}}
+            ),
+        ).run_id
+
+        response = self.client.post(f"/api/runs/{second_run_id}/cancel")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "cancelled")
+        self.assertEqual(self.run_service.get_session(second_run_id).status, "cancelled")
+        self.assertIsNone(self.run_service.get_session(second_run_id).queue_position)
+        self.assertEqual(self.run_service.get_session(first_run_id).status, "pending")
+
+    def test_admin_can_read_user_run_where_supported(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        database = WebDatabase.for_workspace(self.root)
+        user_id = database.create_user(
+            username="charlie",
+            password_hash=TEST_PASSWORD_HASHER.hash(TEST_PASSWORD),
+        )
+        run_id = self._create_owned_run(user_id)
+        admin_client = TestClient(
+            create_app(
+                run_service=self.run_service,
+                default_config_path=self.default_config_path,
+            )
+        )
+        login_test_user(admin_client, database, username="admin", role="admin")
+
+        response = admin_client.get(f"/api/runs/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["runId"], run_id)
+
+    def test_admin_only_dependency_returns_stable_403_for_regular_users(self) -> None:
+        with self.assertRaises(ApiErrorException) as raised:
+            require_admin(user=AuthenticatedUser(id=1, username="regular", role="user"))
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(raised.exception.code, "admin_required")
 
     def test_post_runs_creates_background_run_and_returns_stable_snapshot(self) -> None:
         assert self.client is not None
@@ -1450,7 +2960,7 @@ class RunApiTests(unittest.TestCase):
             response = self.client.post(
                 "/api/runs",
                 data={
-                    "projectPath": str(self.project_path),
+                    "projectUploadId": self._upload_project_for_run(),
                     "maxIterations": "7",
                     "budget": "42",
                     "mutationEnabled": "false",
@@ -1481,8 +2991,10 @@ class RunApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201)
         created = response.json()
-        self.assertEqual(created["status"], "created")
+        self.assertIn(created["status"], {"pending", "starting", "running"})
+        self.assertIsNotNone(created["queuePosition"])
         self.assertEqual(created["mode"], "parallel")
+        self.assertIn("evolution.mutation_enabled", created["configPolicy"]["overriddenFields"])
         run_id = created["runId"]
 
         self.assertTrue(self.run_started.wait(timeout=5))
@@ -1495,19 +3007,37 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(current_payload["status"], "running")
         self.assertEqual(current_payload["mode"], "parallel")
         self.assertEqual(current_payload["selectedJavaVersion"], "17")
-        self.assertFalse(current_payload["mutationEnabled"])
+        self.assertTrue(current_payload["mutationEnabled"])
         self.assertEqual(current_payload["phase"]["key"], "preprocessing")
         self.assertEqual(current_payload["phase"]["label"], "Preprocessing")
         self.assertEqual(current_payload["iteration"], 1)
         self.assertIn("metrics", current_payload)
         self.assertIn("mutationScore", current_payload["metrics"])
-        self.assertIsNone(current_payload["metrics"]["mutationScore"])
-        self.assertIsNone(current_payload["metrics"]["totalMutants"])
+        self.assertEqual(current_payload["metrics"]["mutationScore"], 0.5)
+        self.assertEqual(current_payload["metrics"]["totalMutants"], 2)
         self.assertEqual(current_payload["metrics"]["lineCoverage"], 0.25)
         self.assertTrue(current_payload["artifacts"]["resolvedConfig"]["exists"])
         self.assertEqual(current_payload["logStreams"]["taskIds"], ["main"])
         self.assertEqual(current_payload["logStreams"]["byTaskId"]["main"]["status"], "running")
         self.assertIsNotNone(current_payload["logStreams"]["byTaskId"]["main"]["startedAt"])
+
+        history_response = self.client.get("/api/runs/history")
+        self.assertEqual(history_response.status_code, 200)
+        history_item = next(
+            item for item in history_response.json()["items"] if item["runId"] == run_id
+        )
+        self.assertEqual(history_item["mode"], "parallel")
+        self.assertEqual(history_item["projectSourceType"], "upload")
+
+        session = self.run_service.get_session(run_id)
+        user_segment = str(self.user_id)
+        self.assertIn(f"/state/users/{user_segment}/runs/{run_id}", session.paths["state"])
+        self.assertIn(f"/output/users/{user_segment}/runs/{run_id}", session.paths["output"])
+        self.assertIn(f"/sandbox/users/{user_segment}/runs/{run_id}", session.paths["sandbox"])
+        self.assertIn(f"/logs/users/{user_segment}/runs/{run_id}/run.log", session.paths["log"])
+        root = self.root
+        assert root is not None
+        self.assertFalse((root / "state" / "runs" / run_id).exists())
 
         by_id_response = self.client.get(f"/api/runs/{run_id}")
         self.assertEqual(by_id_response.status_code, 200)
@@ -1520,37 +3050,44 @@ class RunApiTests(unittest.TestCase):
         resolved_config = json.loads(
             Path(session.paths["resolved_config"]).read_text(encoding="utf-8")
         )
-        self.assertEqual(resolved_config["llm"]["api_key"], "yaml-key")
+        self.assertEqual(resolved_config["llm"]["api_key"], "[REDACTED]")
         self.assertEqual(resolved_config["evolution"]["max_iterations"], 7)
         self.assertEqual(resolved_config["evolution"]["budget_llm_calls"], 42)
         self.assertEqual(resolved_config["execution"]["selected_java_version"], "17")
-        self.assertFalse(resolved_config["evolution"]["mutation_enabled"])
+        self.assertTrue(resolved_config["evolution"]["mutation_enabled"])
         self.assertTrue(resolved_config["agent"]["parallel"]["enabled"])
         self.assertEqual(resolved_config["github"]["oauth_client_id"], "env-client-id")
+        self.assertEqual(resolved_config["github"]["oauth_client_secret"], "[REDACTED]")
         self.assertEqual(
             resolved_config["github"]["managed_clone_root"],
             "./sandbox/github-managed",
         )
-        self.assertFalse(session.config_snapshot["evolution"]["mutation_enabled"])
+        self.assertTrue(session.config_snapshot["evolution"]["mutation_enabled"])
 
-        conflict = self.client.post("/api/runs", data={"projectPath": str(self.project_path)})
-        self.assertEqual(conflict.status_code, 409)
-        self.assertEqual(conflict.json()["error"]["code"], "active_run_conflict")
+        second_response = self.client.post(
+            "/api/runs", data={"projectUploadId": self._upload_project_for_run("second.zip")}
+        )
+        self.assertEqual(second_response.status_code, 201)
+        second_run_id = second_response.json()["runId"]
+        self.assertNotEqual(second_run_id, run_id)
+        self.assertEqual(self.run_service.get_session(second_run_id).user_id, self.user_id)
+        self.assertIn(self.run_service.get_session(second_run_id).status, {"pending", "starting"})
 
         self.release_run.set()
         self._wait_for_status(run_id, "completed")
+        self._wait_for_status(second_run_id, "completed")
 
         completed_response = self.client.get(f"/api/runs/{run_id}")
         self.assertEqual(completed_response.status_code, 200)
         completed_payload = completed_response.json()
         self.assertEqual(completed_payload["status"], "completed")
         self.assertEqual(completed_payload["selectedJavaVersion"], "17")
-        self.assertFalse(completed_payload["mutationEnabled"])
+        self.assertTrue(completed_payload["mutationEnabled"])
         self.assertEqual(completed_payload["phase"]["key"], "completed")
         self.assertEqual(completed_payload["iteration"], 2)
         self.assertEqual(completed_payload["metrics"]["totalTests"], 4)
-        self.assertIsNone(completed_payload["metrics"]["mutationScore"])
-        self.assertIsNone(completed_payload["metrics"]["globalMutationScore"])
+        self.assertEqual(completed_payload["metrics"]["mutationScore"], 5 / 6)
+        self.assertEqual(completed_payload["metrics"]["globalMutationScore"], 0.0)
         self.assertEqual(
             completed_payload["logStreams"]["byTaskId"]["main"]["status"],
             "completed",
@@ -1562,7 +3099,7 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(no_current.status_code, 404)
         self.assertEqual(no_current.json()["error"]["code"], "no_active_run")
 
-    def test_post_runs_allows_only_one_active_run_when_requests_are_simultaneous(
+    def test_post_runs_persists_multiple_active_run_requests_when_simultaneous(
         self,
     ) -> None:
         assert self.client is not None
@@ -1581,27 +3118,44 @@ class RunApiTests(unittest.TestCase):
         self.addCleanup(setattr, run_service, "_new_run_id", original_new_run_id)
 
         barrier = threading.Barrier(2)
+        upload_ids = [
+            self._upload_project_for_run("concurrent-a.zip"),
+            self._upload_project_for_run("concurrent-b.zip"),
+        ]
         status_codes: list[int] = []
+        run_ids: list[str] = []
 
-        def post_run() -> None:
+        def post_run(index: int) -> None:
             barrier.wait(timeout=5)
             response = client.post(
                 "/api/runs",
-                data={"projectPath": str(self.project_path)},
+                data={"projectUploadId": upload_ids[index]},
             )
             status_codes.append(response.status_code)
+            if response.status_code == 201:
+                run_ids.append(str(response.json()["runId"]))
 
-        first = threading.Thread(target=post_run)
-        second = threading.Thread(target=post_run)
+        first = threading.Thread(target=post_run, args=(0,))
+        second = threading.Thread(target=post_run, args=(1,))
         first.start()
         second.start()
         first.join(timeout=5)
         second.join(timeout=5)
 
-        self.assertCountEqual(status_codes, [201, 409])
-        self.assertEqual(len(self.run_service._sessions), 1)
+        self.assertCountEqual(status_codes, [201, 201])
+        self.assertEqual(len(run_ids), 2)
+        self.assertEqual(len(set(run_ids)), 2)
+        self.assertEqual(len(self.run_service._sessions), 2)
+        active_run_id = self.run_service.active_run_id()
+        self.assertIn(active_run_id, set(run_ids))
+        assert active_run_id is not None
+        self.assertIn(self.run_service.get_session(active_run_id).status, {"starting", "running"})
+        assert self.release_run is not None
+        self.release_run.set()
+        for run_id in run_ids:
+            self._wait_for_status(run_id, "completed")
 
-    def test_post_runs_rejects_missing_project_path(self) -> None:
+    def test_post_runs_rejects_local_path_for_ordinary_user_before_path_validation(self) -> None:
         assert self.client is not None
         assert self.root is not None
         response = self.client.post(
@@ -1609,20 +3163,20 @@ class RunApiTests(unittest.TestCase):
             data={"projectPath": str(self.root / "missing-project")},
         )
 
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 403)
         payload = response.json()
-        self.assertEqual(payload["error"]["code"], "invalid_project_path")
-        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "path_not_found")
+        self.assertEqual(payload["error"]["code"], "local_path_forbidden")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "local_path_forbidden")
 
     def test_post_runs_rejects_omitted_project_path_in_local_mode(self) -> None:
         assert self.client is not None
 
         response = self.client.post("/api/runs", data={})
 
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 404)
         payload = response.json()
-        self.assertEqual(payload["error"]["code"], "invalid_project_path")
-        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "missing_project_path")
+        self.assertEqual(payload["error"]["code"], "upload_not_found")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["path"], ["projectUploadId"])
 
     def test_post_runs_rejects_non_maven_project(self) -> None:
         assert self.client is not None
@@ -1632,14 +3186,17 @@ class RunApiTests(unittest.TestCase):
             data={"projectPath": str(self.non_maven_path)},
         )
 
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 403)
         payload = response.json()
-        self.assertEqual(payload["error"]["code"], "non_maven_repository")
-        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "non_maven_repository")
+        self.assertEqual(payload["error"]["code"], "local_path_forbidden")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "local_path_forbidden")
 
     def test_post_runs_rejects_invalid_github_repo_url(self) -> None:
         assert self.client is not None
+        assert self.root is not None
         assert self.project_path is not None
+        database = WebDatabase.for_workspace(self.root)
+        login_test_user(self.client, database, username="github-invalid-admin", role="admin")
         response = self.client.post(
             "/api/runs",
             data={
@@ -1655,9 +3212,13 @@ class RunApiTests(unittest.TestCase):
 
     def test_post_runs_rejects_github_repo_when_unauthorized(self) -> None:
         assert self.client is not None
+        assert self.root is not None
         assert self.project_path is not None
+        database = WebDatabase.for_workspace(self.root)
+        login_test_user(self.client, database, username="github-unauth-admin", role="admin")
         response = self.client.post(
             "/api/runs",
+            headers={"origin": "http://testserver"},
             data={
                 "projectPath": str(self.project_path),
                 "githubRepoUrl": "https://github.com/openai/example-repo",
@@ -1686,6 +3247,257 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "invalid_java_version")
         self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "invalid_java_version")
 
+    def test_post_runs_rejects_unknown_uploaded_config_field(self) -> None:
+        assert self.client is not None
+        assert self.project_path is not None
+
+        response = self.client.post(
+            "/api/runs",
+            data={"projectPath": str(self.project_path)},
+            files={
+                "configFile": (
+                    "config.yaml",
+                    BytesIO(
+                        ("llm:\n  api_key: uploaded-key\nevolution:\n  made_up_field: 1\n").encode(
+                            "utf-8"
+                        )
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "unknown_config_field")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["code"], "unknown_config_field")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["path"], ["evolution", "made_up_field"])
+
+    def test_post_runs_fixed_concurrency_fields_are_overridden_by_policy(self) -> None:
+        assert self.client is not None
+        assert self.project_path is not None
+        assert self.run_started is not None
+        assert self.release_run is not None
+        assert self.run_service is not None
+
+        response = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": self._upload_project_for_run(), "parallelTargets": "64"},
+            files={
+                "configFile": (
+                    "config.yaml",
+                    BytesIO(
+                        (
+                            "preprocessing:\n"
+                            "  max_workers: 64\n"
+                            "agent:\n"
+                            "  parallel:\n"
+                            "    enabled: true\n"
+                            "    max_parallel_targets: 64\n"
+                            "    max_eval_workers: 64\n"
+                        ).encode("utf-8")
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        created = response.json()
+        self.assertIn("preprocessing.max_workers", created["configPolicy"]["overriddenFields"])
+        self.assertIn(
+            "agent.parallel.max_parallel_targets",
+            created["configPolicy"]["overriddenFields"],
+        )
+        run_id = created["runId"]
+        self.assertTrue(self.run_started.wait(timeout=5))
+        session = self.run_service.get_session(run_id)
+        resolved_config = json.loads(
+            Path(session.paths["resolved_config"]).read_text(encoding="utf-8")
+        )
+        database = self.run_service._web_database
+        assert database is not None
+        record = database.get_run_record(run_id)
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.config_snapshot, resolved_config)
+        self.assertIsNone(record.config_snapshot["preprocessing"]["max_workers"])
+        self.assertEqual(record.config_snapshot["agent"]["parallel"]["max_parallel_targets"], 4)
+        self.assertEqual(record.config_path, session.paths["resolved_config"])
+        self.assertIsNone(resolved_config["preprocessing"]["max_workers"])
+        self.assertEqual(resolved_config["agent"]["parallel"]["max_parallel_targets"], 4)
+        self.assertEqual(resolved_config["agent"]["parallel"]["max_eval_workers"], 4)
+        self.release_run.set()
+        self._wait_for_status(run_id, "completed")
+
+    def test_post_runs_clamps_over_max_budget_to_deployment_limit(self) -> None:
+        assert self.client is not None
+        assert self.project_path is not None
+        assert self.run_started is not None
+        assert self.release_run is not None
+        assert self.run_service is not None
+
+        response = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": self._upload_project_for_run(), "budget": "999"},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        created = response.json()
+        self.assertIn("evolution.budget", created["configPolicy"]["clampedFields"])
+        run_id = created["runId"]
+        self.assertTrue(self.run_started.wait(timeout=5))
+        session = self.run_service.get_session(run_id)
+        resolved_config = json.loads(
+            Path(session.paths["resolved_config"]).read_text(encoding="utf-8")
+        )
+        database = self.run_service._web_database
+        assert database is not None
+        record = database.get_run_record(run_id)
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.config_snapshot, resolved_config)
+        self.assertEqual(record.config_snapshot["evolution"]["budget_llm_calls"], 500)
+        self.assertEqual(resolved_config["evolution"]["budget_llm_calls"], 500)
+        self.release_run.set()
+        self._wait_for_status(run_id, "completed")
+
+    def test_policy_immutability_keeps_old_config_snapshot_after_deployment_change(
+        self,
+    ) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        assert self.run_started is not None
+        assert self.release_run is not None
+        assert self.run_service is not None
+
+        response = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": self._upload_project_for_run(), "budget": "999"},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        run_id = response.json()["runId"]
+        self.assertTrue(self.run_started.wait(timeout=5))
+        session = self.run_service.get_session(run_id)
+        resolved_config_path = Path(session.paths["resolved_config"])
+        original_file_snapshot = json.loads(resolved_config_path.read_text(encoding="utf-8"))
+        database = self.run_service._web_database
+        assert database is not None
+        original_record = database.get_run_record(run_id)
+        self.assertIsNotNone(original_record)
+        assert original_record is not None
+        self.assertEqual(original_record.config_snapshot["evolution"]["budget_llm_calls"], 500)
+
+        self.default_config_path.write_text(
+            (
+                "llm:\n"
+                "  api_key: changed-key\n"
+                "  model: gpt-4\n"
+                "deployment:\n"
+                "  max_budget: 17\n"
+                "  max_run_timeout_seconds: 7200\n"
+            ),
+            encoding="utf-8",
+        )
+
+        current_record = database.get_run_record(run_id)
+        self.assertIsNotNone(current_record)
+        assert current_record is not None
+        current_file_snapshot = json.loads(resolved_config_path.read_text(encoding="utf-8"))
+        self.assertEqual(current_record.config_snapshot, original_record.config_snapshot)
+        self.assertEqual(current_file_snapshot, original_file_snapshot)
+        self.assertEqual(current_record.config_snapshot["evolution"]["budget_llm_calls"], 500)
+        self.assertEqual(current_file_snapshot["evolution"]["budget_llm_calls"], 500)
+        serialized = json.dumps(current_record.config_snapshot, ensure_ascii=False)
+        self.assertNotIn("default-key", serialized)
+        self.assertNotIn("changed-key", serialized)
+        self.assertIn("[REDACTED]", serialized)
+
+        self.release_run.set()
+        self._wait_for_status(run_id, "completed")
+
+    def test_post_runs_returns_pending_queue_position_and_429_when_queue_quota_exceeded(
+        self,
+    ) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        assert self.project_path is not None
+        self.default_config_path.write_text(
+            (
+                "llm:\n"
+                "  api_key: default-key\n"
+                "deployment:\n"
+                "  global_max_running_tasks: 1\n"
+                "  per_user_max_running_tasks: 1\n"
+                "  global_max_pending_tasks: 2\n"
+                "  per_user_max_pending_tasks: 1\n"
+            ),
+            encoding="utf-8",
+        )
+
+        first = self.client.post(
+            "/api/runs", data={"projectUploadId": self._upload_project_for_run("queue-1.zip")}
+        )
+        second = self.client.post(
+            "/api/runs", data={"projectUploadId": self._upload_project_for_run("queue-2.zip")}
+        )
+        third = self.client.post(
+            "/api/runs", data={"projectUploadId": self._upload_project_for_run("queue-3.zip")}
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(second.json()["status"], "pending")
+        self.assertEqual(second.json()["queuePosition"], 1)
+        self.assertEqual(third.status_code, 429)
+        self.assertEqual(third.json()["error"]["code"], "queue_limit_exceeded")
+
+    def test_uploaded_config_cannot_raise_server_queue_quota(self) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        assert self.project_path is not None
+        self.default_config_path.write_text(
+            (
+                "llm:\n"
+                "  api_key: default-key\n"
+                "deployment:\n"
+                "  global_max_running_tasks: 1\n"
+                "  per_user_max_running_tasks: 1\n"
+                "  global_max_pending_tasks: 2\n"
+                "  per_user_max_pending_tasks: 1\n"
+            ),
+            encoding="utf-8",
+        )
+        uploaded = (
+            "llm:\n"
+            "  api_key: uploaded-key\n"
+            "deployment:\n"
+            "  global_max_pending_tasks: 99\n"
+            "  per_user_max_pending_tasks: 99\n"
+        ).encode("utf-8")
+
+        first = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": self._upload_project_for_run("quota-1.zip")},
+            files={"configFile": ("config.yaml", BytesIO(uploaded), "application/x-yaml")},
+        )
+        second = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": self._upload_project_for_run("quota-2.zip")},
+            files={"configFile": ("config.yaml", BytesIO(uploaded), "application/x-yaml")},
+        )
+        third = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": self._upload_project_for_run("quota-3.zip")},
+            files={"configFile": ("config.yaml", BytesIO(uploaded), "application/x-yaml")},
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(third.status_code, 429)
+        self.assertEqual(third.json()["error"]["code"], "queue_limit_exceeded")
+
 
 class ResultsApiTests(unittest.TestCase):
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
@@ -1693,6 +3505,7 @@ class ResultsApiTests(unittest.TestCase):
     project_path: Path | None = None
     run_service: RunLifecycleService | None = None
     client: TestClient | None = None
+    user_id: int | None = None
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -1702,6 +3515,7 @@ class ResultsApiTests(unittest.TestCase):
         (self.project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
         self.run_service = RunLifecycleService(workspace_root=self.root)
         self.client = TestClient(create_app(run_service=self.run_service))
+        self.user_id = login_test_user(self.client, WebDatabase.for_workspace(self.root))
 
     def tearDown(self) -> None:
         if self.temp_dir is not None:
@@ -1715,6 +3529,7 @@ class ResultsApiTests(unittest.TestCase):
                 project_path=str(self.project_path),
                 selected_java_version=selected_java_version,
             ),
+            user_id=self.user_id,
             settings_loader=lambda _config_path: Settings.model_validate(
                 {"llm": {"api_key": "default-key", "model": "gpt-4"}}
             ),
@@ -2040,6 +3855,112 @@ class ResultsApiTests(unittest.TestCase):
         self.assertIn("- 未生成测试文件", response.text)
         self.assertIn("无", response.text)
 
+    def test_artifact_downloads_allow_resolved_config_and_reject_traversal(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        self._write_completed_run_artifacts(run_id)
+
+        resolved_config_response = self.client.get(f"/api/runs/{run_id}/artifacts/resolved-config")
+        traversal_response = self.client.get(
+            f"/api/runs/{run_id}/artifacts/%2e%2e%2f%2e%2e%2fconfig.yaml"
+        )
+        unknown_response = self.client.get(f"/api/runs/{run_id}/artifacts/config.yaml")
+
+        self.assertEqual(resolved_config_response.status_code, 200)
+        self.assertEqual(resolved_config_response.headers["content-type"], "application/json")
+        self.assertIn('"api_key": "[REDACTED]"', resolved_config_response.text)
+        self.assertIn(traversal_response.status_code, {400, 404})
+        self.assertIn(unknown_response.status_code, {400, 404})
+        for response in [traversal_response, unknown_response]:
+            body = response.text
+            self.assertNotIn("default-key", body)
+            self.assertNotIn("config.example.yaml", body)
+            self.assertNotIn(str(self.run_service.workspace_root), body)
+
+    def test_artifact_download_uses_persisted_snapshot_when_memory_paths_are_tampered(
+        self,
+    ) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        self._write_completed_run_artifacts(run_id)
+        session = self.run_service.get_session(run_id)
+        safe_final_state = Path(session.path_snapshot["output"]) / "final_state.json"
+        safe_final_state.write_text(
+            '{"source": "persisted-snapshot"}',
+            encoding="utf-8",
+        )
+        outside_file = self.root / "config.yaml"
+        outside_file.write_text("outside-secret", encoding="utf-8")
+        session.paths["final_state"] = str(outside_file)
+
+        response = self.client.get(f"/api/runs/{run_id}/artifacts/final-state")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("persisted-snapshot", response.text)
+        self.assertNotIn("outside-secret", response.text)
+
+    def test_artifact_download_rejects_polluted_persisted_path_snapshot(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        self._write_completed_run_artifacts(run_id)
+        outside_output = self.root / "outside-output"
+        outside_output.mkdir()
+        (outside_output / "final_state.json").write_text("outside-secret", encoding="utf-8")
+        session = self.run_service.get_session(run_id)
+        polluted_snapshot = dict(session.path_snapshot)
+        polluted_snapshot["output"] = str(outside_output)
+        database = self.run_service._web_database
+        assert database is not None
+        database.update_run_record(run_id, path_snapshot=polluted_snapshot)
+
+        response = self.client.get(f"/api/runs/{run_id}/artifacts/final-state")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(response.json()["error"]["code"], {"artifact_not_found", "run_not_found"})
+        self.assertNotIn("outside-secret", response.text)
+
+    def test_run_log_artifact_rejects_symlink_escape(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        self._write_completed_run_artifacts(run_id)
+        session = self.run_service.get_session(run_id)
+        outside_file = self.root / "outside-run.log"
+        outside_file.write_text("outside-log-secret", encoding="utf-8")
+        log_path = Path(session.path_snapshot["log"])
+        log_path.unlink()
+        log_path.symlink_to(outside_file)
+
+        response = self.client.get(f"/api/runs/{run_id}/artifacts/run-log")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(response.json()["error"]["code"], {"artifact_not_found", "run_not_found"})
+        self.assertNotIn("outside-log-secret", response.text)
+
+    def test_restarted_results_endpoint_tolerates_missing_log_router(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        self._write_completed_run_artifacts(run_id)
+        restarted_service = RunLifecycleService(workspace_root=self.root)
+        restarted_service._log_routers.pop(run_id, None)
+        restarted_client = TestClient(create_app(run_service=restarted_service))
+        restarted_client.cookies.update(self.client.cookies)
+
+        response = restarted_client.get(f"/api/runs/{run_id}/results")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["runId"], run_id)
+        self.assertEqual(payload["status"], "completed")
+
 
 class RunHistoryApiTests(unittest.TestCase):
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
@@ -2047,6 +3968,7 @@ class RunHistoryApiTests(unittest.TestCase):
     project_path: Path | None = None
     run_service: RunLifecycleService | None = None
     client: TestClient | None = None
+    user_id: int | None = None
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -2056,6 +3978,7 @@ class RunHistoryApiTests(unittest.TestCase):
         (self.project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
         self.run_service = RunLifecycleService(workspace_root=self.root)
         self.client = TestClient(create_app(run_service=self.run_service))
+        self.user_id = login_test_user(self.client, WebDatabase.for_workspace(self.root))
 
     def tearDown(self) -> None:
         if self.temp_dir is not None:
@@ -2066,6 +3989,7 @@ class RunHistoryApiTests(unittest.TestCase):
         assert self.project_path is not None
         session = self.run_service.create_run(
             RunRequest(project_path=str(self.project_path)),
+            user_id=self.user_id,
             settings_loader=lambda _config_path: Settings.model_validate(
                 {"llm": {"api_key": "default-key", "model": "gpt-4"}}
             ),
@@ -2100,6 +4024,39 @@ class RunHistoryApiTests(unittest.TestCase):
         self.assertEqual(payload["items"][1]["status"], "failed")
         self.assertEqual(payload["items"][1]["error"], "boom")
 
+    def test_history_endpoint_filters_runs_by_user_and_admin_can_see_all(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        database = WebDatabase.for_workspace(self.root)
+        other_user_id = database.create_user(
+            username="bob-history",
+            password_hash=TEST_PASSWORD_HASHER.hash(TEST_PASSWORD),
+        )
+        own_run_id = self._create_run()
+        self.run_service.mark_completed(own_run_id)
+        other_session = self.run_service.create_run(
+            RunRequest(project_path=str(self.project_path)),
+            user_id=other_user_id,
+            settings_loader=lambda _config_path: Settings.model_validate(
+                {"llm": {"api_key": "default-key", "model": "gpt-4"}}
+            ),
+        )
+        self.run_service.mark_completed(other_session.run_id)
+
+        user_response = self.client.get("/api/runs/history")
+        self.assertEqual(user_response.status_code, 200)
+        self.assertEqual([item["runId"] for item in user_response.json()["items"]], [own_run_id])
+
+        admin_client = TestClient(create_app(run_service=self.run_service))
+        login_test_user(admin_client, database, username="admin-history", role="admin")
+        admin_response = admin_client.get("/api/runs/history")
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertEqual(
+            {item["runId"] for item in admin_response.json()["items"]},
+            {own_run_id, other_session.run_id},
+        )
+
     def test_history_endpoint_ignores_runs_with_corrupted_manifest_or_state(self) -> None:
         assert self.client is not None
         assert self.root is not None
@@ -2113,9 +4070,9 @@ class RunHistoryApiTests(unittest.TestCase):
         )
         self.run_service.mark_completed(valid_run_id)
 
-        broken_manifest_dir = self.root / "state" / "runs" / "run-broken"
-        broken_manifest_dir.mkdir(parents=True, exist_ok=True)
-        (broken_manifest_dir / "session.json").write_text("{broken", encoding="utf-8")
+        legacy_manifest_dir = self.root / "state" / "runs" / "run-legacy"
+        legacy_manifest_dir.mkdir(parents=True, exist_ok=True)
+        (legacy_manifest_dir / "session.json").write_text("{broken", encoding="utf-8")
 
         broken_state_run_id = self._create_run()
         broken_state_session = self.run_service.get_session(broken_state_run_id)
@@ -2125,6 +4082,8 @@ class RunHistoryApiTests(unittest.TestCase):
 
         restored_service = RunLifecycleService(workspace_root=self.root)
         restored_client = TestClient(create_app(run_service=restored_service))
+        if self.client is not None:
+            restored_client.cookies.update(self.client.cookies)
 
         response = restored_client.get("/api/runs/history")
 

@@ -56,7 +56,7 @@ class FormattingConfig(BaseModel):
 class ExecutionConfig(BaseModel):
     """执行配置"""
 
-    timeout: int = Field(default=300, ge=1, description="超时时间（秒）")
+    timeout: int = Field(default=7200, ge=1, description="超时时间（秒）")
     test_timeout: int = Field(default=30, ge=1, description="测试执行超时时间（秒）")
     coverage_timeout: int = Field(default=300, ge=1, description="覆盖率收集超时时间（秒）")
     max_retries: int = Field(default=3, ge=0, description="最大重试次数")
@@ -435,6 +435,115 @@ class GitHubConfig(BaseModel):
         return resolved_config
 
 
+class DeploymentPolicyConfig(BaseModel):
+    """部署侧配置策略。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_budget: int = Field(default=500, ge=1, description="单次运行允许的最大 LLM 调用预算")
+    max_run_timeout_seconds: int = Field(
+        default=7200,
+        ge=1,
+        description="单次运行允许的最大执行超时时间（秒）",
+    )
+    max_iterations: int = Field(default=10, ge=1, description="单次运行允许的最大迭代次数")
+    allowed_java_versions: list[str] = Field(
+        default_factory=lambda: ["8", "11", "17", "21", "25"],
+        description="Web 运行允许选择的目标 Java 版本",
+    )
+    secure_auth_cookies: bool = Field(
+        default=False,
+        description="认证会话 Cookie 是否启用 Secure 属性",
+    )
+    allowed_origins: list[str] = Field(
+        default_factory=list,
+        description="允许携带认证 Cookie 发起变更请求的额外 Origin",
+    )
+    global_max_running_tasks: int = Field(
+        default=2,
+        ge=1,
+        description="单进程 Web 调度器允许同时运行的全局任务数上限",
+    )
+    per_user_max_running_tasks: int = Field(
+        default=1,
+        ge=1,
+        description="单进程 Web 调度器允许单个用户同时运行的任务数上限",
+    )
+    global_max_pending_tasks: int = Field(
+        default=50,
+        ge=1,
+        description="单进程 Web 调度器允许同时排队的全局任务数上限",
+    )
+    per_user_max_pending_tasks: int = Field(
+        default=5,
+        ge=1,
+        description="单进程 Web 调度器允许单个用户同时排队的任务数上限",
+    )
+    allow_local_path_mode: bool = Field(
+        default=False,
+        description="是否允许管理员通过受控 allowlist 使用服务器本地路径创建运行",
+    )
+    local_path_allowlist: list[str] = Field(
+        default_factory=list,
+        description="管理员本地路径模式允许访问的服务器目录根；为空时本地路径模式不可用",
+    )
+    upload_retention_hours: int = Field(
+        default=24,
+        ge=1,
+        description="未使用上传记录和文件的保留小时数",
+    )
+    run_artifact_retention_days: int = Field(
+        default=30,
+        ge=1,
+        description="已结束运行产物的保留天数",
+    )
+
+    @model_validator(mode="after")
+    def _validate_allowed_java_versions(self) -> "DeploymentPolicyConfig":
+        normalized_versions: list[str] = []
+        for version in self.allowed_java_versions:
+            normalized = str(version).strip()
+            if normalized and normalized not in normalized_versions:
+                normalized_versions.append(normalized)
+        if not normalized_versions:
+            raise ValueError("allowed_java_versions 至少需要包含一个版本")
+        self.allowed_java_versions = normalized_versions
+
+        normalized_origins: list[str] = []
+        for origin in self.allowed_origins:
+            normalized_origin = str(origin).strip().rstrip("/")
+            if normalized_origin and normalized_origin not in normalized_origins:
+                normalized_origins.append(normalized_origin)
+        self.allowed_origins = normalized_origins
+
+        normalized_allowlist: list[str] = []
+        for root in self.local_path_allowlist:
+            normalized_root = str(root).strip()
+            if normalized_root and normalized_root not in normalized_allowlist:
+                normalized_allowlist.append(normalized_root)
+        self.local_path_allowlist = normalized_allowlist
+        return self
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {
+            "secureAuthCookies": self.secure_auth_cookies,
+            "allowedOrigins": self.allowed_origins,
+            "allowLocalPathMode": self.allow_local_path_mode,
+            "localPathAllowlistConfigured": bool(self.local_path_allowlist),
+            "localPathAllowlistCount": len(self.local_path_allowlist),
+            "allowedJavaVersions": self.allowed_java_versions,
+            "globalMaxRunningTasks": self.global_max_running_tasks,
+            "perUserMaxRunningTasks": self.per_user_max_running_tasks,
+            "globalMaxPendingTasks": self.global_max_pending_tasks,
+            "perUserMaxPendingTasks": self.per_user_max_pending_tasks,
+            "maxBudget": self.max_budget,
+            "maxRunTimeoutSeconds": self.max_run_timeout_seconds,
+            "maxIterations": self.max_iterations,
+            "uploadRetentionHours": self.upload_retention_hours,
+            "runArtifactRetentionDays": self.run_artifact_retention_days,
+        }
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -449,6 +558,7 @@ class Settings(BaseModel):
     formatting: FormattingConfig = Field(default_factory=FormattingConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     github: GitHubConfig = Field(default_factory=GitHubConfig)
+    deployment: DeploymentPolicyConfig = Field(default_factory=DeploymentPolicyConfig)
     _state_root: Path = PrivateAttr(default=STATE_ROOT)
     _output_root: Path = PrivateAttr(default=OUTPUT_ROOT)
     _sandbox_root: Path = PrivateAttr(default=SANDBOX_ROOT)

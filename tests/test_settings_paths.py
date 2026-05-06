@@ -13,6 +13,7 @@ class SettingsPathsTests(unittest.TestCase):
 
         self.assertTrue(settings.to_dict()["evolution"]["mutation_enabled"])
         self.assertFalse(settings.to_dict()["preprocessing"]["exit_after_preprocessing"])
+        self.assertEqual(settings.to_dict()["deployment"]["max_budget"], 500)
 
     def test_ensure_directories_creates_fixed_runtime_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
