@@ -55,6 +55,11 @@ FROM eclipse-temurin:25.0.2_10-jdk-noble AS jdk25
 
 FROM runtime-base AS runtime
 
+LABEL org.opencontainers.image.source="https://github.com/Slinet6056/COMET-L" \
+      org.opencontainers.image.title="COMET-L" \
+      org.opencontainers.image.description="COMET-L is a Docker image for LLM-driven test generation and mutation analysis for Java Maven projects." \
+      org.opencontainers.image.licenses="MIT"
+
 ENV COMET_HOME=/opt/comet-l
 ENV COMET_MAVEN_HOME=/opt/maven
 ENV JAVA_HOME=/opt/jdks/jdk-25
