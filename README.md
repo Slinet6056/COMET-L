@@ -1,5 +1,12 @@
 # COMET-L
 
+[![Wakapi](https://wakapi.dev/api/badge/Slinet6056/interval:any/project:COMET-L)](https://wakapi.dev)
+[![Docker](https://github.com/slinet6056/COMET-L/actions/workflows/docker.yml/badge.svg)](https://github.com/slinet6056/COMET-L/actions/workflows/docker.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](pyproject.toml)
+[![Java 25](https://img.shields.io/badge/Java-25-orange.svg)](java-runtime/pom.xml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](web/package.json)
+
 COMET-L 是一个面向 Java Maven 项目的 LLM 驱动测试生成与变异分析系统。它会扫描目标项目、选择值得改进的方法、生成语义变异体，再根据幸存变异体补充测试，用覆盖率和变异击杀率持续评估测试质量。
 
 仓库同时包含三部分：
