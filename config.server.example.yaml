@@ -38,16 +38,16 @@ deployment:
 github:
   # GitHub 仓库导入、自动 push 或创建 PR 时需要配置 OAuth App。
   # 也可以使用 COMET_GITHUB_* 环境变量覆盖这些字段。
-  oauth_client_id: null
-  oauth_client_secret: null
-  oauth_redirect_uri: "https://comet.example.internal/api/github/auth/callback"
-  oauth_scope: "repo"
-  oauth_state_ttl_seconds: 600
-  oauth_authorize_url: "https://github.com/login/oauth/authorize"
-  oauth_token_exchange_url: "https://github.com/login/oauth/access_token"
-  oauth_api_base_url: "https://api.github.com"
-  encrypted_token_store_path: "./state/github/auth/token.enc"
-  encrypted_key_store_path: "./state/github/auth/token.key"
-  managed_clone_root: "./sandbox/github-managed"
-  repo_url: null
-  base_branch: null
+  oauth_client_id: 'Ov23li8u4R3dY2GGKzwq' # GitHub OAuth App Client ID
+  oauth_client_secret: '468507776158b3c9c7cf503b8bafaca67b214cc9' # GitHub OAuth App Client Secret
+  oauth_redirect_uri: 'http://127.0.0.1:8000/api/github/auth/callback' # 必须与 GitHub OAuth App 回调地址一致
+  oauth_scope: 'repo' # 私有仓库与同仓 PR 需要 repo scope；只处理公开仓库时可按需收窄
+  oauth_state_ttl_seconds: 600 # OAuth state 有效期（秒）
+  oauth_authorize_url: 'https://github.com/login/oauth/authorize'
+  oauth_token_exchange_url: 'https://github.com/login/oauth/access_token'
+  oauth_api_base_url: 'https://api.github.com'
+  encrypted_token_store_path: './state/github/auth/token.enc' # 本地加密 token 文件，建议挂载持久化
+  encrypted_key_store_path: './state/github/auth/token.key' # fallback 加密密钥文件，必须与 token 分开保存但一起持久化
+  managed_clone_root: './sandbox/github-managed' # GitHub 仓库受管 clone 根目录，建议挂载持久化或放在容器数据卷
+  repo_url: null # 运行时由 Web 表单填入，通常不用手写
+  base_branch: null # 运行时由 Web 表单或 GitHub 默认分支解析填入，通常不用手写
