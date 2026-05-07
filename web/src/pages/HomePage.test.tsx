@@ -482,13 +482,9 @@ describe('HomePage admin local path and GitHub modes', () => {
 
     await screen.findByLabelText('上传项目 ZIP');
 
-    expect(
-      screen.getByText('服务端限制：此字段由服务端固定，提交时会使用后端值。'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('服务端限制：超过部署上限时会由服务端自动收紧。')).toBeInTheDocument();
-    expect(
-      screen.queryByText('服务端限制：敏感值已隐藏，不会在前端显示。'),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText('此字段由服务端固定，提交时会使用后端值。')).toBeInTheDocument();
+    expect(screen.getByText('超过部署上限时会由服务端自动收紧。')).toBeInTheDocument();
+    expect(screen.queryByText('敏感值已隐藏，不会在前端显示。')).not.toBeInTheDocument();
   });
 
   it('does not show an admin restriction notice in GitHub mode', async () => {

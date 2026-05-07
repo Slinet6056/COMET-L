@@ -153,10 +153,10 @@ function getFieldPolicyNotes(fieldKey: string, configPolicy: ConfigPolicy | null
 
   const notes: string[] = [];
   if (getPolicyFields(configPolicy.overriddenFields).has(fieldKey)) {
-    notes.push('服务端限制：此字段由服务端固定，提交时会使用后端值。');
+    notes.push('此字段由服务端固定，提交时会使用后端值。');
   }
   if (getPolicyFields(configPolicy.clampedFields).has(fieldKey)) {
-    notes.push('服务端限制：超过部署上限时会由服务端自动收紧。');
+    notes.push('超过部署上限时会由服务端自动收紧。');
   }
   return notes;
 }
