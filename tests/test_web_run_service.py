@@ -228,6 +228,7 @@ class RunServiceIsolationTests(unittest.TestCase):
                 observer=events.append,
                 repo_import_service=cast(Any, fake_import_service),
                 source_run_id="run-001",
+                user_id=42,
             )
 
             self.assertEqual(exit_code, 0)
@@ -236,6 +237,7 @@ class RunServiceIsolationTests(unittest.TestCase):
             self.assertFalse(bool(captured["old_test_exists"]))
             self.assertEqual(captured["repo_url"], "https://github.com/openai/demo")
             self.assertEqual(captured["base_branch"], "develop")
+            self.assertEqual(captured["import_kwargs"].get("user_key"), "web-user:42")
             self.assertEqual([event["type"] for event in events], ["run.started", "run.completed"])
 
     def test_run_request_aborts_before_runner_when_cleanup_old_tests_fails(self) -> None:

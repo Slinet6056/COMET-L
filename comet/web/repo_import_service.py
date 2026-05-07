@@ -93,9 +93,10 @@ class GitHubRepoImportService:
         github_repo_url: str,
         github_config: GitHubConfig,
         requested_base_branch: str | None,
+        user_key: str | None = None,
     ) -> ImportedRepository:
         identity = self._parse_repo_url(github_repo_url)
-        token = self._load_access_token(github_config)
+        token = self._load_access_token(github_config, user_key=user_key)
         clone_root = Path(github_config.managed_clone_root).expanduser().resolve()
         clone_path = self._build_clone_path(clone_root, identity, run_id)
         base_branch = self._resolve_base_branch(
@@ -152,9 +153,11 @@ class GitHubRepoImportService:
 
         return _RepoIdentity(owner=owner, repo=repo)
 
-    def _load_access_token(self, github_config: GitHubConfig) -> str:
+    def _load_access_token(
+        self, github_config: GitHubConfig, *, user_key: str | None = None
+    ) -> str:
         try:
-            token = self._github_auth_service.get_access_token(github_config)
+            token = self._github_auth_service.get_access_token(github_config, user_key=user_key)
         except GitHubAuthError as exc:
             raise RepoImportPermissionError(str(exc)) from exc
         normalized = token.strip()

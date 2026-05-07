@@ -77,26 +77,43 @@ class GitHubTokenStorage:
         self._keyring_account_name: str = keyring_account_name
         self._keyring_backend: KeyringBackend | None = keyring_backend
 
-    def read_token(self, github_config: GitHubConfig) -> str | None:
-        token = self._read_token_from_keyring()
+    def read_token(self, github_config: GitHubConfig, *, user_key: str | None = None) -> str | None:
+        token = self._read_token_from_keyring(user_key)
         if token is not None:
             return token
-        return self._read_token_from_encrypted_file(github_config)
+        return self._read_token_from_encrypted_file(github_config, user_key)
 
-    def write_token(self, github_config: GitHubConfig, token: str) -> None:
+    def write_token(
+        self, github_config: GitHubConfig, token: str, *, user_key: str | None = None
+    ) -> None:
         normalized_token = token.strip()
         if not normalized_token:
             raise GitHubAuthError("GitHub token 为空，无法保存。")
 
-        if self._write_token_to_keyring(normalized_token):
-            self._clear_encrypted_files(github_config)
+        if self._write_token_to_keyring(normalized_token, user_key):
+            self._clear_encrypted_files(github_config, user_key)
             return
 
-        self._write_token_to_encrypted_file(github_config, normalized_token)
+        self._write_token_to_encrypted_file(github_config, normalized_token, user_key)
 
-    def clear_token(self, github_config: GitHubConfig) -> None:
-        self._clear_token_from_keyring()
-        self._clear_encrypted_files(github_config)
+    def clear_token(self, github_config: GitHubConfig, *, user_key: str | None = None) -> None:
+        self._clear_token_from_keyring(user_key)
+        self._clear_encrypted_files(github_config, user_key)
+
+    def _scoped_account_name(self, user_key: str | None) -> str:
+        normalized_user_key = (user_key or "").strip()
+        if not normalized_user_key:
+            return self._keyring_account_name
+        digest = hashlib.sha256(normalized_user_key.encode("utf-8")).hexdigest()[:24]
+        return f"{self._keyring_account_name}:{digest}"
+
+    def _scoped_file_path(self, raw_path: str, user_key: str | None) -> Path:
+        path = Path(raw_path).expanduser()
+        normalized_user_key = (user_key or "").strip()
+        if not normalized_user_key:
+            return path
+        digest = hashlib.sha256(normalized_user_key.encode("utf-8")).hexdigest()[:24]
+        return path.with_name(f"{path.stem}.{digest}{path.suffix}")
 
     def _keyring_module(self) -> KeyringBackend | None:
         if self._keyring_backend is not None:
@@ -109,7 +126,7 @@ class GitHubTokenStorage:
 
         return cast(KeyringBackend, cast(object, keyring))
 
-    def _read_token_from_keyring(self) -> str | None:
+    def _read_token_from_keyring(self, user_key: str | None) -> str | None:
         keyring_module = self._keyring_module()
         if keyring_module is None:
             return None
@@ -117,7 +134,7 @@ class GitHubTokenStorage:
         try:
             token = keyring_module.get_password(
                 self._keyring_service_name,
-                self._keyring_account_name,
+                self._scoped_account_name(user_key),
             )
         except Exception:
             return None
@@ -126,7 +143,7 @@ class GitHubTokenStorage:
             return None
         return token.strip() or None
 
-    def _write_token_to_keyring(self, token: str) -> bool:
+    def _write_token_to_keyring(self, token: str, user_key: str | None) -> bool:
         keyring_module = self._keyring_module()
         if keyring_module is None:
             return False
@@ -134,14 +151,14 @@ class GitHubTokenStorage:
         try:
             keyring_module.set_password(
                 self._keyring_service_name,
-                self._keyring_account_name,
+                self._scoped_account_name(user_key),
                 token,
             )
             return True
         except Exception:
             return False
 
-    def _clear_token_from_keyring(self) -> None:
+    def _clear_token_from_keyring(self, user_key: str | None) -> None:
         keyring_module = self._keyring_module()
         if keyring_module is None:
             return
@@ -149,14 +166,16 @@ class GitHubTokenStorage:
         try:
             keyring_module.delete_password(
                 self._keyring_service_name,
-                self._keyring_account_name,
+                self._scoped_account_name(user_key),
             )
         except Exception:
             return
 
-    def _read_token_from_encrypted_file(self, github_config: GitHubConfig) -> str | None:
-        token_path = Path(github_config.encrypted_token_store_path).expanduser()
-        key_path = Path(github_config.encrypted_key_store_path).expanduser()
+    def _read_token_from_encrypted_file(
+        self, github_config: GitHubConfig, user_key: str | None
+    ) -> str | None:
+        token_path = self._scoped_file_path(github_config.encrypted_token_store_path, user_key)
+        key_path = self._scoped_file_path(github_config.encrypted_key_store_path, user_key)
         if not token_path.is_file() or not key_path.is_file():
             return None
 
@@ -180,9 +199,11 @@ class GitHubTokenStorage:
         except Exception as exc:
             raise GitHubAuthError("本地 GitHub 凭据解密失败，请重新授权。") from exc
 
-    def _write_token_to_encrypted_file(self, github_config: GitHubConfig, token: str) -> None:
-        token_path = Path(github_config.encrypted_token_store_path).expanduser()
-        key_path = Path(github_config.encrypted_key_store_path).expanduser()
+    def _write_token_to_encrypted_file(
+        self, github_config: GitHubConfig, token: str, user_key: str | None
+    ) -> None:
+        token_path = self._scoped_file_path(github_config.encrypted_token_store_path, user_key)
+        key_path = self._scoped_file_path(github_config.encrypted_key_store_path, user_key)
         token_path.parent.mkdir(parents=True, exist_ok=True)
         key_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -207,10 +228,10 @@ class GitHubTokenStorage:
             json.dumps(payload, ensure_ascii=False, indent=2),
         )
 
-    def _clear_encrypted_files(self, github_config: GitHubConfig) -> None:
+    def _clear_encrypted_files(self, github_config: GitHubConfig, user_key: str | None) -> None:
         for path in (
-            Path(github_config.encrypted_token_store_path).expanduser(),
-            Path(github_config.encrypted_key_store_path).expanduser(),
+            self._scoped_file_path(github_config.encrypted_token_store_path, user_key),
+            self._scoped_file_path(github_config.encrypted_key_store_path, user_key),
         ):
             try:
                 path.unlink(missing_ok=True)
@@ -256,16 +277,19 @@ class GitHubOAuthService:
         self._http_client_factory: Callable[[], httpx.Client] = (
             http_client_factory or self._default_http_client_factory
         )
-        self._pending_states: dict[str, float] = {}
+        self._pending_states: dict[str, tuple[float, str]] = {}
 
-    def build_connect_url(self, github_config: GitHubConfig) -> str:
+    def build_connect_url(self, github_config: GitHubConfig, *, user_key: str | None = None) -> str:
         client_id = (github_config.oauth_client_id or "").strip()
         if not client_id:
             raise GitHubAuthError("GitHub OAuth App 未配置 client_id。")
 
         state = secrets.token_urlsafe(24)
         now = time.time()
-        self._pending_states[state] = now + float(github_config.oauth_state_ttl_seconds)
+        self._pending_states[state] = (
+            now + float(github_config.oauth_state_ttl_seconds),
+            self._normalize_user_key(user_key),
+        )
         self._cleanup_expired_states(now)
 
         query = urlencode(
@@ -279,19 +303,21 @@ class GitHubOAuthService:
         return f"{github_config.oauth_authorize_url}?{query}"
 
     def handle_callback(
-        self, github_config: GitHubConfig, *, code: str, state: str
+        self, github_config: GitHubConfig, *, code: str, state: str, user_key: str | None = None
     ) -> GitHubAuthStatus:
-        self._validate_state(github_config, state)
+        self._validate_state(github_config, state, user_key)
         token = self._exchange_code_for_token(github_config, code)
-        self._storage.write_token(github_config, token)
-        status = self.get_status(github_config)
+        self._storage.write_token(github_config, token, user_key=user_key)
+        status = self.get_status(github_config, user_key=user_key)
         if not status.connected:
-            self._storage.clear_token(github_config)
+            self._storage.clear_token(github_config, user_key=user_key)
             raise GitHubAuthError("GitHub 授权成功但 token 校验失败，请重试授权。")
         return status
 
-    def get_status(self, github_config: GitHubConfig) -> GitHubAuthStatus:
-        token = self._storage.read_token(github_config)
+    def get_status(
+        self, github_config: GitHubConfig, *, user_key: str | None = None
+    ) -> GitHubAuthStatus:
+        token = self._storage.read_token(github_config, user_key=user_key)
         if token is None:
             return GitHubAuthStatus(
                 connected=False,
@@ -318,11 +344,11 @@ class GitHubOAuthService:
             message="GitHub 状态检查失败，请稍后重试。",
         )
 
-    def disconnect(self, github_config: GitHubConfig) -> None:
-        self._storage.clear_token(github_config)
+    def disconnect(self, github_config: GitHubConfig, *, user_key: str | None = None) -> None:
+        self._storage.clear_token(github_config, user_key=user_key)
 
-    def get_access_token(self, github_config: GitHubConfig) -> str:
-        token = self._storage.read_token(github_config)
+    def get_access_token(self, github_config: GitHubConfig, *, user_key: str | None = None) -> str:
+        token = self._storage.read_token(github_config, user_key=user_key)
         if token is None or not token.strip():
             raise GitHubAuthError("未检测到 GitHub 授权，请先完成授权。")
 
@@ -333,8 +359,10 @@ class GitHubOAuthService:
             raise GitHubAuthError("GitHub 授权已失效，请重新授权。")
         raise GitHubAuthError("GitHub 状态检查失败，请稍后重试。")
 
-    def list_repositories(self, github_config: GitHubConfig) -> list[GitHubRepository]:
-        token = self.get_access_token(github_config)
+    def list_repositories(
+        self, github_config: GitHubConfig, *, user_key: str | None = None
+    ) -> list[GitHubRepository]:
+        token = self.get_access_token(github_config, user_key=user_key)
         with self._http_client_factory() as http_client:
             response = http_client.get(
                 f"{github_config.oauth_api_base_url}/user/repos",
@@ -378,20 +406,36 @@ class GitHubOAuthService:
             raise GitHubAuthError("GitHub 授权已失效，请重新授权。")
         raise GitHubAuthError("无法获取 GitHub 仓库列表，请稍后重试。")
 
-    def _validate_state(self, github_config: GitHubConfig, state: str) -> None:
+    def _validate_state(
+        self, github_config: GitHubConfig, state: str, user_key: str | None
+    ) -> None:
         now = time.time()
         self._cleanup_expired_states(now)
-        expires_at = self._pending_states.pop(state, None)
-        if expires_at is None or expires_at <= now:
+        pending_state = self._pending_states.get(state)
+        if pending_state is None:
             raise GitHubAuthError("OAuth 回调状态无效或已过期，请重新发起授权。")
+        expires_at, pending_user_key = pending_state
+        if expires_at <= now:
+            _ = self._pending_states.pop(state, None)
+            raise GitHubAuthError("OAuth 回调状态无效或已过期，请重新发起授权。")
+        if pending_user_key != self._normalize_user_key(user_key):
+            raise GitHubAuthError("OAuth 回调状态无效或已过期，请重新发起授权。")
+
+        _ = self._pending_states.pop(state, None)
 
         if github_config.oauth_state_ttl_seconds <= 0:
             raise GitHubAuthError("GitHub OAuth 配置无效：state TTL 必须大于 0。")
 
     def _cleanup_expired_states(self, now: float) -> None:
-        expired = [state for state, expires_at in self._pending_states.items() if expires_at <= now]
+        expired = [
+            state for state, (expires_at, _) in self._pending_states.items() if expires_at <= now
+        ]
         for state in expired:
             _ = self._pending_states.pop(state, None)
+
+    @staticmethod
+    def _normalize_user_key(user_key: str | None) -> str:
+        return (user_key or "").strip()
 
     def _exchange_code_for_token(self, github_config: GitHubConfig, code: str) -> str:
         client_id = (github_config.oauth_client_id or "").strip()

@@ -14,8 +14,8 @@ from comet.web.github_auth_service import GitHubOAuthService
 
 
 class _AlwaysAuthorizedGitHubOAuthService(GitHubOAuthService):
-    def get_access_token(self, github_config: Any) -> str:
-        del github_config
+    def get_access_token(self, github_config: Any, *, user_key: str | None = None) -> str:
+        del github_config, user_key
         return "gho-test-valid"
 
 

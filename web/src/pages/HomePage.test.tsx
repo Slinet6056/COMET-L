@@ -116,7 +116,7 @@ describe('HomePage upload-first UI for ordinary users', () => {
 
     expect(screen.getByRole('tab', { name: '上传项目', selected: true })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: '本地路径' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'GitHub 仓库' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'GitHub 仓库' })).toBeInTheDocument();
   });
 
   it('shows project upload input for ordinary users', async () => {
@@ -489,9 +489,9 @@ describe('HomePage admin local path and GitHub modes', () => {
     expect(screen.getByText('服务端限制：敏感值已隐藏，不会在前端显示。')).toBeInTheDocument();
   });
 
-  it('shows admin restriction notice in GitHub mode', async () => {
+  it('does not show an admin restriction notice in GitHub mode', async () => {
     vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
-    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
     vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({
       connected: false,
       requiresReauth: false,
@@ -510,8 +510,9 @@ describe('HomePage admin local path and GitHub modes', () => {
     await user.click(githubTab);
 
     await waitFor(() => {
-      expect(screen.getByText('GitHub 仓库模式仅限管理员使用。服务端限制。')).toBeInTheDocument();
+      expect(screen.getByText('未连接')).toBeInTheDocument();
     });
+    expect(screen.queryByText(/GitHub.*仅限管理员/)).not.toBeInTheDocument();
   });
 });
 

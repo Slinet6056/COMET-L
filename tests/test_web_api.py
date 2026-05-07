@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -1683,16 +1684,16 @@ class _FailingKeyring:
 
 
 class _AlwaysAuthorizedGitHubOAuthService(GitHubOAuthService):
-    def get_status(self, github_config: Any) -> GitHubAuthStatus:
-        del github_config
+    def get_status(self, github_config: Any, *, user_key: str | None = None) -> GitHubAuthStatus:
+        del github_config, user_key
         return GitHubAuthStatus(
             connected=True,
             requires_reauth=False,
             message="GitHub 已连接。",
         )
 
-    def get_access_token(self, github_config: Any) -> str:
-        del github_config
+    def get_access_token(self, github_config: Any, *, user_key: str | None = None) -> str:
+        del github_config, user_key
         return "gho-test-valid"
 
 
@@ -1704,6 +1705,7 @@ class GitHubAuthApiTests(unittest.TestCase):
     run_service: RunLifecycleService | None = None
     github_auth_service: GitHubOAuthService | None = None
     client: TestClient | None = None
+    user_id: int | None = None
     env_patcher: Any = None
 
     def setUp(self) -> None:
@@ -1790,7 +1792,11 @@ class GitHubAuthApiTests(unittest.TestCase):
                 github_auth_service=self.github_auth_service,
             )
         )
-        login_test_user(self.client, WebDatabase.for_workspace(self.root), role="admin")
+        self.user_id = login_test_user(
+            self.client,
+            WebDatabase.for_workspace(self.root),
+            role="admin",
+        )
 
     def tearDown(self) -> None:
         if self.run_service is not None:
@@ -1801,11 +1807,15 @@ class GitHubAuthApiTests(unittest.TestCase):
         if self.temp_dir is not None:
             self.temp_dir.cleanup()
 
-    def _github_files(self) -> tuple[Path, Path]:
+    def _github_files(self, user_key: str | None = None) -> tuple[Path, Path]:
         assert self.default_config_path is not None
         settings = Settings.from_yaml(str(self.default_config_path))
         token_path = Path(settings.github.encrypted_token_store_path).expanduser()
         key_path = Path(settings.github.encrypted_key_store_path).expanduser()
+        if user_key is not None:
+            digest = hashlib.sha256(user_key.encode("utf-8")).hexdigest()[:24]
+            token_path = token_path.with_name(f"{token_path.stem}.{digest}{token_path.suffix}")
+            key_path = key_path.with_name(f"{key_path.stem}.{digest}{key_path.suffix}")
         return token_path, key_path
 
     def test_github_auth_status_reports_unauthorized_when_never_connected(self) -> None:
@@ -1818,7 +1828,7 @@ class GitHubAuthApiTests(unittest.TestCase):
         self.assertFalse(payload["requiresReauth"])
         self.assertEqual(payload["provider"], "github-oauth-app")
 
-    def test_github_auth_and_repository_routes_require_admin_for_ordinary_users(self) -> None:
+    def test_github_auth_and_repository_routes_allow_ordinary_users(self) -> None:
         assert self.client is not None
         assert self.root is not None
         login_test_user(
@@ -1828,20 +1838,29 @@ class GitHubAuthApiTests(unittest.TestCase):
             role="user",
         )
 
-        responses = [
-            self.client.get("/api/github/auth/status"),
-            self.client.get("/api/github/auth/connect-url"),
-            self.client.get("/api/github/auth/callback?code=ok-code&state=missing-state"),
-            self.client.get("/api/github/repositories"),
-            self.client.post(
-                "/api/github/auth/disconnect",
-                headers={"origin": "http://testserver"},
-            ),
-        ]
+        status_response = self.client.get("/api/github/auth/status")
+        connect_response = self.client.get("/api/github/auth/connect-url")
+        callback_response = self.client.get(
+            "/api/github/auth/callback?code=ok-code&state=missing-state"
+        )
+        repositories_response = self.client.get("/api/github/repositories")
+        disconnect_response = self.client.post(
+            "/api/github/auth/disconnect",
+            headers={"origin": "http://testserver"},
+        )
 
-        for response in responses:
-            self.assertEqual(response.status_code, 403, response.text)
-            self.assertEqual(response.json()["error"]["code"], "admin_required")
+        self.assertEqual(status_response.status_code, 200)
+        self.assertIn("connected", status_response.json())
+        self.assertEqual(connect_response.status_code, 200)
+        self.assertIn("connectUrl", connect_response.json())
+        self.assertEqual(callback_response.status_code, 400)
+        self.assertEqual(
+            callback_response.json()["error"]["code"],
+            "github_oauth_callback_failed",
+        )
+        self.assertEqual(repositories_response.status_code, 401)
+        self.assertEqual(repositories_response.json()["error"]["code"], "github_auth_required")
+        self.assertEqual(disconnect_response.status_code, 200)
 
     def test_github_repositories_requires_authorization(self) -> None:
         assert self.client is not None
@@ -1886,7 +1905,8 @@ class GitHubAuthApiTests(unittest.TestCase):
         self.assertTrue(callback_payload["connected"])
         self.assertFalse(callback_payload["requiresReauth"])
 
-        token_path, key_path = self._github_files()
+        assert self.user_id is not None
+        token_path, key_path = self._github_files(f"web-user:{self.user_id}")
         self.assertTrue(token_path.exists())
         self.assertTrue(key_path.exists())
         self.assertNotIn("gho-test-valid", token_path.read_text(encoding="utf-8"))
@@ -1968,8 +1988,13 @@ class GitHubAuthApiTests(unittest.TestCase):
         assert self.client is not None
         assert self.default_config_path is not None
         assert self.github_auth_service is not None
+        assert self.user_id is not None
         settings = Settings.from_yaml(str(self.default_config_path))
-        self.github_auth_service._storage.write_token(settings.github, "gho-test-expired")
+        self.github_auth_service._storage.write_token(
+            settings.github,
+            "gho-test-expired",
+            user_key=f"web-user:{self.user_id}",
+        )
 
         response = self.client.get("/api/github/auth/status")
 
@@ -2017,6 +2042,7 @@ class GitHubAuthApiTests(unittest.TestCase):
 
     def test_github_auth_disconnect_clears_only_github_auth_state(self) -> None:
         assert self.client is not None
+        assert self.user_id is not None
         connect_response = self.client.get("/api/github/auth/connect-url")
         state = parse_qs(urlparse(connect_response.json()["connectUrl"]).query)["state"][0]
         callback_response = self.client.get(f"/api/github/auth/callback?code=ok-code&state={state}")
@@ -2029,7 +2055,7 @@ class GitHubAuthApiTests(unittest.TestCase):
         self.assertEqual(disconnect_response.status_code, 200)
         self.assertFalse(disconnect_response.json()["connected"])
 
-        token_path, key_path = self._github_files()
+        token_path, key_path = self._github_files(f"web-user:{self.user_id}")
         self.assertFalse(token_path.exists())
         self.assertFalse(key_path.exists())
 
@@ -2040,6 +2066,57 @@ class GitHubAuthApiTests(unittest.TestCase):
         config_response = self.client.get("/api/config/defaults")
         self.assertEqual(config_response.status_code, 200)
         self.assertEqual(config_response.json()["config"]["llm"]["model"], "gpt-4")
+
+    def test_github_auth_tokens_are_isolated_between_ordinary_users(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        database = WebDatabase.for_workspace(self.root)
+        user_a = login_test_user(
+            self.client,
+            database,
+            username="github-user-a",
+            role="user",
+        )
+        connect_response = self.client.get("/api/github/auth/connect-url")
+        state = parse_qs(urlparse(connect_response.json()["connectUrl"]).query)["state"][0]
+
+        user_b = login_test_user(
+            self.client,
+            database,
+            username="github-user-b",
+            role="user",
+        )
+        cross_callback_response = self.client.get(
+            f"/api/github/auth/callback?code=ok-code&state={state}"
+        )
+        self.assertEqual(cross_callback_response.status_code, 400)
+        self.assertFalse(self.client.get("/api/github/auth/status").json()["connected"])
+
+        login_test_user(self.client, database, username="github-user-a", role="user")
+        callback_response = self.client.get(f"/api/github/auth/callback?code=ok-code&state={state}")
+        self.assertEqual(callback_response.status_code, 200)
+        self.assertTrue(self.client.get("/api/github/auth/status").json()["connected"])
+
+        login_test_user(self.client, database, username="github-user-b", role="user")
+        b_connect_response = self.client.get("/api/github/auth/connect-url")
+        b_state = parse_qs(urlparse(b_connect_response.json()["connectUrl"]).query)["state"][0]
+        b_callback_response = self.client.get(
+            f"/api/github/auth/callback?code=ok-code&state={b_state}"
+        )
+        self.assertEqual(b_callback_response.status_code, 200)
+        self.assertTrue(self.client.get("/api/github/auth/status").json()["connected"])
+
+        disconnect_response = self.client.post(
+            "/api/github/auth/disconnect",
+            headers={"origin": "http://testserver"},
+        )
+        self.assertEqual(disconnect_response.status_code, 200)
+        self.assertFalse(self.client.get("/api/github/auth/status").json()["connected"])
+
+        login_test_user(self.client, database, username="github-user-a", role="user")
+        self.assertTrue(self.client.get("/api/github/auth/status").json()["connected"])
+        self.assertTrue(self._github_files(f"web-user:{user_a}")[0].exists())
+        self.assertFalse(self._github_files(f"web-user:{user_b}")[0].exists())
 
     def test_github_auth_connect_url_prefers_env_oauth_config(self) -> None:
         assert self.client is not None
@@ -2247,8 +2324,9 @@ class GitHubRepoImportRunApiTests(unittest.TestCase):
         self.assertEqual(run_request.github_base_branch, "develop")
         self.assertTrue(mocked_clone.called)
 
-    def test_post_runs_github_repo_requires_admin_for_ordinary_users(self) -> None:
+    def test_post_runs_github_repo_allows_ordinary_users(self) -> None:
         assert self.client is not None
+        assert self.run_service is not None
         assert self.root is not None
         database = WebDatabase.for_workspace(self.root)
         login_test_user(
@@ -2258,16 +2336,48 @@ class GitHubRepoImportRunApiTests(unittest.TestCase):
             role="user",
         )
 
+        with patch(
+            "comet.web.repo_import_service.subprocess.run",
+            side_effect=self._mock_clone_success,
+        ):
+            response = self.client.post(
+                "/api/runs",
+                data={"githubRepoUrl": "https://github.com/openai/example-repo.git"},
+            )
+
+        self.assertEqual(response.status_code, 201)
+        run_id = response.json()["runId"]
+        run_request = self.run_service.get_run_request(run_id)
+        self.assertEqual(run_request.github_repo_url, "https://github.com/openai/example-repo.git")
+
+    def test_post_runs_github_repo_rejects_local_paths_for_ordinary_users(self) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        bug_reports_path = self.root / "ordinary-local-bug-reports"
+        bug_reports_path.mkdir()
+        database = WebDatabase.for_workspace(self.root)
+        login_test_user(
+            self.client,
+            database,
+            username="github-run-local-path-ordinary",
+            role="user",
+        )
+
         response = self.client.post(
             "/api/runs",
-            data={"githubRepoUrl": "https://github.com/openai/example-repo.git"},
+            data={
+                "githubRepoUrl": "https://github.com/openai/example-repo.git",
+                "bugReportsDir": str(bug_reports_path),
+            },
         )
 
         self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.json()["error"]["code"], "admin_required")
-        with database.connect() as connection:
-            run_count = connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
-        self.assertEqual(run_count, 0)
+        payload = response.json()
+        self.assertEqual(payload["error"]["code"], "local_path_forbidden")
+        self.assertEqual(payload["error"]["fieldErrors"][0]["path"], ["bugReportsDir"])
+        assert self.run_service is not None
+        self.assertEqual(len(self.run_service._sessions), 0)
+        self.assertNotIn(str(bug_reports_path), response.text)
 
     def test_post_runs_imports_github_repo_without_project_path_field(self) -> None:
         assert self.client is not None

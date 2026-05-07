@@ -696,11 +696,9 @@ export function HomePage({ user }: { user: AuthUser }) {
                   本地路径
                 </TabsTrigger>
               ) : null}
-              {user.role === 'admin' ? (
-                <TabsTrigger value="github" className="text-xs h-6">
-                  GitHub 仓库
-                </TabsTrigger>
-              ) : null}
+              <TabsTrigger value="github" className="text-xs h-6">
+                GitHub 仓库
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="upload" className="space-y-3 mt-3">
@@ -876,12 +874,6 @@ export function HomePage({ user }: { user: AuthUser }) {
             </TabsContent>
 
             <TabsContent value="github" className="space-y-3 mt-3">
-              <Alert>
-                <AlertDescription className="text-xs">
-                  GitHub 仓库模式仅限管理员使用。服务端限制。
-                </AlertDescription>
-              </Alert>
-
               {/* GitHub 授权状态 */}
               <div className="flex items-center justify-between py-2 px-3 rounded-md bg-muted/50">
                 <div className="flex items-center gap-2">

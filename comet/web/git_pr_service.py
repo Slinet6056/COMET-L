@@ -68,6 +68,7 @@ class GitHubPullRequestService:
         repo_url: str,
         base_branch: str,
         github_config: GitHubConfig,
+        user_key: str | None = None,
     ) -> GitPullRequestResult:
         resolved_project_path = project_path.expanduser().resolve()
         if not (resolved_project_path / ".git").is_dir():
@@ -85,7 +86,7 @@ class GitHubPullRequestService:
         if not normalized_base_branch:
             raise GitPullRequestError("缺少基线分支信息，无法创建 PR。")
 
-        token = self._load_access_token(github_config)
+        token = self._load_access_token(github_config, user_key=user_key)
         authed_remote_url = (
             f"https://x-access-token:{token}@github.com/{identity.owner}/{identity.repo}.git"
         )
@@ -262,9 +263,11 @@ class GitHubPullRequestService:
             raise GitPullRequestError("创建 GitHub PR 失败: 响应缺少 PR 地址。")
         return pr_url
 
-    def _load_access_token(self, github_config: GitHubConfig) -> str:
+    def _load_access_token(
+        self, github_config: GitHubConfig, *, user_key: str | None = None
+    ) -> str:
         try:
-            token = self._github_auth_service.get_access_token(github_config)
+            token = self._github_auth_service.get_access_token(github_config, user_key=user_key)
         except GitHubAuthError as exc:
             raise GitPullRequestError(str(exc)) from exc
         normalized_token = token.strip()

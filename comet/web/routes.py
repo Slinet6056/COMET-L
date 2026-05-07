@@ -346,6 +346,10 @@ def _github_oauth_result_redirect(
     return RedirectResponse(url=f"/?{urlencode(query)}", status_code=303)
 
 
+def _github_oauth_user_key(user: AuthenticatedUser) -> str:
+    return f"web-user:{user.id}"
+
+
 def _load_settings_from_yaml(content: str) -> Settings:
     config_data = yaml.safe_load(content)
     if config_data is None:
@@ -1059,6 +1063,17 @@ def _local_path_forbidden_response(field_paths: list[list[str]]) -> JSONResponse
     )
 
 
+def _submitted_local_path_fields(
+    *, project_path: str | None, bug_reports_dir: str | None
+) -> list[list[str]]:
+    field_paths: list[list[str]] = []
+    if project_path is not None and project_path.strip():
+        field_paths.append(["projectPath"])
+    if bug_reports_dir is not None and bug_reports_dir.strip():
+        field_paths.append(["bugReportsDir"])
+    return field_paths
+
+
 def _upload_not_found_response(field_name: str) -> JSONResponse:
     return _error_response(
         404,
@@ -1285,12 +1300,16 @@ def _validate_github_authorization(
     settings: Settings,
     github_repo_url: str | None,
     github_auth_service: GitHubOAuthService,
+    user: AuthenticatedUser,
 ) -> list[FieldError]:
     if github_repo_url is None or not github_repo_url.strip():
         return []
 
     try:
-        status = github_auth_service.get_status(settings.github)
+        status = github_auth_service.get_status(
+            settings.github,
+            user_key=_github_oauth_user_key(user),
+        )
     except GitHubAuthError:
         return [
             FieldError(
@@ -1549,13 +1568,6 @@ async def create_run(
 ) -> RunCreateResponse | JSONResponse:
     del request
     normalized_github_repo_url = githubRepoUrl.strip() if githubRepoUrl else None
-    if normalized_github_repo_url is not None and user.role != "admin":
-        return _error_response(
-            403,
-            code="admin_required",
-            message="需要管理员权限。",
-            field_errors=[],
-        )
 
     merged = await _load_merged_settings(services, configFile)
     if isinstance(merged, JSONResponse):
@@ -1613,11 +1625,10 @@ async def create_run(
     uploads_to_mark_used: list[tuple[UploadRecord, str]] = []
 
     if normalized_github_repo_url is None:
-        local_path_fields: list[list[str]] = []
-        if projectPath is not None and projectPath.strip():
-            local_path_fields.append(["projectPath"])
-        if bugReportsDir is not None and bugReportsDir.strip():
-            local_path_fields.append(["bugReportsDir"])
+        local_path_fields = _submitted_local_path_fields(
+            project_path=projectPath,
+            bug_reports_dir=bugReportsDir,
+        )
         if user.role != "admin" and local_path_fields:
             return _local_path_forbidden_response(local_path_fields)
 
@@ -1707,6 +1718,13 @@ async def create_run(
                 }
             }
     else:
+        local_path_fields = _submitted_local_path_fields(
+            project_path=projectPath,
+            bug_reports_dir=bugReportsDir,
+        )
+        if user.role != "admin" and local_path_fields:
+            return _local_path_forbidden_response(local_path_fields)
+
         normalized_project_path = (
             str(Path(projectPath).expanduser().resolve())
             if projectPath is not None and projectPath.strip()
@@ -1720,6 +1738,7 @@ async def create_run(
         settings,
         githubRepoUrl,
         github_auth_service,
+        user,
     )
     if github_auth_errors:
         return _error_response(
@@ -1967,12 +1986,15 @@ async def upload_bug_reports_zip(
 @router.get("/github/auth/connect-url", response_model=None)
 def get_github_auth_connect_url(
     services: AppServices = Depends(get_app_services),
-    _admin: AuthenticatedUser = Depends(require_admin),
+    user: AuthenticatedUser = Depends(require_user),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> JSONResponse:
     server_config = _load_server_config(services.default_config_path)
     try:
-        connect_url = github_auth_service.build_connect_url(server_config.github)
+        connect_url = github_auth_service.build_connect_url(
+            server_config.github,
+            user_key=_github_oauth_user_key(user),
+        )
     except GitHubAuthError as exc:
         logger.warning("GitHub OAuth 配置无效: %s", exc)
         return JSONResponse(
@@ -1996,7 +2018,7 @@ def handle_github_auth_callback(
     error: str | None = Query(default=None, min_length=1),
     error_description: str | None = Query(default=None, min_length=1),
     services: AppServices = Depends(get_app_services),
-    _admin: AuthenticatedUser = Depends(require_admin),
+    user: AuthenticatedUser = Depends(require_user),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> JSONResponse | RedirectResponse:
     server_config = _load_server_config(services.default_config_path)
@@ -2038,7 +2060,12 @@ def handle_github_auth_callback(
         )
 
     try:
-        status = github_auth_service.handle_callback(server_config.github, code=code, state=state)
+        status = github_auth_service.handle_callback(
+            server_config.github,
+            code=code,
+            state=state,
+            user_key=_github_oauth_user_key(user),
+        )
     except GitHubAuthError as exc:
         logger.warning("GitHub OAuth 回调失败: %s", exc)
         message = "GitHub 授权失败，请重新发起授权。"
@@ -2062,12 +2089,15 @@ def handle_github_auth_callback(
 @router.get("/github/auth/status", response_model=None)
 def get_github_auth_status(
     services: AppServices = Depends(get_app_services),
-    _admin: AuthenticatedUser = Depends(require_admin),
+    user: AuthenticatedUser = Depends(require_user),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> JSONResponse:
     server_config = _load_server_config(services.default_config_path)
     try:
-        status = github_auth_service.get_status(server_config.github)
+        status = github_auth_service.get_status(
+            server_config.github,
+            user_key=_github_oauth_user_key(user),
+        )
     except GitHubAuthError as exc:
         logger.warning("GitHub OAuth 状态查询失败: %s", exc)
         return JSONResponse(
@@ -2085,11 +2115,11 @@ def get_github_auth_status(
 @router.post("/github/auth/disconnect", response_model=None)
 def disconnect_github_auth(
     services: AppServices = Depends(get_app_services),
-    _admin: AuthenticatedUser = Depends(require_admin),
+    user: AuthenticatedUser = Depends(require_user),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> JSONResponse:
     server_config = _load_server_config(services.default_config_path)
-    github_auth_service.disconnect(server_config.github)
+    github_auth_service.disconnect(server_config.github, user_key=_github_oauth_user_key(user))
     return JSONResponse(
         status_code=200,
         content={
@@ -2108,12 +2138,15 @@ def disconnect_github_auth(
 )
 def get_github_repositories(
     services: AppServices = Depends(get_app_services),
-    _admin: AuthenticatedUser = Depends(require_admin),
+    user: AuthenticatedUser = Depends(require_user),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> GitHubRepositoriesResponse | JSONResponse:
     server_config = _load_server_config(services.default_config_path)
     try:
-        repositories = github_auth_service.list_repositories(server_config.github)
+        repositories = github_auth_service.list_repositories(
+            server_config.github,
+            user_key=_github_oauth_user_key(user),
+        )
     except GitHubAuthError as exc:
         logger.warning("GitHub 仓库列表获取失败: %s", exc)
         return _error_response(

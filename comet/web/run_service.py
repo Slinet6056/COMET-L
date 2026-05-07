@@ -277,6 +277,7 @@ class RunLifecycleService:
                         github_repo_url=scoped_request.github_repo_url,
                         github_config=config.github,
                         requested_base_branch=scoped_request.github_base_branch,
+                        user_key=_github_user_key(user_id),
                     )
                 except RepoImportUrlError as exc:
                     raise InvalidGitHubRepoUrlError(str(exc)) from exc
@@ -968,6 +969,7 @@ class RunLifecycleService:
                 log_router=log_router,
                 repo_import_service=self._repo_import_service,
                 source_run_id=run_id,
+                user_id=self._sessions[run_id].user_id,
                 runtime_snapshot_publisher=(
                     lambda **payload: self.publish_runtime_snapshot(run_id, **payload)
                 ),
@@ -1366,6 +1368,7 @@ class RunLifecycleService:
             repo_url=repo_url,
             base_branch=base_branch,
             github_config=github_config,
+            user_key=_github_user_key(session.user_id),
         )
         return result.pull_request_url
 
@@ -1980,6 +1983,12 @@ def _normalize_optional_text(value: Any) -> str | None:
     return normalized or None
 
 
+def _github_user_key(user_id: int | None) -> str | None:
+    if user_id is None:
+        return None
+    return f"web-user:{user_id}"
+
+
 def _normalize_config_path(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
@@ -2182,6 +2191,7 @@ def _resolve_project_source(
     logger: logging.Logger,
     repo_import_service: GitHubRepoImportService | None,
     source_run_id: str | None,
+    user_id: int | None = None,
 ) -> str:
     managed_root = Path(config.github.managed_clone_root).expanduser().resolve()
 
@@ -2197,6 +2207,7 @@ def _resolve_project_source(
                     github_repo_url=request.github_repo_url,
                     github_config=config.github,
                     requested_base_branch=request.github_base_branch,
+                    user_key=_github_user_key(user_id),
                 )
             except RepoImportUrlError as exc:
                 raise InvalidGitHubRepoUrlError(str(exc)) from exc
@@ -2232,6 +2243,7 @@ def run_request(
     runtime_snapshot_publisher: Optional[Callable[..., None]] = None,
     repo_import_service: GitHubRepoImportService | None = None,
     source_run_id: str | None = None,
+    user_id: int | None = None,
     run_control: threading.Event | None = None,
     timeout_deadline: datetime | None = None,
 ) -> int:
@@ -2262,6 +2274,7 @@ def run_request(
         runtime_logger,
         repo_import_service,
         source_run_id,
+        user_id=user_id,
     )
     bug_reports_dir = _resolve_bug_reports_dir(request.bug_reports_dir, runtime_logger)
 
