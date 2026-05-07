@@ -1529,9 +1529,8 @@ async def parse_config(
             normalized,
         )
         policy_result = apply_uploaded_config_policy(base_settings, normalized)
-        safe_config, redacted_annotations = redacted_settings_dict(display_settings)
+        safe_config = display_settings.to_dict()
         annotations = policy_result.annotations
-        annotations.extend(redacted_annotations)
     except yaml.YAMLError as exc:
         mark = getattr(exc, "problem_mark", None)
         path: list[str | int] = []

@@ -526,7 +526,7 @@ describe('HomePage admin local path and GitHub modes', () => {
     expect(screen.queryByText('敏感值已隐藏，不会在前端显示。')).not.toBeInTheDocument();
   });
 
-  it('clears redacted secret values when hydrating uploaded config', async () => {
+  it('preserves uploaded secret values when hydrating uploaded config', async () => {
     vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
     vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
     vi.spyOn(api, 'parseConfigFile').mockResolvedValue({
@@ -534,19 +534,18 @@ describe('HomePage admin local path and GitHub modes', () => {
         ...defaultConfig,
         llm: {
           ...defaultConfig.llm,
-          api_key: '[REDACTED]',
+          api_key: 'uploaded-llm-key',
+          max_tokens: 8192,
         },
         knowledge: {
           ...defaultConfig.knowledge,
           embedding: {
             ...defaultConfig.knowledge.embedding,
-            api_key: '[REDACTED]',
+            api_key: 'uploaded-embedding-key',
           },
         },
       },
-      configPolicy: {
-        redactedFields: ['llm.api_key', 'knowledge.embedding.api_key'],
-      },
+      configPolicy: {},
     });
 
     const user = userEvent.setup();
@@ -564,8 +563,9 @@ describe('HomePage admin local path and GitHub modes', () => {
     await user.upload(screen.getByLabelText('上传 YAML'), file);
 
     await waitFor(() => {
-      expect(screen.getByLabelText('API 密钥')).toHaveValue('');
-      expect(screen.getByLabelText('嵌入 API 密钥')).toHaveValue('');
+      expect(screen.getByLabelText('API 密钥')).toHaveValue('uploaded-llm-key');
+      expect(screen.getByLabelText('最大令牌数')).toHaveValue(8192);
+      expect(screen.getByLabelText('嵌入 API 密钥')).toHaveValue('uploaded-embedding-key');
     });
   });
 

@@ -33,8 +33,9 @@ FIXED_CONFIG_FIELDS: set[PathTuple] = {
     ("github", "encrypted_key_store_path"),
     ("github", "managed_clone_root"),
 }
-SECRET_KEY_PARTS = ("api_key", "secret", "token", "password", "session")
+SECRET_KEY_PARTS = ("api_key", "secret", "password", "session")
 SECRET_CONFIG_FIELDS: set[PathTuple] = {
+    ("github", "encrypted_token_store_path"),
     ("github", "encrypted_key_store_path"),
 }
 

@@ -735,9 +735,12 @@ class ConfigApiTests(unittest.TestCase):
         self.assertIn("configPolicy", payload)
         self.assertIsInstance(payload["config"]["llm"]["model"], str)
         self.assertTrue(payload["config"]["llm"]["model"])
+        self.assertIsInstance(payload["config"]["llm"]["max_tokens"], int)
+        self.assertGreater(payload["config"]["llm"]["max_tokens"], 0)
         self.assertTrue(payload["config"]["evolution"]["mutation_enabled"])
         self.assertFalse(payload["config"]["preprocessing"]["exit_after_preprocessing"])
         self.assertNotIn("paths", payload["config"])
+        self.assertNotIn("llm.max_tokens", payload["configPolicy"]["redactedFields"])
 
     def test_defaults_endpoint_accepts_server_config_without_runtime_llm(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -822,13 +825,13 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("configPolicy", payload)
-        self.assertEqual(payload["config"]["llm"]["api_key"], "[REDACTED]")
+        self.assertEqual(payload["config"]["llm"]["api_key"], "test-key")
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4o-mini")
         self.assertEqual(payload["config"]["execution"]["timeout"], 123)
         self.assertTrue(payload["config"]["preprocessing"]["exit_after_preprocessing"])
         self.assertFalse(payload["config"]["evolution"]["mutation_enabled"])
         self.assertTrue(payload["config"]["agent"]["parallel"]["enabled"])
-        self.assertIn("llm.api_key", payload["configPolicy"]["redactedFields"])
+        self.assertNotIn("llm.api_key", payload["configPolicy"]["redactedFields"])
         self.assertNotIn("llm.api_key", payload["configPolicy"]["overriddenFields"])
         self.assertNotIn("llm.model", payload["configPolicy"]["overriddenFields"])
         self.assertNotIn(
@@ -840,6 +843,40 @@ class ConfigApiTests(unittest.TestCase):
             payload["configPolicy"]["overriddenFields"],
         )
         self.assertNotIn("paths", payload["config"])
+
+    def test_parse_valid_yaml_preserves_uploaded_secret_values(self) -> None:
+        client = authenticated_client()
+
+        response = client.post(
+            "/api/config/parse",
+            files={
+                "file": (
+                    "config.yaml",
+                    BytesIO(
+                        (
+                            "llm:\n"
+                            "  api_key: uploaded-llm-key\n"
+                            "  max_tokens: 8192\n"
+                            "knowledge:\n"
+                            "  embedding:\n"
+                            "    api_key: uploaded-embedding-key\n"
+                        ).encode("utf-8")
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["config"]["llm"]["api_key"], "uploaded-llm-key")
+        self.assertEqual(payload["config"]["llm"]["max_tokens"], 8192)
+        self.assertEqual(
+            payload["config"]["knowledge"]["embedding"]["api_key"],
+            "uploaded-embedding-key",
+        )
+        self.assertNotIn("llm.api_key", payload["configPolicy"]["redactedFields"])
+        self.assertNotIn("knowledge.embedding.api_key", payload["configPolicy"]["redactedFields"])
 
     def test_parse_valid_yaml_marks_target_java_home_as_overridden(self) -> None:
         client = authenticated_client()
