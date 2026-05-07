@@ -829,6 +829,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertFalse(payload["config"]["evolution"]["mutation_enabled"])
         self.assertTrue(payload["config"]["agent"]["parallel"]["enabled"])
         self.assertIn("llm.api_key", payload["configPolicy"]["redactedFields"])
+        self.assertNotIn("llm.api_key", payload["configPolicy"]["overriddenFields"])
         self.assertNotIn("llm.model", payload["configPolicy"]["overriddenFields"])
         self.assertNotIn(
             "preprocessing.exit_after_preprocessing",
@@ -839,6 +840,43 @@ class ConfigApiTests(unittest.TestCase):
             payload["configPolicy"]["overriddenFields"],
         )
         self.assertNotIn("paths", payload["config"])
+
+    def test_parse_valid_yaml_marks_target_java_home_as_overridden(self) -> None:
+        client = authenticated_client()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            valid_home = Path(temp_dir) / "jdk-17"
+            valid_bin = valid_home / "bin"
+            valid_bin.mkdir(parents=True)
+            (valid_bin / "java").write_text("", encoding="utf-8")
+            (valid_bin / "javac").write_text("", encoding="utf-8")
+
+            response = client.post(
+                "/api/config/parse",
+                files={
+                    "file": (
+                        "config.yaml",
+                        BytesIO(
+                            (
+                                "llm:\n"
+                                "  api_key: test-key\n"
+                                "execution:\n"
+                                "  selected_java_version: '17'\n"
+                                f"  target_java_home: {valid_home}\n"
+                            ).encode("utf-8")
+                        ),
+                        "application/x-yaml",
+                    )
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["config"]["execution"]["selected_java_version"], "17")
+            self.assertIn("execution.target_java_home", payload["configPolicy"]["overriddenFields"])
+            self.assertNotIn(
+                "execution.selected_java_version", payload["configPolicy"]["overriddenFields"]
+            )
 
     def test_parse_yaml_rejects_invalid_mutation_enabled_type(self) -> None:
         client = authenticated_client()
@@ -1472,6 +1510,8 @@ class UploadRunApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["effectiveConfig"]["evolution"]["budget_llm_calls"], 7)
         self.assertEqual(payload["effectiveConfig"]["execution"]["selected_java_version"], "17")
+        self.assertEqual(payload["effectiveConfig"]["llm"]["api_key"], "[REDACTED]")
+        self.assertNotIn("llm.api_key", payload["configPolicy"]["overriddenFields"])
 
     def test_run_without_runtime_llm_config_returns_validation_error(self) -> None:
         assert self.client is not None
@@ -3272,6 +3312,8 @@ class RunApiTests(unittest.TestCase):
                             (
                                 "llm:\n"
                                 "  api_key: yaml-key\n"
+                                "execution:\n"
+                                "  target_java_home: /tmp/uploaded-target\n"
                                 "evolution:\n"
                                 "  mutation_enabled: true\n"
                                 "agent:\n"
@@ -3351,6 +3393,9 @@ class RunApiTests(unittest.TestCase):
         self.assertEqual(resolved_config["llm"]["api_key"], "[REDACTED]")
         self.assertEqual(resolved_config["evolution"]["max_iterations"], 7)
         self.assertEqual(resolved_config["evolution"]["budget_llm_calls"], 42)
+        self.assertNotEqual(
+            resolved_config["execution"]["target_java_home"], "/tmp/uploaded-target"
+        )
         self.assertEqual(resolved_config["execution"]["selected_java_version"], "17")
         self.assertTrue(resolved_config["evolution"]["mutation_enabled"])
         self.assertTrue(resolved_config["agent"]["parallel"]["enabled"])

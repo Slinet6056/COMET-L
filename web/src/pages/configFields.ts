@@ -124,12 +124,6 @@ export const CONFIG_SECTIONS: ConfigSectionDefinition[] = [
         kind: 'text',
       },
       {
-        path: ['execution', 'target_java_home'],
-        label: '目标项目 Java 目录',
-        description: '目标项目使用的 JDK。',
-        kind: 'text',
-      },
-      {
         path: ['execution', 'maven_home'],
         label: 'Maven 目录',
         description: '可选的 Maven 安装路径。',

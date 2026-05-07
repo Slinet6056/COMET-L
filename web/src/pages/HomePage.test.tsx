@@ -177,7 +177,7 @@ describe('HomePage upload-first UI for ordinary users', () => {
     );
 
     await screen.findByLabelText('上传项目 ZIP');
-    expect(screen.getByRole('button', { name: '请先上传项目' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '请选择 Java 版本' })).toBeDisabled();
   });
 
   it('uploads project zip and enables submit', async () => {
@@ -209,6 +209,8 @@ describe('HomePage upload-first UI for ordinary users', () => {
       expect(screen.getByText('已上传')).toBeInTheDocument();
     });
 
+    await user.selectOptions(screen.getByTestId('java-version-select'), '17');
+
     expect(screen.getByRole('button', { name: '启动运行' })).not.toBeDisabled();
   });
 
@@ -235,6 +237,7 @@ describe('HomePage upload-first UI for ordinary users', () => {
       screen.getByLabelText('上传项目 ZIP') as HTMLInputElement,
       new File(['test'], 'project.zip', { type: 'application/zip' }),
     );
+    await user.selectOptions(screen.getByTestId('java-version-select'), '17');
 
     const sourceSection = await screen.findByTestId('target-source-section');
     const startButton = await screen.findByRole('button', { name: '启动运行' });
@@ -367,6 +370,8 @@ describe('HomePage upload-first UI for ordinary users', () => {
       expect(screen.getByText('bug-reports.zip')).toBeInTheDocument();
     });
 
+    await user.selectOptions(screen.getByTestId('java-version-select'), '17');
+
     await user.click(screen.getByRole('button', { name: '启动运行' }));
 
     await waitFor(() => {
@@ -374,6 +379,7 @@ describe('HomePage upload-first UI for ordinary users', () => {
         expect.objectContaining({
           projectUploadId: 'upload-123',
           bugReportsUploadId: 'upload-456',
+          selectedJavaVersion: '17',
           config: expect.any(Object),
         }),
       );
@@ -392,8 +398,41 @@ describe('HomePage upload-first UI for ordinary users', () => {
 
     await screen.findByLabelText('上传项目 ZIP');
 
+    await userEvent.setup().selectOptions(screen.getByTestId('java-version-select'), '17');
+
     const submitButton = screen.getByRole('button', { name: '请先上传项目' });
     expect(submitButton).toBeDisabled();
+  });
+
+  it('requires Java version before submitting uploaded project', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    vi.spyOn(api, 'uploadProjectZip').mockResolvedValue({
+      uploadId: 'upload-123',
+      kind: 'project',
+      status: 'ready',
+      originalFilename: 'project.zip',
+      extractedRoot: '/sandbox/uploads/upload-123',
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    await user.upload(
+      screen.getByLabelText('上传项目 ZIP') as HTMLInputElement,
+      new File(['test'], 'project.zip', { type: 'application/zip' }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('project.zip')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('button', { name: '请选择 Java 版本' })).toBeDisabled();
   });
 });
 
@@ -485,6 +524,49 @@ describe('HomePage admin local path and GitHub modes', () => {
     expect(screen.getByText('此字段由服务端固定，提交时会使用后端值。')).toBeInTheDocument();
     expect(screen.getByText('超过部署上限时会由服务端自动收紧。')).toBeInTheDocument();
     expect(screen.queryByText('敏感值已隐藏，不会在前端显示。')).not.toBeInTheDocument();
+  });
+
+  it('clears redacted secret values when hydrating uploaded config', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: adminUser });
+    vi.spyOn(api, 'parseConfigFile').mockResolvedValue({
+      config: {
+        ...defaultConfig,
+        llm: {
+          ...defaultConfig.llm,
+          api_key: '[REDACTED]',
+        },
+        knowledge: {
+          ...defaultConfig.knowledge,
+          embedding: {
+            ...defaultConfig.knowledge.embedding,
+            api_key: '[REDACTED]',
+          },
+        },
+      },
+      configPolicy: {
+        redactedFields: ['llm.api_key', 'knowledge.embedding.api_key'],
+      },
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    const file = new File(['llm:\n  api_key: [REDACTED]\n'], 'config.yaml', {
+      type: 'application/x-yaml',
+    });
+    await user.upload(screen.getByLabelText('上传 YAML'), file);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('API 密钥')).toHaveValue('');
+      expect(screen.getByLabelText('嵌入 API 密钥')).toHaveValue('');
+    });
   });
 
   it('does not show an admin restriction notice in GitHub mode', async () => {
@@ -853,7 +935,7 @@ describe('HomePage GitHub auth flow', () => {
     });
   });
 
-  it('allows manual target java home to replace selected Java version', async () => {
+  it('does not allow manual target java home to replace selected Java version', async () => {
     vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
     vi.spyOn(api, 'fetchGitHubAuthStatus').mockResolvedValue({
       connected: true,
@@ -922,19 +1004,15 @@ describe('HomePage GitHub auth flow', () => {
 
     await screen.findByTestId('repo-item-testuser/test-repo');
     await user.click(screen.getByTestId('repo-item-testuser/test-repo'));
-    await user.type(screen.getByLabelText('目标项目 Java 目录'), '/custom/jdk');
+    expect(screen.queryByLabelText('目标项目 Java 目录')).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByTestId('java-version-select'), '17');
 
     await user.click(screen.getByRole('button', { name: '启动运行' }));
 
     await waitFor(() => {
       expect(createRunSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          selectedJavaVersion: null,
-          config: expect.objectContaining({
-            execution: expect.objectContaining({
-              target_java_home: '/custom/jdk',
-            }),
-          }),
+          selectedJavaVersion: '17',
         }),
       );
     });

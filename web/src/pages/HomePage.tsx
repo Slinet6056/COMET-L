@@ -142,6 +142,25 @@ function splitServerConfig(config: ConfigValue): {
   };
 }
 
+function sanitizeRedactedConfigValues(
+  config: ConfigValue,
+  configPolicy: ConfigPolicy | null,
+): ConfigValue {
+  if (!configPolicy?.redactedFields?.length) {
+    return config;
+  }
+
+  return configPolicy.redactedFields.reduce((currentConfig, fieldKey) => {
+    const path = fieldKey.split('.');
+    const value = getNestedValue(currentConfig, path);
+    if (value !== '[REDACTED]') {
+      return currentConfig;
+    }
+
+    return setNestedValue(currentConfig, path, null);
+  }, config);
+}
+
 function isLocalPathModeEnabled(deploymentConfig: DeploymentConfig | null): boolean {
   return deploymentConfig?.allow_local_path_mode === true;
 }
@@ -164,6 +183,50 @@ function getFieldPolicyNotes(fieldKey: string, configPolicy: ConfigPolicy | null
 type SourceMode = 'upload' | 'local' | 'github';
 
 const JAVA_VERSION_OPTIONS = ['8', '11', '17', '21', '25'];
+
+function JavaVersionSelect({
+  selectedJavaVersion,
+  fieldError,
+  disabled = false,
+  onChange,
+}: {
+  selectedJavaVersion: string;
+  fieldError?: string;
+  disabled?: boolean;
+  onChange: (version: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor="selected-java-version" className="text-xs">
+        目标 Java 版本
+      </Label>
+      <select
+        id="selected-java-version"
+        data-testid="java-version-select"
+        aria-label="目标 Java 版本"
+        value={selectedJavaVersion}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="h-8 w-full text-sm rounded-lg border border-input bg-transparent px-2.5 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <option value="">请选择版本</option>
+        {JAVA_VERSION_OPTIONS.map((version) => (
+          <option key={version} value={version}>
+            Java {version}
+          </option>
+        ))}
+      </select>
+      <p className="text-xs text-muted-foreground">
+        选择目标项目使用的 Java 版本，后端会映射到服务端固定的 JDK 路径。
+      </p>
+      {fieldError ? (
+        <p className="text-xs text-destructive" role="alert">
+          {fieldError}
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 export function HomePage({ user }: { user: AuthUser }) {
   const navigate = useNavigate();
@@ -209,7 +272,9 @@ export function HomePage({ user }: { user: AuthUser }) {
           return;
         }
         const nextConfig = splitServerConfig(payload.config);
-        setConfig(nextConfig.userConfig);
+        setConfig(
+          sanitizeRedactedConfigValues(nextConfig.userConfig, payload.configPolicy ?? null),
+        );
         setDeploymentConfig(nextConfig.deploymentConfig);
         setConfigPolicy(payload.configPolicy ?? null);
       } catch (error) {
@@ -406,7 +471,7 @@ export function HomePage({ user }: { user: AuthUser }) {
     try {
       const payload = await parseConfigFile(file);
       const nextConfig = splitServerConfig(payload.config);
-      setConfig(nextConfig.userConfig);
+      setConfig(sanitizeRedactedConfigValues(nextConfig.userConfig, payload.configPolicy ?? null));
       setDeploymentConfig(nextConfig.deploymentConfig);
       setConfigPolicy(payload.configPolicy ?? null);
       setUploadNotice(`${file.name} 已解析并回填到表单中。`);
@@ -530,13 +595,14 @@ export function HomePage({ user }: { user: AuthUser }) {
       return;
     }
 
-    const targetJavaHome = getNestedValue(config, ['execution', 'target_java_home']);
-    const hasManualTargetJavaHome =
-      typeof targetJavaHome === 'string' && targetJavaHome.trim().length > 0;
-
     if (sourceMode === 'upload') {
       if (!projectUploadId) {
         setFieldErrors({ projectUpload: '请上传项目 ZIP 文件。' });
+        return;
+      }
+
+      if (!selectedJavaVersion) {
+        setFieldErrors({ selectedJavaVersion: '请选择目标 Java 版本。' });
         return;
       }
     }
@@ -552,7 +618,7 @@ export function HomePage({ user }: { user: AuthUser }) {
         return;
       }
 
-      if (!selectedJavaVersion && !hasManualTargetJavaHome) {
+      if (!selectedJavaVersion) {
         setFieldErrors({ selectedJavaVersion: '请选择目标 Java 版本。' });
         return;
       }
@@ -568,7 +634,8 @@ export function HomePage({ user }: { user: AuthUser }) {
         bugReportsDir: sourceMode === 'local' ? bugReportsDir : null,
         githubRepoUrl: sourceMode === 'github' ? githubRepoUrl : null,
         githubBaseBranch: sourceMode === 'github' ? githubBaseBranch : null,
-        selectedJavaVersion: sourceMode === 'github' ? selectedJavaVersion || null : null,
+        selectedJavaVersion:
+          sourceMode === 'upload' || sourceMode === 'github' ? selectedJavaVersion || null : null,
         projectUploadId: sourceMode === 'upload' ? projectUploadId : null,
         bugReportsUploadId: sourceMode === 'upload' ? bugReportsUploadId : null,
         config,
@@ -782,6 +849,19 @@ export function HomePage({ user }: { user: AuthUser }) {
                   可选的 Markdown 缺陷报告目录，会为本次运行的知识库建立索引。
                 </p>
               </div>
+
+              <JavaVersionSelect
+                selectedJavaVersion={selectedJavaVersion}
+                fieldError={fieldErrors.selectedJavaVersion}
+                onChange={(version) => {
+                  setSelectedJavaVersion(version);
+                  setFieldErrors((current) => {
+                    const nextErrors = { ...current };
+                    delete nextErrors.selectedJavaVersion;
+                    return nextErrors;
+                  });
+                }}
+              />
             </TabsContent>
 
             <TabsContent value="local" className="space-y-3 mt-3">
@@ -1085,43 +1165,19 @@ export function HomePage({ user }: { user: AuthUser }) {
                 ) : null}
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="selected-java-version" className="text-xs">
-                  目标 Java 版本
-                </Label>
-                <select
-                  id="selected-java-version"
-                  data-testid="java-version-select"
-                  aria-label="目标 Java 版本"
-                  value={selectedJavaVersion}
-                  onChange={(e) => {
-                    setSelectedJavaVersion(e.target.value);
-                    setFieldErrors((current) => {
-                      const nextErrors = { ...current };
-                      delete nextErrors.selectedJavaVersion;
-                      return nextErrors;
-                    });
-                  }}
-                  disabled={!githubConnected}
-                  className="h-8 w-full text-sm rounded-lg border border-input bg-transparent px-2.5 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <option value="">请选择版本</option>
-                  {JAVA_VERSION_OPTIONS.map((version) => (
-                    <option key={version} value={version}>
-                      Java {version}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-muted-foreground">
-                  选择目标项目使用的 Java 版本，映射到容器内固定 JDK 路径；若手动填写 Java
-                  目录则以手填路径为准。
-                </p>
-                {fieldErrors.selectedJavaVersion ? (
-                  <p className="text-xs text-destructive" role="alert">
-                    {fieldErrors.selectedJavaVersion}
-                  </p>
-                ) : null}
-              </div>
+              <JavaVersionSelect
+                selectedJavaVersion={selectedJavaVersion}
+                fieldError={fieldErrors.selectedJavaVersion}
+                disabled={!githubConnected}
+                onChange={(version) => {
+                  setSelectedJavaVersion(version);
+                  setFieldErrors((current) => {
+                    const nextErrors = { ...current };
+                    delete nextErrors.selectedJavaVersion;
+                    return nextErrors;
+                  });
+                }}
+              />
 
               {!githubConnected ? (
                 <Alert>
@@ -1138,14 +1194,18 @@ export function HomePage({ user }: { user: AuthUser }) {
               onClick={handleSubmit}
               disabled={
                 isSubmitting ||
-                (sourceMode === 'upload' && !projectUploadId) ||
+                (sourceMode === 'upload' && (!projectUploadId || !selectedJavaVersion)) ||
                 (sourceMode === 'github' && !githubConnected)
               }
             >
               {isSubmitting
                 ? '正在启动运行...'
-                : sourceMode === 'upload' && !projectUploadId
-                  ? '请先上传项目'
+                : sourceMode === 'upload'
+                  ? !selectedJavaVersion
+                    ? '请选择 Java 版本'
+                    : !projectUploadId
+                      ? '请先上传项目'
+                      : '启动运行'
                   : sourceMode === 'github' && !githubConnected
                     ? '请先连接 GitHub'
                     : '启动运行'}
