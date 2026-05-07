@@ -158,9 +158,6 @@ function getFieldPolicyNotes(fieldKey: string, configPolicy: ConfigPolicy | null
   if (getPolicyFields(configPolicy.clampedFields).has(fieldKey)) {
     notes.push('服务端限制：超过部署上限时会由服务端自动收紧。');
   }
-  if (getPolicyFields(configPolicy.redactedFields).has(fieldKey)) {
-    notes.push('服务端限制：敏感值已隐藏，不会在前端显示。');
-  }
   return notes;
 }
 

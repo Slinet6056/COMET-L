@@ -463,7 +463,7 @@ describe('HomePage admin local path and GitHub modes', () => {
     expect(screen.getByLabelText('项目路径')).toBeInTheDocument();
   });
 
-  it('renders server config policy annotations with service-side limit copy', async () => {
+  it('renders visible server config policy annotations with service-side limit copy', async () => {
     vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({
       config: defaultConfig,
       configPolicy: {
@@ -486,7 +486,9 @@ describe('HomePage admin local path and GitHub modes', () => {
       screen.getByText('服务端限制：此字段由服务端固定，提交时会使用后端值。'),
     ).toBeInTheDocument();
     expect(screen.getByText('服务端限制：超过部署上限时会由服务端自动收紧。')).toBeInTheDocument();
-    expect(screen.getByText('服务端限制：敏感值已隐藏，不会在前端显示。')).toBeInTheDocument();
+    expect(
+      screen.queryByText('服务端限制：敏感值已隐藏，不会在前端显示。'),
+    ).not.toBeInTheDocument();
   });
 
   it('does not show an admin restriction notice in GitHub mode', async () => {

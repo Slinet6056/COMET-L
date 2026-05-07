@@ -1458,7 +1458,9 @@ def get_config_defaults(
     settings = _load_default_settings_for_display(services.default_config_path)
     settings.github = _github_config_for_display(server_config.github)
     settings.deployment = server_config.deployment
-    safe_config, annotations = redacted_settings_dict(settings)
+    annotations = enforce_deployment_policy(settings)
+    safe_config, redacted_annotations = redacted_settings_dict(settings)
+    annotations.extend(redacted_annotations)
     return ConfigPayload.model_validate(
         {"config": safe_config, "configPolicy": annotations.to_api_dict()}
     )
@@ -1472,7 +1474,7 @@ def get_config_defaults(
 async def parse_config(
     file: UploadFile = File(...),
     _user: AuthenticatedUser = Depends(require_user),
-    _run_service: RunLifecycleService = Depends(get_run_service),
+    services: AppServices = Depends(get_app_services),
 ) -> ConfigParseResponse | JSONResponse:
     try:
         content = (await file.read()).decode("utf-8")
@@ -1507,8 +1509,29 @@ async def parse_config(
                     )
                 ],
             )
-        settings = Settings.model_validate(_strip_uploaded_runtime_overrides(config_data))
-        safe_config, annotations = redacted_settings_dict(settings)
+        normalized = _strip_uploaded_runtime_overrides(config_data)
+        try:
+            display_settings = Settings.model_validate(normalized)
+        except ValidationError as exc:
+            extra_fields = [
+                tuple(str(segment) for segment in error.get("loc", ()))
+                for error in exc.errors()
+                if error.get("type") == "extra_forbidden"
+            ]
+            if extra_fields:
+                return _unknown_config_field_response(UnknownConfigFieldError(extra_fields))
+            return _config_error_response(exc)
+
+        server_overrides = _server_config_overrides(services.default_config_path)
+        base_settings = _runtime_base_settings(
+            services.default_config_path,
+            server_overrides,
+            normalized,
+        )
+        policy_result = apply_uploaded_config_policy(base_settings, normalized)
+        safe_config, redacted_annotations = redacted_settings_dict(display_settings)
+        annotations = policy_result.annotations
+        annotations.extend(redacted_annotations)
     except yaml.YAMLError as exc:
         mark = getattr(exc, "problem_mark", None)
         path: list[str | int] = []

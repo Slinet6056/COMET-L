@@ -526,7 +526,7 @@ class WebSecurityRegressionTests(unittest.TestCase):
         payload = response.json()
         self.assertIn("configPolicy", payload)
         self.assertIn("evolution.max_iterations", payload["configPolicy"]["clampedFields"])
-        self.assertIn("evolution.budget", payload["configPolicy"]["clampedFields"])
+        self.assertIn("evolution.budget_llm_calls", payload["configPolicy"]["clampedFields"])
         self.assertIn("execution.timeout", payload["configPolicy"]["clampedFields"])
         self.assertIn("preprocessing.max_workers", payload["configPolicy"]["overriddenFields"])
         self.assertNotEqual(payload["effectiveConfig"]["preprocessing"]["max_workers"], 99)

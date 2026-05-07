@@ -155,7 +155,7 @@ def apply_run_form_policy(
     if budget is not None:
         clamped = _clamp_int(budget, 1, effective.deployment.max_budget)
         if clamped != budget:
-            _append_unique(annotations.clamped_fields, "evolution.budget")
+            _append_unique(annotations.clamped_fields, "evolution.budget_llm_calls")
         effective.evolution.budget_llm_calls = clamped
 
     if mutation_enabled is not None:
@@ -189,7 +189,7 @@ def enforce_deployment_policy(settings: Settings) -> ConfigPolicyAnnotations:
 
     budget = _clamp_int(settings.evolution.budget_llm_calls, 1, policy.max_budget)
     if budget != settings.evolution.budget_llm_calls:
-        _append_unique(annotations.clamped_fields, "evolution.budget")
+        _append_unique(annotations.clamped_fields, "evolution.budget_llm_calls")
         settings.evolution.budget_llm_calls = budget
 
     timeout = _clamp_int(settings.execution.timeout, 1, policy.max_run_timeout_seconds)
@@ -344,8 +344,6 @@ def _is_secret_path(path: PathTuple) -> bool:
 
 
 def _format_path(path: PathTuple) -> str:
-    if path == ("evolution", "budget_llm_calls"):
-        return "evolution.budget"
     return ".".join(path)
 
 

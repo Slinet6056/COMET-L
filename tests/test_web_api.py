@@ -732,6 +732,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("config", payload)
+        self.assertIn("configPolicy", payload)
         self.assertIsInstance(payload["config"]["llm"]["model"], str)
         self.assertTrue(payload["config"]["llm"]["model"])
         self.assertTrue(payload["config"]["evolution"]["mutation_enabled"])
@@ -784,6 +785,8 @@ class ConfigApiTests(unittest.TestCase):
                 "[REDACTED]",
             )
             self.assertEqual(payload["config"]["llm"]["api_key"], "[REDACTED]")
+            self.assertEqual(payload["config"]["evolution"]["budget_llm_calls"], 77)
+            self.assertIn("evolution.budget_llm_calls", payload["configPolicy"]["clampedFields"])
             self.assertTrue(payload["config"]["llm"]["model"])
             self.assertNotIn("paths", payload["config"])
 
@@ -818,12 +821,14 @@ class ConfigApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertIn("configPolicy", payload)
         self.assertEqual(payload["config"]["llm"]["api_key"], "[REDACTED]")
         self.assertEqual(payload["config"]["llm"]["model"], "gpt-4o-mini")
         self.assertEqual(payload["config"]["execution"]["timeout"], 123)
         self.assertTrue(payload["config"]["preprocessing"]["exit_after_preprocessing"])
         self.assertFalse(payload["config"]["evolution"]["mutation_enabled"])
         self.assertTrue(payload["config"]["agent"]["parallel"]["enabled"])
+        self.assertIn("llm.api_key", payload["configPolicy"]["redactedFields"])
         self.assertNotIn("paths", payload["config"])
 
     def test_parse_yaml_rejects_invalid_mutation_enabled_type(self) -> None:
@@ -871,6 +876,12 @@ class ConfigApiTests(unittest.TestCase):
                             "agent:\n"
                             "  parallel:\n"
                             "    max_parallel_targets: 64\n"
+                            "    max_eval_workers: 64\n"
+                            "evolution:\n"
+                            "  max_iterations: 9999\n"
+                            "  budget_llm_calls: 999999\n"
+                            "execution:\n"
+                            "  timeout: 99999\n"
                         ).encode("utf-8")
                     ),
                     "application/x-yaml",
@@ -880,8 +891,31 @@ class ConfigApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertIn("configPolicy", payload)
+        self.assertIn("preprocessing.max_workers", payload["configPolicy"]["overriddenFields"])
+        self.assertIn(
+            "agent.parallel.max_parallel_targets",
+            payload["configPolicy"]["overriddenFields"],
+        )
+        self.assertIn(
+            "agent.parallel.max_eval_workers",
+            payload["configPolicy"]["overriddenFields"],
+        )
+        self.assertIn(
+            "evolution.max_iterations",
+            payload["configPolicy"]["clampedFields"],
+        )
+        self.assertIn(
+            "evolution.budget_llm_calls",
+            payload["configPolicy"]["clampedFields"],
+        )
+        self.assertIn("execution.timeout", payload["configPolicy"]["clampedFields"])
         self.assertEqual(payload["config"]["preprocessing"]["max_workers"], 64)
         self.assertEqual(payload["config"]["agent"]["parallel"]["max_parallel_targets"], 64)
+        self.assertEqual(payload["config"]["agent"]["parallel"]["max_eval_workers"], 64)
+        self.assertEqual(payload["config"]["evolution"]["max_iterations"], 9999)
+        self.assertEqual(payload["config"]["evolution"]["budget_llm_calls"], 999999)
+        self.assertEqual(payload["config"]["execution"]["timeout"], 99999)
 
     def test_parse_valid_yaml_preserves_nullable_preprocessing_max_workers(self) -> None:
         client = authenticated_client()
@@ -980,9 +1014,9 @@ class ConfigApiTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 400)
         payload = response.json()
-        self.assertEqual(payload["error"]["code"], "invalid_config")
+        self.assertEqual(payload["error"]["code"], "unknown_config_field")
         self.assertTrue(any(item["path"] == ["paths"] for item in payload["error"]["fieldErrors"]))
 
     def test_parse_yaml_filters_github_deployment_config(self) -> None:
@@ -3599,7 +3633,7 @@ class RunApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201)
         created = response.json()
-        self.assertIn("evolution.budget", created["configPolicy"]["clampedFields"])
+        self.assertIn("evolution.budget_llm_calls", created["configPolicy"]["clampedFields"])
         run_id = created["runId"]
         self.assertTrue(self.run_started.wait(timeout=5))
         session = self.run_service.get_session(run_id)
