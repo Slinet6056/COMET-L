@@ -829,6 +829,15 @@ class ConfigApiTests(unittest.TestCase):
         self.assertFalse(payload["config"]["evolution"]["mutation_enabled"])
         self.assertTrue(payload["config"]["agent"]["parallel"]["enabled"])
         self.assertIn("llm.api_key", payload["configPolicy"]["redactedFields"])
+        self.assertNotIn("llm.model", payload["configPolicy"]["overriddenFields"])
+        self.assertNotIn(
+            "preprocessing.exit_after_preprocessing",
+            payload["configPolicy"]["overriddenFields"],
+        )
+        self.assertNotIn(
+            "evolution.mutation_enabled",
+            payload["configPolicy"]["overriddenFields"],
+        )
         self.assertNotIn("paths", payload["config"])
 
     def test_parse_yaml_rejects_invalid_mutation_enabled_type(self) -> None:

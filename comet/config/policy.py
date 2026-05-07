@@ -125,7 +125,11 @@ def apply_uploaded_config_policy(
             _set_path(effective, path, clamped)
             continue
 
-        _append_unique(annotations.overridden_fields, _format_path(path))
+        if path in FIXED_CONFIG_FIELDS:
+            _append_unique(annotations.overridden_fields, _format_path(path))
+            continue
+
+        _set_path(effective, path, value)
 
     settings = Settings.model_validate(effective)
     clamp_annotations = enforce_deployment_policy(settings)
