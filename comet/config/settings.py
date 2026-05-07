@@ -549,6 +549,7 @@ class ServerConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     github: GitHubConfig = Field(default_factory=GitHubConfig)
     deployment: DeploymentPolicyConfig = Field(default_factory=DeploymentPolicyConfig)
 

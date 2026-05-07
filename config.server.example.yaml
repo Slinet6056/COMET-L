@@ -1,6 +1,4 @@
-# 服务器侧部署配置示例。
-# 复制为 config.yaml 后再部署：cp -n config.server.example.yaml config.yaml
-# 用户侧运行配置请参考 config.example.yaml；不要把用户提交的 web-config.yaml 当作服务端策略来源。
+# 服务器侧部署配置示例，在 Web 服务启动时加载。
 
 deployment:
   # 单次运行限制

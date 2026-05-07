@@ -1,3 +1,5 @@
+# 用户侧单次运行配置示例。
+
 llm:
   base_url: 'https://api.openai.com/v1'
   api_key: 'your-api-key-here'

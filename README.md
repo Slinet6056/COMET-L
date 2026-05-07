@@ -53,7 +53,7 @@ just runtime-build
 just config-init
 ```
 
-该命令会从 `config.example.yaml` 创建 `config.yaml`，如果目标文件已存在则不会覆盖。最小配置通常只需要先填 LLM：
+该命令会从 `config.example.yaml` 创建面向单次运行的 `config.yaml`，如果目标文件已存在则不会覆盖。这个配置用于 CLI 运行，也可作为 Web 控制台上传运行配置的格式参考，只提供 LLM、execution、knowledge、evolution 等运行参数。最小配置通常只需要先填 LLM：
 
 ```yaml
 llm:
@@ -83,7 +83,7 @@ execution:
 - `preprocessing.*`：并行预处理开关、并发数和单方法超时。
 - `agent.parallel.*`：并行 Agent 模式的目标数、评估并发和超时。
 
-GitHub OAuth、token 存储路径和受管 clone 根目录属于部署级配置，优先通过环境变量提供，不建议写入 `config.yaml`。
+Web 控制台上传的运行配置只影响当次运行，不会成为服务器基础配置，也不能填充 GitHub OAuth、部署策略或服务器固定执行路径。服务端策略仍可限制或覆盖运行字段，例如预算、目标 Java 版本、固定 JDK 或 Maven 路径。GitHub OAuth、token 存储路径和受管 clone 根目录属于部署级配置，优先通过环境变量或服务器启动配置提供，不建议写入用户侧运行配置。
 
 ### 3. 运行示例项目
 
@@ -253,7 +253,9 @@ docker run --rm -it \
   comet-l:multi-jdk
 ```
 
-`config.example.yaml` 是用户侧运行配置样例，`config.server.example.yaml` 是服务器侧部署配置样例。部署 Web 控制台时，先从 `config.server.example.yaml` 复制出正式的 `config.yaml`，再按环境修改其中的 `deployment` 和 `github` 配置。
+`config.server.example.yaml` 是服务器侧部署配置样例，部署 Web 控制台时先复制为容器启动加载的 `config.yaml`，再按环境修改其中的 `deployment` 和 `github` 配置。它是 Web 服务启动时读取的部署、GitHub 和服务器策略来源，不是每次运行的用户配置；缺少 `llm` 也是有效的 Web 部署配置，因为运行默认值或用户上传的运行配置会为单次运行提供 LLM 等字段。
+
+`config.example.yaml` 是用户侧运行配置样例，复制出的本地运行配置或 Web 控制台上传配置只影响当次运行，提供 LLM、execution、knowledge、evolution 等运行参数。服务器配置和运行配置不会互相回填：上传配置不能成为服务器 base，也不能补齐 GitHub OAuth、部署策略、受管 clone 根目录或固定 JDK/Maven 路径；服务器策略可以按部署要求限制或覆盖运行字段。
 
 如果使用 GitHub 仓库导入、自动 push 或创建 PR，把 GitHub OAuth 配置写进挂载的 `config.yaml`：
 

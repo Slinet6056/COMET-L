@@ -373,19 +373,41 @@ def _strip_uploaded_runtime_overrides(config_data: dict[str, Any]) -> dict[str, 
 
 
 def _server_config_overrides(default_config_path: Path) -> dict[str, Any]:
-    return _load_server_config(default_config_path).model_dump()
+    server_config = _load_server_config(default_config_path)
+    return {
+        "execution": server_config.execution.model_dump(),
+        "deployment": server_config.deployment.model_dump(),
+        "github": server_config.github.model_dump(),
+    }
+
+
+def _server_config_display_overrides(default_config_path: Path) -> dict[str, Any]:
+    server_config = _load_server_config(default_config_path)
+    return {
+        "deployment": server_config.deployment.model_dump(),
+        "github": _github_config_for_display(server_config.github).model_dump(),
+    }
 
 
 def _runtime_base_settings(
     default_config_path: Path,
     server_overrides: dict[str, Any],
-    uploaded_config: dict[str, Any],
 ) -> Settings:
-    try:
-        base_settings = _load_default_settings(default_config_path)
-        return Settings.model_validate(_deep_merge(base_settings.to_dict(), server_overrides))
-    except ValidationError:
-        return Settings.model_validate(_deep_merge(uploaded_config, server_overrides))
+    base_settings = _load_default_settings_for_display(default_config_path)
+    return Settings.model_validate(_deep_merge(base_settings.to_dict(), server_overrides))
+
+
+def _run_response_settings(settings: Settings, default_config_path: Path) -> Settings:
+    response_settings = settings.model_copy(deep=True)
+    display_overrides = _server_config_display_overrides(default_config_path)
+    display_github = display_overrides.get("github")
+    if isinstance(display_github, dict):
+        response_settings.github = GitHubConfig.model_validate(display_github)
+    response_settings.execution.runtime_java_home = None
+    response_settings.execution.target_java_home = None
+    response_settings.execution.maven_home = None
+    response_settings.deployment.local_path_allowlist = []
+    return response_settings
 
 
 def _load_default_settings(default_config_path: Path) -> Settings:
@@ -1363,10 +1385,7 @@ async def _load_merged_settings(
 
     if config_file is None:
         try:
-            base_settings = _load_default_settings(services.default_config_path)
-            effective = Settings.model_validate(
-                _deep_merge(base_settings.to_dict(), server_overrides)
-            )
+            effective = _runtime_base_settings(services.default_config_path, server_overrides)
             annotations = enforce_deployment_policy(effective)
         except ValidationError as exc:
             return _config_error_response(exc)
@@ -1429,7 +1448,6 @@ async def _load_merged_settings(
         base_settings = _runtime_base_settings(
             services.default_config_path,
             server_overrides,
-            normalized,
         )
         result = apply_uploaded_config_policy(base_settings, normalized)
     except ValidationError as exc:
@@ -1454,10 +1472,8 @@ def get_config_defaults(
     services: AppServices = Depends(get_app_services),
     _: AuthenticatedUser = Depends(require_user),
 ) -> ConfigPayload:
-    server_config = _load_server_config(services.default_config_path)
-    settings = _load_default_settings_for_display(services.default_config_path)
-    settings.github = _github_config_for_display(server_config.github)
-    settings.deployment = server_config.deployment
+    server_overrides = _server_config_display_overrides(services.default_config_path)
+    settings = _runtime_base_settings(services.default_config_path, server_overrides)
     annotations = enforce_deployment_policy(settings)
     safe_config, redacted_annotations = redacted_settings_dict(settings)
     annotations.extend(redacted_annotations)
@@ -1522,12 +1538,8 @@ async def parse_config(
                 return _unknown_config_field_response(UnknownConfigFieldError(extra_fields))
             return _config_error_response(exc)
 
-        server_overrides = _server_config_overrides(services.default_config_path)
-        base_settings = _runtime_base_settings(
-            services.default_config_path,
-            server_overrides,
-            normalized,
-        )
+        display_overrides = _server_config_display_overrides(services.default_config_path)
+        base_settings = _runtime_base_settings(services.default_config_path, display_overrides)
         policy_result = apply_uploaded_config_policy(base_settings, normalized)
         safe_config = display_settings.to_dict()
         annotations = policy_result.annotations
@@ -1779,7 +1791,8 @@ async def create_run(
             field_errors=git_write_errors,
         )
 
-    effective_config_response, _ = redacted_settings_dict(settings)
+    response_settings = _run_response_settings(settings, services.default_config_path)
+    effective_config_response, _ = redacted_settings_dict(response_settings)
 
     marked_uploads_for_rollback: list[UploadRecord] = []
     try:

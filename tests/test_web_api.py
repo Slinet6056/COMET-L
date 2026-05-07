@@ -742,7 +742,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertNotIn("paths", payload["config"])
         self.assertNotIn("llm.max_tokens", payload["configPolicy"]["redactedFields"])
 
-    def test_defaults_endpoint_accepts_server_config_without_runtime_llm(self) -> None:
+    def test_defaults_and_parse_accept_server_config_without_runtime_llm(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             default_config_path = root / "config.yaml"
@@ -765,10 +765,10 @@ class ConfigApiTests(unittest.TestCase):
                 default_config_path=default_config_path,
             )
 
-            response = client.get("/api/config/defaults")
+            defaults_response = client.get("/api/config/defaults")
 
-            self.assertEqual(response.status_code, 200, response.text)
-            payload = response.json()
+            self.assertEqual(defaults_response.status_code, 200, defaults_response.text)
+            payload = defaults_response.json()
             self.assertEqual(payload["config"]["deployment"]["max_budget"], 77)
             self.assertEqual(
                 payload["config"]["deployment"]["allowed_origins"],
@@ -792,6 +792,32 @@ class ConfigApiTests(unittest.TestCase):
             self.assertIn("evolution.budget_llm_calls", payload["configPolicy"]["clampedFields"])
             self.assertTrue(payload["config"]["llm"]["model"])
             self.assertNotIn("paths", payload["config"])
+
+            parse_response = client.post(
+                "/api/config/parse",
+                files={
+                    "file": (
+                        "config.yaml",
+                        BytesIO(
+                            (
+                                "llm:\n"
+                                "  api_key: uploaded-key\n"
+                                "evolution:\n"
+                                "  budget_llm_calls: 999\n"
+                            ).encode("utf-8")
+                        ),
+                        "application/x-yaml",
+                    )
+                },
+            )
+
+            self.assertEqual(parse_response.status_code, 200, parse_response.text)
+            parse_payload = parse_response.json()
+            self.assertEqual(parse_payload["config"]["llm"]["api_key"], "uploaded-key")
+            self.assertIn(
+                "evolution.budget_llm_calls",
+                parse_payload["configPolicy"]["clampedFields"],
+            )
 
     def test_parse_valid_yaml_returns_normalized_config(self) -> None:
         client = authenticated_client()
@@ -1550,21 +1576,224 @@ class UploadRunApiTests(unittest.TestCase):
         self.assertEqual(payload["effectiveConfig"]["llm"]["api_key"], "[REDACTED]")
         self.assertNotIn("llm.api_key", payload["configPolicy"]["overriddenFields"])
 
-    def test_run_without_runtime_llm_config_returns_validation_error(self) -> None:
+    def test_run_without_runtime_llm_config_uses_runtime_defaults(self) -> None:
         assert self.client is not None
         assert self.default_config_path is not None
+        assert self.run_service is not None
         self.default_config_path.write_text("deployment:\n  max_budget: 7\n", encoding="utf-8")
         project_upload_id = self._upload_project("missing-llm-project.zip")
 
         response = self.client.post("/api/runs", data={"projectUploadId": project_upload_id})
 
-        self.assertEqual(response.status_code, 422, response.text)
-        self.assertEqual(response.json()["error"]["code"], "invalid_config")
-        self.assertTrue(
-            any(item["path"] == ["llm"] for item in response.json()["error"]["fieldErrors"])
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        self.assertEqual(payload["effectiveConfig"]["deployment"]["max_budget"], 7)
+        self.assertEqual(payload["effectiveConfig"]["evolution"]["budget_llm_calls"], 7)
+        self.assertEqual(payload["effectiveConfig"]["llm"]["api_key"], "[REDACTED]")
+        self.assertIn("evolution.budget_llm_calls", payload["configPolicy"]["clampedFields"])
+        self.assertEqual(self._run_count(), 1)
+        self.assertIsNotNone(self._upload_row(project_upload_id)["used_at"])
+
+        session = self.run_service.get_session(payload["runId"])
+        resolved_config = json.loads(
+            Path(session.paths["resolved_config"]).read_text(encoding="utf-8")
         )
-        self.assertEqual(self._run_count(), 0)
-        self.assertIsNone(self._upload_row(project_upload_id)["used_at"])
+        self.assertEqual(resolved_config["deployment"]["max_budget"], 7)
+        self.assertEqual(resolved_config["evolution"]["budget_llm_calls"], 7)
+        self.assertEqual(resolved_config["llm"]["api_key"], "[REDACTED]")
+        self.assertIsNone(resolved_config["execution"]["runtime_java_home"])
+        self.assertIsNone(resolved_config["execution"]["target_java_home"])
+        self.assertIsNone(resolved_config["execution"]["maven_home"])
+
+    def test_uploaded_fixed_execution_fields_do_not_backfill_resolved_config(self) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        assert self.run_service is not None
+        assert self.database is not None
+        self.default_config_path.write_text(
+            "deployment:\n  max_budget: 31\n  allowed_java_versions:\n    - '17'\n",
+            encoding="utf-8",
+        )
+        project_upload_id = self._upload_project("fixed-fields-project.zip")
+
+        response = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": project_upload_id, "selectedJavaVersion": "17"},
+            files={
+                "configFile": (
+                    "config.yaml",
+                    BytesIO(
+                        (
+                            "llm:\n"
+                            "  api_key: uploaded-key\n"
+                            "execution:\n"
+                            "  runtime_java_home: /tmp/uploaded-runtime\n"
+                            "  target_java_home: /tmp/uploaded-target\n"
+                            "  maven_home: /tmp/uploaded-maven\n"
+                            "  selected_java_version: '17'\n"
+                            "evolution:\n"
+                            "  budget_llm_calls: 999\n"
+                        ).encode("utf-8")
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        policy = payload["configPolicy"]
+        self.assertIn("execution.runtime_java_home", policy["overriddenFields"])
+        self.assertIn("execution.target_java_home", policy["overriddenFields"])
+        self.assertIn("execution.maven_home", policy["overriddenFields"])
+        self.assertIn("evolution.budget_llm_calls", policy["clampedFields"])
+        effective_execution = payload["effectiveConfig"]["execution"]
+        self.assertIsNone(effective_execution["runtime_java_home"])
+        self.assertIsNone(effective_execution["target_java_home"])
+        self.assertIsNone(effective_execution["maven_home"])
+        self.assertEqual(effective_execution["selected_java_version"], "17")
+        self.assertEqual(payload["effectiveConfig"]["evolution"]["budget_llm_calls"], 31)
+
+        session = self.run_service.get_session(payload["runId"])
+        resolved_config = json.loads(
+            Path(session.paths["resolved_config"]).read_text(encoding="utf-8")
+        )
+        record = self.database.get_run_record(payload["runId"])
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.config_snapshot, resolved_config)
+        self.assertEqual(record.config_path, session.paths["resolved_config"])
+        self.assertIsNone(resolved_config["execution"]["runtime_java_home"])
+        self.assertIsNone(resolved_config["execution"]["target_java_home"])
+        self.assertIsNone(resolved_config["execution"]["maven_home"])
+        self.assertEqual(resolved_config["execution"]["selected_java_version"], "17")
+        self.assertEqual(resolved_config["evolution"]["budget_llm_calls"], 31)
+        serialized = json.dumps(resolved_config, ensure_ascii=False)
+        self.assertNotIn("/tmp/uploaded-runtime", serialized)
+        self.assertNotIn("/tmp/uploaded-target", serialized)
+        self.assertNotIn("/tmp/uploaded-maven", serialized)
+
+    def test_server_fixed_execution_fields_apply_to_resolved_config(self) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        assert self.run_service is not None
+        assert self.database is not None
+        assert self.root is not None
+        runtime_home = self.root / "server-runtime-jdk"
+        target_home = self.root / "server-target-jdk"
+        maven_home = self.root / "server-maven"
+        self.default_config_path.write_text(
+            (
+                "deployment:\n"
+                "  max_budget: 23\n"
+                "execution:\n"
+                f"  runtime_java_home: {runtime_home}\n"
+                f"  target_java_home: {target_home}\n"
+                f"  maven_home: {maven_home}\n"
+            ),
+            encoding="utf-8",
+        )
+        project_upload_id = self._upload_project("server-fixed-execution.zip")
+
+        response = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": project_upload_id},
+            files={
+                "configFile": (
+                    "config.yaml",
+                    BytesIO(
+                        (
+                            "llm:\n"
+                            "  api_key: uploaded-key\n"
+                            "execution:\n"
+                            "  runtime_java_home: /tmp/uploaded-runtime\n"
+                            "  target_java_home: /tmp/uploaded-target\n"
+                            "  maven_home: /tmp/uploaded-maven\n"
+                        ).encode("utf-8")
+                    ),
+                    "application/x-yaml",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        policy = payload["configPolicy"]
+        self.assertIn("execution.runtime_java_home", policy["overriddenFields"])
+        self.assertIn("execution.target_java_home", policy["overriddenFields"])
+        self.assertIn("execution.maven_home", policy["overriddenFields"])
+        self.assertIsNone(payload["effectiveConfig"]["execution"]["runtime_java_home"])
+        self.assertIsNone(payload["effectiveConfig"]["execution"]["target_java_home"])
+        self.assertIsNone(payload["effectiveConfig"]["execution"]["maven_home"])
+        self.assertNotIn(str(runtime_home), response.text)
+        self.assertNotIn(str(target_home), response.text)
+        self.assertNotIn(str(maven_home), response.text)
+
+        session = self.run_service.get_session(payload["runId"])
+        resolved_config = json.loads(
+            Path(session.paths["resolved_config"]).read_text(encoding="utf-8")
+        )
+        record = self.database.get_run_record(payload["runId"])
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.config_snapshot, resolved_config)
+        self.assertEqual(resolved_config["execution"]["runtime_java_home"], str(runtime_home))
+        self.assertEqual(resolved_config["execution"]["target_java_home"], str(target_home))
+        self.assertEqual(resolved_config["execution"]["maven_home"], str(maven_home))
+        serialized = json.dumps(resolved_config, ensure_ascii=False)
+        self.assertNotIn("/tmp/uploaded-runtime", serialized)
+        self.assertNotIn("/tmp/uploaded-target", serialized)
+        self.assertNotIn("/tmp/uploaded-maven", serialized)
+
+    def test_run_effective_config_hides_server_controlled_paths(self) -> None:
+        assert self.client is not None
+        assert self.default_config_path is not None
+        assert self.run_service is not None
+        assert self.root is not None
+        managed_clone_root = self.root / "server-managed-clones"
+        allowlist_root = self.root / "server-local-projects"
+        self.default_config_path.write_text(
+            (
+                "deployment:\n"
+                "  max_budget: 19\n"
+                "  local_path_allowlist:\n"
+                f"    - {allowlist_root}\n"
+                "github:\n"
+                f"  managed_clone_root: {managed_clone_root}\n"
+            ),
+            encoding="utf-8",
+        )
+        project_upload_id = self._upload_project("server-paths-hidden.zip")
+
+        response = self.client.post(
+            "/api/runs",
+            data={"projectUploadId": project_upload_id, "budget": "99"},
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        self.assertEqual(payload["effectiveConfig"]["evolution"]["budget_llm_calls"], 19)
+        self.assertEqual(
+            payload["effectiveConfig"]["github"]["managed_clone_root"],
+            "./sandbox/github-managed",
+        )
+        self.assertEqual(payload["effectiveConfig"]["deployment"]["local_path_allowlist"], [])
+        self.assertNotIn(str(managed_clone_root), response.text)
+        self.assertNotIn(str(allowlist_root), response.text)
+        self.assertNotIn(str(self.root), response.text)
+
+        session = self.run_service.get_session(payload["runId"])
+        resolved_config = json.loads(
+            Path(session.paths["resolved_config"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            resolved_config["github"]["managed_clone_root"],
+            str(managed_clone_root),
+        )
+        self.assertEqual(
+            resolved_config["deployment"]["local_path_allowlist"],
+            [str(allowlist_root)],
+        )
 
     def test_local_path_forbidden_for_ordinary_user_creates_no_run(self) -> None:
         assert self.client is not None
