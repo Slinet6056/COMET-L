@@ -219,6 +219,7 @@ class RunLifecycleService:
         self._event_buses: dict[str, RuntimeEventBus] = {}
         self._log_routers: dict[str, RunLogRouter] = {}
         self._runtime_snapshots: dict[str, dict[str, Any]] = {}
+        self._github_runtime_configs: dict[str, GitHubConfig] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._run_controls: dict[str, threading.Event] = {}
         self._scheduler_specs: dict[
@@ -327,6 +328,8 @@ class RunLifecycleService:
             self._requests[run_id] = scoped_request
             self._event_buses[run_id] = RuntimeEventBus()
             self._log_routers[run_id] = RunLogRouter()
+            if config.github.repo_url:
+                self._github_runtime_configs[run_id] = config.github.model_copy(deep=True)
             self._log_routers[run_id].ensure_stream(
                 "main", status="pending", started_at=session.created_at
             )
@@ -819,6 +822,7 @@ class RunLifecycleService:
                 session.failed_at = _utc_now_iso()
                 session.queue_position = None
                 self._scheduler_specs.pop(run_id, None)
+                self._github_runtime_configs.pop(run_id, None)
             elif session.status in {"starting", "running"}:
                 session.status = "cancelling"
             control = self._run_controls.get(run_id)
@@ -837,6 +841,7 @@ class RunLifecycleService:
                 session.status = "cancelled"
                 session.failed_at = _utc_now_iso()
                 session.queue_position = None
+                self._github_runtime_configs.pop(run_id, None)
                 self._persist_session(session)
                 return
             session.status = "running"
@@ -899,6 +904,7 @@ class RunLifecycleService:
             )
             if self._active_run_id == run_id:
                 self._active_run_id = None
+            self._github_runtime_configs.pop(run_id, None)
             self._persist_session(session)
             self._scheduler_specs.pop(run_id, None)
             self._run_controls.pop(run_id, None)
@@ -933,6 +939,7 @@ class RunLifecycleService:
             session.error = error
             if self._active_run_id == run_id:
                 self._active_run_id = None
+            self._github_runtime_configs.pop(run_id, None)
             self._persist_session(session)
             self._scheduler_specs.pop(run_id, None)
             self._run_controls.pop(run_id, None)
@@ -1000,6 +1007,7 @@ class RunLifecycleService:
                 session.status = "cancelled"
                 session.failed_at = _utc_now_iso()
                 session.queue_position = None
+                self._github_runtime_configs.pop(session.run_id, None)
                 self._persist_session(session)
                 continue
             if not self._can_start_session_locked(session):
@@ -1356,10 +1364,12 @@ class RunLifecycleService:
         if self._pull_request_service is None:
             raise GitPullRequestError("GitHub PR 服务未初始化，无法自动提交并创建 PR。")
 
-        try:
-            github_config = GitHubConfig.model_validate(github_snapshot)
-        except Exception as exc:  # pragma: no cover - 防御分支
-            raise GitPullRequestError("GitHub 配置无效，无法自动创建 PR。") from exc
+        github_config = self._github_runtime_configs.get(run_id)
+        if github_config is None:
+            try:
+                github_config = GitHubConfig.model_validate(github_snapshot)
+            except Exception as exc:  # pragma: no cover - 防御分支
+                raise GitPullRequestError("GitHub 配置无效，无法自动创建 PR。") from exc
 
         result = self._pull_request_service.commit_generated_tests_and_create_pr(
             run_id=run_id,
@@ -1620,6 +1630,7 @@ class RunLifecycleService:
         self._event_buses.clear()
         self._log_routers.clear()
         self._runtime_snapshots.clear()
+        self._github_runtime_configs.clear()
         self._active_run_id = None
 
         for record in self._web_database.list_run_records(include_all=True):
@@ -1764,6 +1775,7 @@ class RunLifecycleService:
         )
         if self._active_run_id == session.run_id:
             self._active_run_id = None
+        self._github_runtime_configs.pop(session.run_id, None)
         self._persist_session(session)
         self._scheduler_specs.pop(session.run_id, None)
         self._run_controls.pop(session.run_id, None)

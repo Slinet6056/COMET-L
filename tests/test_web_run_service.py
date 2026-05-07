@@ -237,7 +237,10 @@ class RunServiceIsolationTests(unittest.TestCase):
             self.assertFalse(bool(captured["old_test_exists"]))
             self.assertEqual(captured["repo_url"], "https://github.com/openai/demo")
             self.assertEqual(captured["base_branch"], "develop")
-            self.assertEqual(captured["import_kwargs"].get("user_key"), "web-user:42")
+            import_kwargs = captured["import_kwargs"]
+            self.assertIsInstance(import_kwargs, dict)
+            assert isinstance(import_kwargs, dict)
+            self.assertEqual(import_kwargs.get("user_key"), "web-user:42")
             self.assertEqual([event["type"] for event in events], ["run.started", "run.completed"])
 
     def test_run_request_aborts_before_runner_when_cleanup_old_tests_fails(self) -> None:
@@ -740,6 +743,66 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(results["status"], "completed")
             self.assertIsNone(results["pullRequestUrl"])
             self.assertIn("推送提交到远端失败", results["pullRequestError"])
+
+    def test_pull_request_uses_unredacted_server_github_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+            token_store_path = root / "state" / "github" / "auth" / "token.enc"
+            key_store_path = root / "state" / "github" / "auth" / "token.key"
+            settings = Settings(
+                llm=LLMConfig(api_key="test-key"),
+                logging=LoggingConfig(file=str(root / "default.log")),
+            )
+            settings.github.repo_url = "https://github.com/openai/example-repo"
+            settings.github.base_branch = "main"
+            settings.github.encrypted_token_store_path = str(token_store_path)
+            settings.github.encrypted_key_store_path = str(key_store_path)
+
+            captured: dict[str, Any] = {}
+
+            class _CapturingPullRequestService:
+                def commit_generated_tests_and_create_pr(self, **kwargs):
+                    captured.update(kwargs)
+                    return type(
+                        "PullRequestResult",
+                        (),
+                        {"pull_request_url": "https://github.com/openai/example-repo/pull/1"},
+                    )()
+
+            service = RunLifecycleService(workspace_root=root)
+            assert service._web_database is not None
+            user_id = service._web_database.create_user(
+                username="alice-pr-config",
+                password_hash="test-hash",
+            )
+            service.set_pull_request_service(cast(Any, _CapturingPullRequestService()))
+            session = service.create_run(
+                RunRequest(project_path=str(project_path), config_path="config.yaml"),
+                user_id=user_id,
+                settings_loader=lambda _: settings,
+            )
+
+            github_snapshot = session.config_snapshot["github"]
+            self.assertEqual(github_snapshot["encrypted_token_store_path"], "[REDACTED]")
+            self.assertEqual(github_snapshot["encrypted_key_store_path"], "[REDACTED]")
+
+            pull_request_url = service._publish_generated_tests_pull_request(session.run_id)
+
+            github_config = captured["github_config"]
+            self.assertEqual(pull_request_url, "https://github.com/openai/example-repo/pull/1")
+            self.assertEqual(github_config.encrypted_token_store_path, str(token_store_path))
+            self.assertEqual(github_config.encrypted_key_store_path, str(key_store_path))
+            self.assertEqual(captured["repo_url"], "https://github.com/openai/example-repo")
+            self.assertEqual(captured["base_branch"], "main")
+            self.assertEqual(captured["user_key"], f"web-user:{user_id}")
+
+            service.mark_completed(session.run_id)
+
+            self.assertNotIn(session.run_id, service._github_runtime_configs)
 
     def test_persisted_sessions_are_restored_after_service_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
