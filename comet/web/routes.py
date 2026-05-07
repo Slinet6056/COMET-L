@@ -2375,7 +2375,10 @@ def get_run_results(
         payload = run_service.build_results(run_id)
     except KeyError:
         return _run_not_found_response(run_id)
-    return RunResultsResponse.model_validate(payload)
+    response_payload = RunResultsResponse.model_validate(payload).model_dump(mode="json")
+    if "finalTestsArchive" not in payload:
+        response_payload.pop("finalTestsArchive", None)
+    return JSONResponse(status_code=200, content=response_payload)
 
 
 def _download_artifact_response(

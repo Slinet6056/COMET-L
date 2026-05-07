@@ -245,6 +245,7 @@ export type RunResultsResponse = {
   pullRequestUrl?: string | null;
   pullRequestError?: string | null;
   reportArtifact?: RunResultsArtifact;
+  finalTestsArchive?: RunResultsArtifact | null;
   selectedJavaVersion?: string | null;
   mutationEnabled?: boolean | null;
 };

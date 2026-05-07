@@ -274,3 +274,4 @@ class RunResultsResponse(BaseModel):
     pullRequestUrl: str | None = None
     pullRequestError: str | None = None
     reportArtifact: RunResultsArtifact
+    finalTestsArchive: RunResultsArtifact | None = None

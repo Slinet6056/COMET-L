@@ -4343,6 +4343,146 @@ class ResultsApiTests(unittest.TestCase):
         self.assertIn("- 测试数: 7", report_response.text)
         self.assertIn("- src/test/java/CalculatorAddTest.java", report_response.text)
 
+    def test_results_endpoint_archives_only_final_generated_tests_from_database(
+        self,
+    ) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        self._write_completed_run_artifacts(run_id)
+        session = self.run_service.get_session(run_id)
+        database = Database(session.paths["database"])
+        try:
+            database.save_test_case(
+                TestCase(
+                    id="tc-foo",
+                    class_name="FooTest",
+                    target_class="Foo",
+                    package_name="com.example",
+                    full_code="package com.example; class FooTest {}",
+                    compile_success=True,
+                )
+            )
+        finally:
+            database.close()
+
+        response = self.client.get(f"/api/runs/{run_id}/results")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            payload["finalTestsArchive"]["downloadUrl"],
+            f"/api/runs/{run_id}/artifacts/final-tests.zip",
+        )
+        self.assertEqual(
+            payload["finalTestsArchive"]["filename"],
+            f"comet-run-{run_id}-generated-tests.zip",
+        )
+        self.assertIn("zip", payload["finalTestsArchive"]["contentType"].lower())
+
+        download_response = self.client.get(f"/api/runs/{run_id}/artifacts/final-tests.zip")
+
+        self.assertEqual(download_response.status_code, 200)
+        self.assertIn("attachment", download_response.headers["content-disposition"])
+        self.assertIn(
+            f"comet-run-{run_id}-generated-tests.zip",
+            download_response.headers["content-disposition"],
+        )
+        self.assertIn("zip", download_response.headers["content-type"].lower())
+
+        archive = zipfile.ZipFile(BytesIO(download_response.content))
+        self.assertEqual(archive.namelist(), ["src/test/java/com/example/FooTest.java"])
+        self.assertEqual(
+            archive.read("src/test/java/com/example/FooTest.java").decode("utf-8"),
+            "package com.example; class FooTest {}",
+        )
+        # The final tests archive is DB-derived final generated tests only.
+        # It must exclude intermediate candidates, original project tests,
+        # non-test-root files, and unsafe paths.
+        unsafe_entries = [
+            "src/test/java/../../../../etc/passwd",
+            "/etc/passwd",
+            "src/main/java/com/example/App.java",
+            "target/classes/App.class",
+        ]
+        for unsafe_entry in unsafe_entries:
+            self.assertNotIn(unsafe_entry, archive.namelist())
+        self.assertNotIn("..", "\n".join(archive.namelist()))
+
+    def test_results_endpoint_omits_final_tests_archive_without_final_generated_tests(
+        self,
+    ) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        session = self.run_service.get_session(run_id)
+
+        state = AgentState()
+        state.iteration = 1
+        state.llm_calls = 1
+        state.budget = 1
+        Path(session.paths["final_state"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(session.paths["final_state"]).write_text(
+            json.dumps(state.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        Path(session.paths["log"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(session.paths["log"]).write_text("run completed\n", encoding="utf-8")
+        self.run_service.mark_completed(run_id)
+
+        response = self.client.get(f"/api/runs/{run_id}/results")
+        download_response = self.client.get(f"/api/runs/{run_id}/artifacts/final-tests.zip")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertNotIn("finalTestsArchive", payload)
+        self.assertEqual(download_response.status_code, 404)
+
+    def test_final_generated_tests_archive_rejects_polluted_snapshot_and_symlink_escape(
+        self,
+    ) -> None:
+        assert self.client is not None
+        assert self.root is not None
+        assert self.run_service is not None
+        run_id = self._create_run()
+        self._write_completed_run_artifacts(run_id)
+        session = self.run_service.get_session(run_id)
+        database = Database(session.paths["database"])
+        try:
+            database.save_test_case(
+                TestCase(
+                    id="tc-foo-symlink",
+                    class_name="FooTest",
+                    target_class="Foo",
+                    package_name="com.example",
+                    full_code="package com.example; class FooTest {}",
+                    compile_success=True,
+                )
+            )
+        finally:
+            database.close()
+
+        outside_output = self.root / "outside-output"
+        polluted_java_root = outside_output / "src" / "test" / "java" / "com" / "example"
+        polluted_java_root.mkdir(parents=True)
+        outside_secret = self.root / "outside-secret.txt"
+        outside_secret.write_text("outside-secret", encoding="utf-8")
+        polluted_link = polluted_java_root / "FooTest.java"
+        polluted_link.symlink_to(outside_secret)
+
+        polluted_snapshot = dict(session.path_snapshot)
+        polluted_snapshot["output"] = str(outside_output)
+        database = self.run_service._web_database
+        assert database is not None
+        database.update_run_record(run_id, path_snapshot=polluted_snapshot)
+
+        response = self.client.get(f"/api/runs/{run_id}/artifacts/final-tests.zip")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(response.json()["error"]["code"], {"artifact_not_found", "run_not_found"})
+        self.assertNotIn("outside-secret", response.text)
+        self.assertTrue(polluted_link.is_symlink())
+
     def test_results_endpoint_includes_selected_java_version(self) -> None:
         assert self.client is not None
         assert self.run_service is not None

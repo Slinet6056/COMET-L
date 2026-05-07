@@ -5,9 +5,10 @@ import shutil
 import sqlite3
 import sys
 import threading
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
@@ -60,6 +61,11 @@ SAFE_ARTIFACTS = {
     "resolved-config": {
         "filename": "resolved_config.json",
         "content_type": "application/json",
+        "root": "output",
+    },
+    "final-tests.zip": {
+        "filename": "final_tests.zip",
+        "content_type": "application/zip",
         "root": "output",
     },
 }
@@ -708,6 +714,7 @@ class RunLifecycleService:
             run_id,
             artifact_slug="report",
         )
+        final_tests_archive = self._build_final_tests_archive_artifact(run_id)
         pull_request_url = snapshot.get("pullRequestUrl")
         if not isinstance(pull_request_url, str):
             pull_request_url = None
@@ -722,7 +729,7 @@ class RunLifecycleService:
             and session.error.strip()
         ):
             pull_request_error = session.error.strip()
-        return {
+        payload = {
             "runId": snapshot["runId"],
             "status": snapshot["status"],
             "mode": snapshot["mode"],
@@ -748,10 +755,15 @@ class RunLifecycleService:
             "pullRequestError": pull_request_error,
             "reportArtifact": report_artifact,
         }
+        if final_tests_archive is not None:
+            payload["finalTestsArchive"] = final_tests_archive
+        return payload
 
     def get_download_artifact(self, run_id: str, artifact_slug: str) -> dict[str, Any]:
         if artifact_slug not in SAFE_ARTIFACTS:
             raise KeyError(artifact_slug)
+        if artifact_slug == "final-tests.zip":
+            self._ensure_final_tests_archive(run_id)
         return self._build_download_artifact(
             run_id,
             artifact_slug=artifact_slug,
@@ -1232,7 +1244,7 @@ class RunLifecycleService:
         include_file_path: bool = False,
     ) -> dict[str, Any]:
         spec = SAFE_ARTIFACTS[artifact_slug]
-        download_name = str(spec["filename"])
+        download_name = self._download_filename_for_artifact(run_id, artifact_slug)
         try:
             resolved_path = self._resolve_safe_artifact_path(run_id, artifact_slug)
         except KeyError:
@@ -1254,6 +1266,98 @@ class RunLifecycleService:
         if include_file_path and resolved_path is not None:
             artifact["filePath"] = str(resolved_path)
         return artifact
+
+    def _download_filename_for_artifact(self, run_id: str, artifact_slug: str) -> str:
+        if artifact_slug == "final-tests.zip":
+            return f"comet-run-{run_id}-generated-tests.zip"
+        return str(SAFE_ARTIFACTS[artifact_slug]["filename"])
+
+    def _build_final_tests_archive_artifact(self, run_id: str) -> dict[str, Any] | None:
+        if not self._ensure_final_tests_archive(run_id):
+            return None
+        artifact = self._build_download_artifact(run_id, artifact_slug="final-tests.zip")
+        return artifact if artifact["exists"] else None
+
+    def _ensure_final_tests_archive(self, run_id: str) -> bool:
+        session = self._sessions[run_id]
+        archive_entries = self._collect_final_tests_archive_entries(Path(session.paths["database"]))
+        archive_path = Path(session.paths["output"]) / str(
+            SAFE_ARTIFACTS["final-tests.zip"]["filename"]
+        )
+        if not archive_entries:
+            try:
+                if archive_path.exists() or archive_path.is_symlink():
+                    archive_path.unlink()
+            except OSError:
+                logger.warning("删除空最终测试包失败 %s", archive_path)
+            return False
+
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, full_code in archive_entries.items():
+                archive.writestr(name, full_code)
+        return True
+
+    def _collect_final_tests_archive_entries(self, database_path: Path) -> dict[str, str]:
+        if not database_path.exists() or database_path.stat().st_size == 0:
+            return {}
+
+        try:
+            connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+            connection.row_factory = sqlite3.Row
+        except sqlite3.Error as exc:
+            logger.warning("打开最终测试包数据库失败 %s: %s", database_path, exc)
+            return {}
+
+        try:
+            cursor = connection.cursor()
+            if not self._has_table(cursor, "test_cases"):
+                return {}
+            rows = cursor.execute(
+                """
+                SELECT package_name, class_name, full_code
+                FROM test_cases
+                WHERE compile_success = 1
+                  AND full_code IS NOT NULL
+                  AND TRIM(full_code) != ''
+                ORDER BY class_name ASC, package_name ASC, id ASC
+                """
+            ).fetchall()
+        except sqlite3.Error as exc:
+            logger.warning("读取最终测试包数据库失败 %s: %s", database_path, exc)
+            return {}
+        finally:
+            connection.close()
+
+        entries: dict[str, str] = {}
+        for row in rows:
+            class_name = str(row["class_name"] or "").strip()
+            full_code = str(row["full_code"] or "")
+            archive_name = self._final_test_archive_name(
+                package_name=str(row["package_name"] or "").strip(),
+                class_name=class_name,
+            )
+            if archive_name is None or archive_name in entries:
+                continue
+            entries[archive_name] = full_code
+        return entries
+
+    def _final_test_archive_name(self, *, package_name: str, class_name: str) -> str | None:
+        if not class_name:
+            return None
+        package_path = package_name.replace(".", "/")
+        relative_path = f"src/test/java/{class_name}.java"
+        if package_path:
+            relative_path = f"src/test/java/{package_path}/{class_name}.java"
+        posix_path = PurePosixPath(relative_path)
+        if posix_path.is_absolute():
+            return None
+        if any(part in {"", ".", ".."} for part in posix_path.parts):
+            return None
+        normalized = posix_path.as_posix()
+        if not normalized.startswith("src/test/java/") or not normalized.endswith(".java"):
+            return None
+        return normalized
 
     def _resolve_safe_artifact_path(self, run_id: str, artifact_slug: str) -> Path:
         session = self._sessions[run_id]

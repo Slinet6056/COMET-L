@@ -485,6 +485,120 @@ describe('Run results page', () => {
     expect(reportLink).toHaveTextContent('下载 report.md');
   });
 
+  it('shows final tests archive from top-level finalTestsArchive downloadUrl', async () => {
+    const backendProvidedFinalTestsUrl = '/api/runs/run-123/artifacts/final-tests.zip';
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
+        if (url === '/api/runs/run-123/results') {
+          return jsonResponse(
+            buildResults({
+              runId: 'run-123',
+              finalTestsArchive: {
+                exists: true,
+                filename: 'comet-run-run-123-generated-tests.zip',
+                contentType: 'application/zip',
+                sizeBytes: 1024,
+                updatedAt: '2026-03-10T10:05:03Z',
+                downloadUrl: backendProvidedFinalTestsUrl,
+              },
+              artifacts: {
+                finalState: {
+                  exists: true,
+                  filename: 'final_state.json',
+                  contentType: 'application/json',
+                  sizeBytes: 128,
+                  updatedAt: '2026-03-10T10:05:00Z',
+                  downloadUrl: '/api/runs/run-123/artifacts/final-state',
+                },
+                runLog: {
+                  exists: true,
+                  filename: 'run.log',
+                  contentType: 'text/plain; charset=utf-8',
+                  sizeBytes: 256,
+                  updatedAt: '2026-03-10T10:05:01Z',
+                  downloadUrl: '/api/runs/run-123/artifacts/run-log',
+                },
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-123/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('最终测试包')).toBeInTheDocument();
+    // Payload driven: the browser must not synthesize the final tests URL.
+    const finalTestsLink = screen.getByRole('link', {
+      name: '下载 comet-run-run-123-generated-tests.zip',
+    });
+    expect(finalTestsLink).toHaveAttribute('href', backendProvidedFinalTestsUrl);
+  });
+
+  it('does not render final tests archive when finalTestsArchive is absent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
+        if (url === '/api/runs/run-123/results') {
+          return jsonResponse(
+            buildResults({
+              runId: 'run-123',
+              artifacts: {
+                finalState: {
+                  exists: true,
+                  filename: 'final_state.json',
+                  contentType: 'application/json',
+                  sizeBytes: 128,
+                  updatedAt: '2026-03-10T10:05:00Z',
+                  downloadUrl: '/api/runs/run-123/artifacts/final-state',
+                },
+                runLog: {
+                  exists: true,
+                  filename: 'run.log',
+                  contentType: 'text/plain; charset=utf-8',
+                  sizeBytes: 256,
+                  updatedAt: '2026-03-10T10:05:01Z',
+                  downloadUrl: '/api/runs/run-123/artifacts/run-log',
+                },
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-123/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '最终统计' })).toBeInTheDocument();
+    expect(screen.queryByText('最终测试包')).not.toBeInTheDocument();
+  });
+
   it('shows Java version badge when selectedJavaVersion is present', async () => {
     vi.stubGlobal(
       'fetch',

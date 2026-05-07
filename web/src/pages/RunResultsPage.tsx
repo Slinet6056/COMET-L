@@ -494,6 +494,9 @@ export function RunResultsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <ArtifactCard title="最终状态 JSON" artifact={results.artifacts.finalState} />
             <ArtifactCard title="运行日志" artifact={results.artifacts.runLog} />
+            {results.finalTestsArchive && (
+              <ArtifactCard title="最终测试包" artifact={results.finalTestsArchive} />
+            )}
             {results.reportArtifact && (
               <ArtifactCard
                 title="Markdown 报告"
