@@ -19,6 +19,8 @@ const STATUS_LABELS: Record<string, string> = {
   parallel: '并行批次演化',
 };
 
+const NON_PULL_REQUEST_PROJECT_SOURCES = new Set(['upload', 'example']);
+
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return '—';
@@ -317,7 +319,9 @@ export function RunResultsPage() {
     () => (results ? getDisplayTotalMutants(results) : null),
     [results],
   );
-  const canShowPullRequestStatus = results?.projectSourceType !== 'upload';
+  const canShowPullRequestStatus = !NON_PULL_REQUEST_PROJECT_SOURCES.has(
+    results?.projectSourceType ?? '',
+  );
 
   if (isLoading) {
     return (

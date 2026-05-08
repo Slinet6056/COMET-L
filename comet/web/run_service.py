@@ -41,6 +41,7 @@ PENDING_STATUSES = {"pending"}
 RUNNING_STATUSES = {"starting", "running", "cancelling"}
 BOOT_STALE_STATUSES = {"starting", "running", "cancelling"}
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "stale"}
+NON_PULL_REQUEST_PROJECT_SOURCES = {"upload", "example"}
 logger = logging.getLogger(__name__)
 SAFE_ARTIFACTS = {
     "final-state": {
@@ -1494,7 +1495,7 @@ class RunLifecycleService:
         session = self._sessions[run_id]
         request = self._requests[run_id]
 
-        if session.project_source_type == "upload":
+        if session.project_source_type in NON_PULL_REQUEST_PROJECT_SOURCES:
             return None
 
         github_snapshot = session.config_snapshot.get("github", {})
