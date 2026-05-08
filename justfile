@@ -26,10 +26,14 @@ docker-jdk-smoke tag="comet-l:multi-jdk":
 docker-runtime-smoke tag="comet-l:multi-jdk":
     docker run --rm {{tag}} bash -lc 'uv run python -V && java -version'
 
+docker-example-smoke tag="comet-l:multi-jdk":
+    docker run --rm {{tag}} bash -lc 'test -f /opt/comet-l/examples/calculator-demo/pom.xml && test -f /opt/comet-l/examples/calculator-demo/src/main/java/com/example/Calculator.java && test -f /opt/comet-l/examples/multi-file-demo/pom.xml && test -f /opt/comet-l/examples/multi-file-demo/src/main/java/com/example/ShippingService.java'
+
 docker-verify tag="comet-l:multi-jdk":
     just docker-self-check {{tag}}
     just docker-jdk-smoke {{tag}}
     just docker-runtime-smoke {{tag}}
+    just docker-example-smoke {{tag}}
 
 run project="examples/calculator-demo":
     uv run python main.py --project-path {{project}}

@@ -92,6 +92,53 @@ const localPathConfig = {
 const defaultUser = { id: 1, username: 'testuser', role: 'user' as const };
 const adminUser = { id: 2, username: 'admin', role: 'admin' as const };
 
+const availableExamplesPayload = {
+  projects: [
+    {
+      id: 'calculator-demo',
+      label: '计算器示例',
+      displayName: '计算器示例',
+      description: '最小 Maven 计算器项目。',
+    },
+    {
+      id: 'multi-file-demo',
+      label: '多文件示例',
+      displayName: '多文件示例',
+      description: '覆盖多文件协作的 Maven 示例项目。',
+    },
+  ],
+  config: {
+    available: true,
+    defaults: defaultConfig,
+    error: null,
+  },
+};
+
+function mockExamplesEndpoint(payload: unknown = availableExamplesPayload) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    if (input === '/api/examples') {
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: 'not_found',
+          message: '测试未 mock 此端点。',
+          fieldErrors: [],
+        },
+      }),
+      {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
+  });
+}
+
 describe('Config page', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -263,5 +310,31 @@ describe('Config page', () => {
 
     expect(await screen.findByRole('heading', { name: '决策面板' })).toBeInTheDocument();
     expect(screen.getByText('run-123')).toBeInTheDocument();
+  });
+
+  it('renders 示例项目 config controls visible but read-only or disabled', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    mockExamplesEndpoint();
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    await user.click(screen.getByRole('tab', { name: '示例项目' }));
+    await user.click(await screen.findByRole('button', { name: '计算器示例' }));
+
+    expect(screen.getByLabelText('API 密钥')).toBeVisible();
+    expect(screen.getByLabelText('API 密钥')).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('API 密钥')).not.toBeDisabled();
+    expect(screen.getByLabelText('最大令牌数')).toBeVisible();
+    expect(screen.getByLabelText('最大令牌数')).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('最大令牌数')).not.toBeDisabled();
+    expect(screen.getByLabelText('启用变异分析')).toBeVisible();
+    expect(screen.getByLabelText('启用变异分析')).toBeDisabled();
   });
 });

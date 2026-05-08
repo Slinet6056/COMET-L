@@ -93,6 +93,53 @@ const localPathConfig = {
 const defaultUser = { id: 1, username: 'testuser', role: 'user' as const };
 const adminUser = { id: 2, username: 'admin', role: 'admin' as const };
 
+const availableExamplesPayload = {
+  projects: [
+    {
+      id: 'calculator-demo',
+      label: '计算器示例',
+      displayName: '计算器示例',
+      description: '最小 Maven 计算器项目。',
+    },
+    {
+      id: 'multi-file-demo',
+      label: '多文件示例',
+      displayName: '多文件示例',
+      description: '覆盖多文件协作的 Maven 示例项目。',
+    },
+  ],
+  config: {
+    available: true,
+    defaults: defaultConfig,
+    error: null,
+  },
+};
+
+function mockExamplesEndpoint(payload: unknown = availableExamplesPayload) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    if (input === '/api/examples') {
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: 'not_found',
+          message: '测试未 mock 此端点。',
+          fieldErrors: [],
+        },
+      }),
+      {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
+  });
+}
+
 describe('HomePage upload-first UI for ordinary users', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -433,6 +480,276 @@ describe('HomePage upload-first UI for ordinary users', () => {
     });
 
     expect(screen.getByRole('button', { name: '请选择 Java 版本' })).toBeDisabled();
+  });
+});
+
+describe('HomePage 示例项目 source mode', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows 示例项目 as an independent source option for ordinary users', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    mockExamplesEndpoint();
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+
+    expect(screen.getByRole('tab', { name: '上传项目' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '示例项目' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'GitHub 仓库' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: '本地路径' })).not.toBeInTheDocument();
+  });
+
+  it('loads 计算器示例 and 多文件示例 from the examples endpoint without exposing a local path textbox', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    const fetchSpy = mockExamplesEndpoint();
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    await user.click(screen.getByRole('tab', { name: '示例项目' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith('/api/examples');
+    });
+    expect(screen.getByRole('button', { name: '计算器示例' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '多文件示例' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mockito 示例' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('项目路径')).not.toBeInTheDocument();
+  });
+
+  it('disables submit for unavailable 示例项目 config and clears the error when switching source modes', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    mockExamplesEndpoint({
+      projects: [
+        {
+          id: 'calculator-demo',
+          label: '计算器示例',
+          displayName: '计算器示例',
+          description: '缺少示例配置的项目。',
+        },
+        {
+          id: 'multi-file-demo',
+          label: '多文件示例',
+          displayName: '多文件示例',
+          description: '可用示例项目。',
+        },
+      ],
+      config: {
+        available: false,
+        defaults: null,
+        error: '示例项目配置不可用：后端未生成 calculator-demo 配置。',
+      },
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    await user.click(screen.getByRole('tab', { name: '示例项目' }));
+    await user.click(await screen.findByRole('button', { name: '计算器示例' }));
+
+    expect(
+      await screen.findByText('示例项目配置不可用：后端未生成 calculator-demo 配置。'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '启动运行' })).toBeDisabled();
+
+    await user.click(screen.getByRole('tab', { name: '上传项目' }));
+    expect(screen.queryByText(/示例项目配置不可用/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'GitHub 仓库' }));
+    expect(screen.queryByText(/示例项目配置不可用/)).not.toBeInTheDocument();
+  });
+
+  it('submits a minimal createRun payload for selected 示例项目 without local or github fields', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    mockExamplesEndpoint();
+    const createRunSpy = vi.spyOn(api, 'createRun').mockResolvedValue({
+      runId: 'run-example-1',
+      status: 'created',
+      mode: 'example',
+    });
+    vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue({
+      runId: 'run-example-1',
+      status: 'created',
+      mode: 'example',
+      iteration: 0,
+      llmCalls: 0,
+      budget: 1000,
+      decisionReasoning: null,
+      currentTarget: null,
+      previousTarget: null,
+      recentImprovements: [],
+      improvementSummary: { count: 0, latest: null },
+      metrics: {
+        mutationScore: 0,
+        globalMutationScore: 0,
+        lineCoverage: 0,
+        branchCoverage: 0,
+        totalTests: 0,
+        totalMutants: 0,
+        globalTotalMutants: 0,
+        killedMutants: 0,
+        globalKilledMutants: 0,
+        survivedMutants: 0,
+        globalSurvivedMutants: 0,
+        currentMethodCoverage: null,
+      },
+      phase: { key: 'queued', label: 'Queued' },
+      artifacts: {},
+    });
+    vi.spyOn(api, 'subscribeToRunEvents').mockReturnValue(() => {});
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    await user.click(screen.getByRole('tab', { name: '示例项目' }));
+    await user.click(await screen.findByRole('button', { name: '计算器示例' }));
+    await user.click(screen.getByRole('button', { name: '启动运行' }));
+
+    await waitFor(() => {
+      expect(createRunSpy).toHaveBeenCalled();
+    });
+    const submittedPayload = createRunSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(submittedPayload).toMatchObject({
+      projectSourceType: 'example',
+      exampleProjectId: 'calculator-demo',
+    });
+    expect(submittedPayload).not.toHaveProperty('config');
+    expect(submittedPayload).not.toHaveProperty('projectPath');
+    expect(submittedPayload).not.toHaveProperty('githubRepoUrl');
+  });
+
+  it('does not leak selected 示例项目 config into later upload submissions', async () => {
+    vi.spyOn(api, 'fetchConfigDefaults').mockResolvedValue({ config: defaultConfig });
+    vi.spyOn(api, 'getCurrentUser').mockResolvedValue({ user: defaultUser });
+    mockExamplesEndpoint({
+      projects: availableExamplesPayload.projects,
+      config: {
+        available: true,
+        defaults: {
+          ...defaultConfig,
+          llm: {
+            ...defaultConfig.llm,
+            api_key: '[REDACTED]',
+            model: 'example-only-model',
+          },
+          evolution: {
+            ...defaultConfig.evolution,
+            max_iterations: 99,
+          },
+        },
+        error: null,
+      },
+    });
+    vi.spyOn(api, 'uploadProjectZip').mockResolvedValue({
+      uploadId: 'upload-after-example',
+      kind: 'project',
+      status: 'ready',
+      originalFilename: 'project.zip',
+      extractedRoot: '/sandbox/uploads/upload-after-example',
+    });
+    const createRunSpy = vi.spyOn(api, 'createRun').mockResolvedValue({
+      runId: 'run-upload-after-example',
+      status: 'pending',
+      mode: 'upload',
+    });
+    vi.spyOn(api, 'fetchRunSnapshot').mockResolvedValue({
+      runId: 'run-upload-after-example',
+      status: 'pending',
+      mode: 'upload',
+      iteration: 0,
+      llmCalls: 0,
+      budget: 1000,
+      decisionReasoning: null,
+      currentTarget: null,
+      previousTarget: null,
+      recentImprovements: [],
+      improvementSummary: { count: 0, latest: null },
+      metrics: {
+        mutationScore: 0,
+        globalMutationScore: 0,
+        lineCoverage: 0,
+        branchCoverage: 0,
+        totalTests: 0,
+        totalMutants: 0,
+        globalTotalMutants: 0,
+        killedMutants: 0,
+        globalKilledMutants: 0,
+        survivedMutants: 0,
+        globalSurvivedMutants: 0,
+        currentMethodCoverage: null,
+      },
+      phase: { key: 'pending', label: 'Pending' },
+      artifacts: {},
+    });
+    vi.spyOn(api, 'subscribeToRunEvents').mockReturnValue(() => {});
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText('上传项目 ZIP');
+    await user.click(screen.getByRole('tab', { name: '示例项目' }));
+    await user.click(await screen.findByRole('button', { name: '计算器示例' }));
+    expect(screen.getByLabelText('模型')).toHaveValue('example-only-model');
+
+    await user.click(screen.getByRole('tab', { name: '上传项目' }));
+    await user.upload(
+      screen.getByLabelText('上传项目 ZIP') as HTMLInputElement,
+      new File(['test'], 'project.zip', { type: 'application/zip' }),
+    );
+    await user.selectOptions(screen.getByTestId('java-version-select'), '17');
+    await user.click(screen.getByRole('button', { name: '启动运行' }));
+
+    await waitFor(() => {
+      expect(createRunSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectUploadId: 'upload-after-example',
+          selectedJavaVersion: '17',
+          config: expect.objectContaining({
+            llm: expect.objectContaining({
+              api_key: 'default-key',
+              model: 'gpt-4',
+            }),
+            evolution: expect.objectContaining({
+              max_iterations: 10,
+            }),
+          }),
+        }),
+      );
+    });
   });
 });
 

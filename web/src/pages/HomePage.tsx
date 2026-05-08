@@ -20,6 +20,7 @@ import {
   createRun,
   disconnectGitHubAuth,
   fetchConfigDefaults,
+  fetchExamples,
   fetchGitHubAuthConnectUrl,
   fetchGitHubAuthStatus,
   fetchGitHubRepositories,
@@ -29,6 +30,8 @@ import {
   uploadProjectZip,
   type AuthUser,
   type ConfigPolicy,
+  type ExampleProject,
+  type ExamplesConfigPayload,
   type GitHubAuthStatus,
   type GitHubRepository,
 } from '../lib/api';
@@ -180,9 +183,13 @@ function getFieldPolicyNotes(fieldKey: string, configPolicy: ConfigPolicy | null
   return notes;
 }
 
-type SourceMode = 'upload' | 'local' | 'github';
+type SourceMode = 'upload' | 'example' | 'local' | 'github';
 
 const JAVA_VERSION_OPTIONS = ['8', '11', '17', '21', '25'];
+
+function getExampleDisplayName(example: ExampleProject): string {
+  return example.displayName || example.label || example.id;
+}
 
 function JavaVersionSelect({
   selectedJavaVersion,
@@ -234,6 +241,8 @@ export function HomePage({ user }: { user: AuthUser }) {
   const [config, setConfig] = useState<ConfigValue | null>(null);
   const [deploymentConfig, setDeploymentConfig] = useState<DeploymentConfig | null>(null);
   const [configPolicy, setConfigPolicy] = useState<ConfigPolicy | null>(null);
+  const [examplePreviewConfig, setExamplePreviewConfig] = useState<ConfigValue | null>(null);
+  const [examplePreviewPolicy, setExamplePreviewPolicy] = useState<ConfigPolicy | null>(null);
   const [sourceMode, setSourceMode] = useState<SourceMode>('upload');
   const [projectPath, setProjectPath] = useState('');
   const [bugReportsDir, setBugReportsDir] = useState('');
@@ -246,6 +255,12 @@ export function HomePage({ user }: { user: AuthUser }) {
   const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>([]);
   const [isLoadingRepositories, setIsLoadingRepositories] = useState(false);
   const [repoFilterQuery, setRepoFilterQuery] = useState('');
+  const [examples, setExamples] = useState<ExampleProject[]>([]);
+  const [examplesConfig, setExamplesConfig] = useState<ExamplesConfigPayload | null>(null);
+  const [selectedExampleId, setSelectedExampleId] = useState<string | null>(null);
+  const [isLoadingExamples, setIsLoadingExamples] = useState(false);
+  const [examplesLoaded, setExamplesLoaded] = useState(false);
+  const [exampleError, setExampleError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [pageError, setPageError] = useState<string | null>(null);
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
@@ -301,6 +316,55 @@ export function HomePage({ user }: { user: AuthUser }) {
       setSourceMode('upload');
     }
   }, [allowLocalPathMode, sourceMode]);
+
+  useEffect(() => {
+    if (sourceMode !== 'example') {
+      setExampleError(null);
+    }
+  }, [sourceMode]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadExamples() {
+      if (sourceMode !== 'example' || examplesLoaded) {
+        return;
+      }
+
+      setIsLoadingExamples(true);
+      setExampleError(null);
+      try {
+        const payload = await fetchExamples();
+        if (!active) {
+          return;
+        }
+        setExamples(payload.projects);
+        setExamplesConfig(payload.config);
+        setExamplesLoaded(true);
+        if (!payload.config.available) {
+          setExampleError(payload.config.error || '示例项目配置当前不可用。');
+        }
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        setExamples([]);
+        setExamplesConfig(null);
+        setExamplesLoaded(false);
+        setExampleError(error instanceof Error ? error.message : '无法加载示例项目。');
+      } finally {
+        if (active) {
+          setIsLoadingExamples(false);
+        }
+      }
+    }
+
+    void loadExamples();
+
+    return () => {
+      active = false;
+    };
+  }, [examplesLoaded, sourceMode]);
 
   useEffect(() => {
     let active = true;
@@ -548,7 +612,7 @@ export function HomePage({ user }: { user: AuthUser }) {
   }
 
   function handleFieldChange(field: ConfigFieldDefinition, rawValue: string, checked: boolean) {
-    if (config === null) {
+    if (config === null || sourceMode === 'example') {
       return;
     }
 
@@ -561,6 +625,24 @@ export function HomePage({ user }: { user: AuthUser }) {
       delete nextErrors[getFieldKey(field.path)];
       return nextErrors;
     });
+  }
+
+  function handleExampleSelect(example: ExampleProject) {
+    setSelectedExampleId(example.id);
+    setFieldErrors({});
+    setPageError(null);
+
+    if (!examplesConfig?.available || examplesConfig.defaults === null) {
+      setExampleError(examplesConfig?.error || '示例项目配置当前不可用。');
+      setExamplePreviewConfig(null);
+      setExamplePreviewPolicy(null);
+      return;
+    }
+
+    const nextConfig = splitServerConfig(examplesConfig.defaults);
+    setExamplePreviewConfig(nextConfig.userConfig);
+    setExamplePreviewPolicy(examplesConfig.configPolicy ?? null);
+    setExampleError(null);
   }
 
   async function handleConnectGithub() {
@@ -624,22 +706,42 @@ export function HomePage({ user }: { user: AuthUser }) {
       }
     }
 
+    if (sourceMode === 'example') {
+      if (!selectedExampleId) {
+        setFieldErrors({ exampleProjectId: '请选择示例项目。' });
+        return;
+      }
+
+      if (!examplesConfig?.available || examplesConfig.defaults === null) {
+        setExampleError(examplesConfig?.error || '示例项目配置当前不可用。');
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     setFieldErrors({});
     setPageError(null);
 
     try {
-      const response = await createRun({
-        projectPath: sourceMode === 'local' ? projectPath : '',
-        bugReportsDir: sourceMode === 'local' ? bugReportsDir : null,
-        githubRepoUrl: sourceMode === 'github' ? githubRepoUrl : null,
-        githubBaseBranch: sourceMode === 'github' ? githubBaseBranch : null,
-        selectedJavaVersion:
-          sourceMode === 'upload' || sourceMode === 'github' ? selectedJavaVersion || null : null,
-        projectUploadId: sourceMode === 'upload' ? projectUploadId : null,
-        bugReportsUploadId: sourceMode === 'upload' ? bugReportsUploadId : null,
-        config,
-      });
+      const response =
+        sourceMode === 'example'
+          ? await createRun({
+              projectSourceType: 'example',
+              exampleProjectId: selectedExampleId,
+            })
+          : await createRun({
+              projectPath: sourceMode === 'local' ? projectPath : '',
+              bugReportsDir: sourceMode === 'local' ? bugReportsDir : null,
+              githubRepoUrl: sourceMode === 'github' ? githubRepoUrl : null,
+              githubBaseBranch: sourceMode === 'github' ? githubBaseBranch : null,
+              selectedJavaVersion:
+                sourceMode === 'upload' || sourceMode === 'github'
+                  ? selectedJavaVersion || null
+                  : null,
+              projectUploadId: sourceMode === 'upload' ? projectUploadId : null,
+              bugReportsUploadId: sourceMode === 'upload' ? bugReportsUploadId : null,
+              config,
+            });
       navigate(`/runs/${response.runId}`);
     } catch (error) {
       if (error instanceof ApiError) {
@@ -682,6 +784,11 @@ export function HomePage({ user }: { user: AuthUser }) {
   }
 
   const githubConnected = githubAuthStatus?.connected && !githubAuthStatus.requiresReauth;
+  const isExampleConfigReadOnly = sourceMode === 'example';
+  const displayedConfig =
+    isExampleConfigReadOnly && examplePreviewConfig ? examplePreviewConfig : config;
+  const displayedConfigPolicy =
+    isExampleConfigReadOnly && examplePreviewConfig ? examplePreviewPolicy : configPolicy;
 
   return (
     <div className="space-y-4">
@@ -693,7 +800,7 @@ export function HomePage({ user }: { user: AuthUser }) {
           </p>
           <h1 className="text-xl font-semibold">运行配置首页</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            上传 YAML 后端规范化并回填表单。你可以继续调整参数，然后用本地路径或 GitHub
+            上传 YAML 后端规范化并回填表单。你可以继续调整参数，然后用上传项目、示例项目或 GitHub
             仓库启动运行。
           </p>
         </div>
@@ -736,7 +843,7 @@ export function HomePage({ user }: { user: AuthUser }) {
             <CardTitle className="text-base">目标来源</CardTitle>
           </div>
           <p className="text-xs text-muted-foreground">
-            选择本地 Maven 项目路径或 GitHub 仓库作为运行目标。
+            选择上传的 Maven 项目、内置示例项目或 GitHub 仓库作为运行目标。
           </p>
         </CardHeader>
         <CardContent>
@@ -747,6 +854,7 @@ export function HomePage({ user }: { user: AuthUser }) {
                 setSourceMode('upload');
                 return;
               }
+              setFieldErrors({});
               setSourceMode(value as SourceMode);
             }}
             className="space-y-4"
@@ -754,6 +862,9 @@ export function HomePage({ user }: { user: AuthUser }) {
             <TabsList className="h-8">
               <TabsTrigger value="upload" className="text-xs h-6">
                 上传项目
+              </TabsTrigger>
+              <TabsTrigger value="example" className="text-xs h-6">
+                示例项目
               </TabsTrigger>
               {allowLocalPathMode ? (
                 <TabsTrigger value="local" className="text-xs h-6">
@@ -862,6 +973,68 @@ export function HomePage({ user }: { user: AuthUser }) {
                   });
                 }}
               />
+            </TabsContent>
+
+            <TabsContent value="example" className="space-y-3 mt-3">
+              <Alert>
+                <AlertDescription className="text-xs">
+                  示例项目由后端提供固定项目和配置。你可以查看配置值，但提交时不会发送配置覆盖。
+                </AlertDescription>
+              </Alert>
+
+              {isLoadingExamples ? (
+                <p className="text-xs text-muted-foreground" role="status">
+                  正在加载示例项目...
+                </p>
+              ) : examples.length > 0 ? (
+                <div className="space-y-1.5">
+                  <p className="text-xs text-muted-foreground">选择示例项目</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {examples.map((example) => {
+                      const selected = selectedExampleId === example.id;
+                      const displayName = getExampleDisplayName(example);
+
+                      return (
+                        <button
+                          key={example.id}
+                          type="button"
+                          aria-label={displayName}
+                          aria-pressed={selected}
+                          className={`text-left rounded-lg border px-3 py-2 text-sm transition-colors ${
+                            selected
+                              ? 'border-primary bg-primary/10 text-primary'
+                              : 'border-border hover:bg-accent'
+                          }`}
+                          onClick={() => handleExampleSelect(example)}
+                        >
+                          <span className="font-medium">{displayName}</span>
+                          {example.description ? (
+                            <span className="block text-xs text-muted-foreground mt-0.5">
+                              {example.description}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground" role="status">
+                  暂无可用示例项目
+                </p>
+              )}
+
+              {fieldErrors.exampleProjectId ? (
+                <p className="text-xs text-destructive" role="alert">
+                  {fieldErrors.exampleProjectId}
+                </p>
+              ) : null}
+
+              {exampleError ? (
+                <Alert variant="destructive" role="alert">
+                  <AlertDescription>{exampleError}</AlertDescription>
+                </Alert>
+              ) : null}
             </TabsContent>
 
             <TabsContent value="local" className="space-y-3 mt-3">
@@ -1195,7 +1368,11 @@ export function HomePage({ user }: { user: AuthUser }) {
               disabled={
                 isSubmitting ||
                 (sourceMode === 'upload' && (!projectUploadId || !selectedJavaVersion)) ||
-                (sourceMode === 'github' && !githubConnected)
+                (sourceMode === 'github' && !githubConnected) ||
+                (sourceMode === 'example' &&
+                  (!selectedExampleId ||
+                    !examplesConfig?.available ||
+                    examplesConfig.defaults === null))
               }
             >
               {isSubmitting
@@ -1208,7 +1385,9 @@ export function HomePage({ user }: { user: AuthUser }) {
                       : '启动运行'
                   : sourceMode === 'github' && !githubConnected
                     ? '请先连接 GitHub'
-                    : '启动运行'}
+                    : sourceMode === 'example' && !selectedExampleId
+                      ? '请选择示例项目'
+                      : '启动运行'}
             </Button>
           </div>
         </CardContent>
@@ -1227,9 +1406,9 @@ export function HomePage({ user }: { user: AuthUser }) {
                 const fieldKey = getFieldKey(field.path);
                 const fieldId = `field-${fieldKey.replaceAll('.', '-')}`;
                 const hintId = getFieldHintId(field.path);
-                const value = getNestedValue(config, field.path);
+                const value = getNestedValue(displayedConfig, field.path);
                 const error = fieldErrors[fieldKey];
-                const policyNotes = getFieldPolicyNotes(fieldKey, configPolicy);
+                const policyNotes = getFieldPolicyNotes(fieldKey, displayedConfigPolicy);
 
                 return (
                   <div key={fieldKey} className="space-y-1">
@@ -1244,6 +1423,7 @@ export function HomePage({ user }: { user: AuthUser }) {
                           aria-describedby={hintId}
                           checked={Boolean(value)}
                           className="h-3.5 w-3.5 rounded"
+                          disabled={isExampleConfigReadOnly}
                           onChange={(event) =>
                             handleFieldChange(field, event.target.value, event.target.checked)
                           }
@@ -1254,6 +1434,7 @@ export function HomePage({ user }: { user: AuthUser }) {
                       <Select
                         value={value === null || value === undefined ? '' : String(value)}
                         onValueChange={(val) => handleFieldChange(field, val ?? '', false)}
+                        disabled={isExampleConfigReadOnly}
                       >
                         <SelectTrigger
                           id={fieldId}
@@ -1283,6 +1464,7 @@ export function HomePage({ user }: { user: AuthUser }) {
                         step={field.step}
                         placeholder={field.placeholder}
                         className="h-7 text-xs"
+                        readOnly={isExampleConfigReadOnly}
                         onChange={(event) =>
                           handleFieldChange(field, event.target.value, event.target.checked)
                         }

@@ -19,6 +19,7 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import pytest
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
@@ -1218,6 +1219,369 @@ class ConfigApiTests(unittest.TestCase):
         self.assertNotIn("/tmp/token.enc", serialized)
         self.assertEqual(snapshot["llm"]["api_key"], "[REDACTED]")
         self.assertIn("github.encrypted_token_store_path", annotations.redacted_fields)
+
+
+def write_example_config(path: Path, content: str | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        content
+        or (
+            "llm:\n"
+            "  api_key: example-key\n"
+            "  model: gpt-4o-mini\n"
+            "execution:\n"
+            "  selected_java_version: '17'\n"
+        ),
+        encoding="utf-8",
+    )
+
+
+def create_example_source_payload(example_project_id: str = "calculator-demo") -> dict[str, str]:
+    return {
+        "projectSourceType": "example",
+        "exampleProjectId": example_project_id,
+    }
+
+
+def _create_example_project_tree(example_root: Path) -> None:
+    for project_id in ["calculator-demo", "multi-file-demo"]:
+        project_path = example_root / project_id
+        (project_path / "src/main/java/com/example").mkdir(parents=True, exist_ok=True)
+        (project_path / "pom.xml").write_text("<project/>", encoding="utf-8")
+        (project_path / "src/main/java/com/example/App.java").write_text(
+            "package com.example; class App {}\n",
+            encoding="utf-8",
+        )
+
+
+def _create_example_api_client(
+    root: Path,
+) -> tuple[TestClient, RunLifecycleService, WebDatabase, Path]:
+    default_config_path = root / "config.example.yaml"
+    default_config_path.write_text(
+        "llm:\n  api_key: fallback-key\n  model: fallback-model\n",
+        encoding="utf-8",
+    )
+    run_service = RunLifecycleService(workspace_root=root)
+
+    def fake_initialize(
+        config: Settings,
+        bug_reports_dir: str | None = None,
+        parallel_mode: bool = False,
+    ) -> dict[str, object]:
+        return {
+            "config": config,
+            "bug_reports_dir": bug_reports_dir,
+            "parallel_mode": parallel_mode,
+        }
+
+    def fake_run(
+        project_path: str,
+        components: dict[str, object],
+        resume_state: str | None = None,
+    ) -> None:
+        del project_path, components, resume_state
+
+    client = TestClient(
+        create_app(
+            run_service=run_service,
+            default_config_path=default_config_path,
+            system_initializer=fake_initialize,
+            evolution_runner=fake_run,
+        )
+    )
+    database = WebDatabase.for_workspace(root)
+    login_test_user(client, database)
+    return client, run_service, database, default_config_path
+
+
+def _count_run_records(database: WebDatabase) -> int:
+    with database.connect() as connection:
+        row = connection.execute("SELECT COUNT(*) AS count FROM runs").fetchone()
+    return int(row["count"])
+
+
+def _examples_response_payload(test_case: unittest.TestCase, response: Any) -> dict[str, Any]:
+    test_case.assertEqual(response.status_code, 200, response.text)
+    test_case.assertTrue(
+        response.headers.get("content-type", "").startswith("application/json"),
+        response.text,
+    )
+    return response.json()
+
+
+class ExampleProjectApiTests(unittest.TestCase):
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    root: Path | None = None
+    example_root: Path | None = None
+    example_config_path: Path | None = None
+    default_config_path: Path | None = None
+    run_service: RunLifecycleService | None = None
+    database: WebDatabase | None = None
+    client: TestClient | None = None
+    config_patcher: Any = None
+    root_patcher: Any = None
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.example_root = self.root / "opt-comet-l" / "examples"
+        self.example_config_path = self.root / "opt-comet-l" / "example.config.yaml"
+        _create_example_project_tree(self.example_root)
+        self.config_patcher = patch(
+            "comet.web.routes.EXAMPLE_CONFIG_PATH",
+            self.example_config_path,
+            create=True,
+        )
+        self.root_patcher = patch(
+            "comet.web.routes.EXAMPLE_PROJECT_ROOT",
+            self.example_root,
+            create=True,
+        )
+        self.config_patcher.start()
+        self.root_patcher.start()
+        self.client, self.run_service, self.database, self.default_config_path = (
+            _create_example_api_client(self.root)
+        )
+
+    def tearDown(self) -> None:
+        if self.root_patcher is not None:
+            self.root_patcher.stop()
+        if self.config_patcher is not None:
+            self.config_patcher.stop()
+        if self.temp_dir is not None:
+            self.temp_dir.cleanup()
+
+    def test_examples_available_returns_projects_and_config_defaults(self) -> None:
+        assert self.client is not None
+        assert self.example_config_path is not None
+        write_example_config(self.example_config_path)
+
+        response = self.client.get("/api/examples")
+
+        payload = _examples_response_payload(self, response)
+        self.assertEqual(
+            [project["id"] for project in payload["projects"]],
+            ["calculator-demo", "multi-file-demo"],
+        )
+        self.assertEqual(
+            [project["displayName"] for project in payload["projects"]],
+            ["计算器示例", "多文件示例"],
+        )
+        config = payload["config"]
+        self.assertTrue(config["available"])
+        self.assertIsNone(config.get("error"))
+        self.assertIsNotNone(config["defaults"])
+        self.assertEqual(config["defaults"]["llm"]["model"], "gpt-4o-mini")
+        self.assertIn("execution", config["defaults"])
+
+    def test_examples_missing_config_reports_unavailable_without_fallback(self) -> None:
+        assert self.client is not None
+        assert self.example_config_path is not None
+        self.assertFalse(self.example_config_path.exists())
+
+        response = self.client.get("/api/examples")
+
+        payload = _examples_response_payload(self, response)
+        config = payload["config"]
+        self.assertFalse(config["available"])
+        self.assertIsNone(config["defaults"])
+        self.assertIsInstance(config["error"], str)
+        self.assertTrue(
+            str(self.example_config_path) in config["error"]
+            or "/opt/comet-l/example.config.yaml" in config["error"]
+        )
+        self.assertNotIn("fallback-model", response.text)
+
+    def test_examples_invalid_config_reports_unavailable_without_repo_fallback(self) -> None:
+        assert self.client is not None
+        assert self.example_config_path is not None
+        invalid_configs = {
+            "invalid-yaml": "llm:\n  api_key: [unterminated\n",
+            "invalid-schema": "llm:\n  temperature: 3.5\n",
+        }
+
+        for label, content in invalid_configs.items():
+            with self.subTest(label=label):
+                write_example_config(self.example_config_path, content)
+
+                response = self.client.get("/api/examples")
+
+                config = _examples_response_payload(self, response)["config"]
+                self.assertFalse(config["available"])
+                self.assertIsNone(config["defaults"])
+                self.assertIsInstance(config["error"], str)
+                self.assertTrue(config["error"].strip())
+                self.assertTrue(
+                    "配置" in config["error"]
+                    or "invalid" in config["error"].lower()
+                    or "validation" in config["error"].lower()
+                )
+                self.assertNotIn("fallback-model", response.text)
+
+    def test_create_run_example_calculator_uses_scoped_project_copy(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        assert self.database is not None
+        assert self.example_root is not None
+        assert self.example_config_path is not None
+        write_example_config(self.example_config_path)
+
+        response = self.client.post(
+            "/api/runs",
+            data=create_example_source_payload("calculator-demo"),
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        run_id = payload["runId"]
+        source_project_path = (self.example_root / "calculator-demo").resolve()
+        self.assertTrue((source_project_path / "pom.xml").is_file())
+
+        run_request = self.run_service.get_run_request(run_id)
+        session = self.run_service.get_session(run_id)
+        copied_project_path = Path(run_request.project_path).resolve()
+        scoped_sandbox_path = Path(session.paths["sandbox"]).resolve()
+
+        self.assertNotEqual(copied_project_path, source_project_path)
+        self.assertTrue(copied_project_path.is_relative_to(scoped_sandbox_path))
+        self.assertEqual(copied_project_path.name, "project")
+        self.assertTrue((copied_project_path / "pom.xml").is_file())
+        self.assertTrue((copied_project_path / "src/main/java/com/example/App.java").is_file())
+        probe_path = copied_project_path / ".comet-write-probe"
+        probe_path.write_text("ok", encoding="utf-8")
+        self.assertEqual(probe_path.read_text(encoding="utf-8"), "ok")
+        self.assertEqual(run_request.config_path, str(self.example_config_path))
+
+        self.assertEqual(session.project_source_type, "example")
+        self.assertEqual(Path(session.project_path).resolve(), copied_project_path)
+        self.assertEqual(session.source_metadata["example_project_id"], "calculator-demo")
+        self.assertEqual(session.source_metadata["display_name"], "计算器示例")
+        self.assertNotIn("uploadSource", session.source_metadata)
+
+        record = self.database.get_run_record(run_id)
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.project_source_type, "example")
+        self.assertEqual(Path(record.project_path).resolve(), copied_project_path)
+        source_metadata = record.path_metadata["sourceMetadata"]
+        self.assertEqual(source_metadata["example_project_id"], "calculator-demo")
+        self.assertEqual(source_metadata["display_name"], "计算器示例")
+
+    def test_create_run_example_rejects_config_and_run_overrides(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        assert self.example_config_path is not None
+        write_example_config(self.example_config_path)
+        override_cases: list[
+            tuple[str, dict[str, str], dict[str, tuple[str, BytesIO, str]] | None]
+        ] = [
+            (
+                "configFile",
+                {},
+                {
+                    "configFile": (
+                        "config.yaml",
+                        BytesIO(b"llm:\n  api_key: evil\n"),
+                        "application/x-yaml",
+                    )
+                },
+            ),
+            ("maxIterations", {"maxIterations": "1"}, None),
+            ("budget", {"budget": "1"}, None),
+            ("mutationEnabled", {"mutationEnabled": "false"}, None),
+            ("parallel", {"parallel": "true"}, None),
+            ("parallelTargets", {"parallelTargets": "2"}, None),
+            ("selectedJavaVersion", {"selectedJavaVersion": "21"}, None),
+            ("resumeState", {"resumeState": "state.json"}, None),
+            ("debug", {"debug": "true"}, None),
+        ]
+
+        for field_name, extra_data, files in override_cases:
+            with self.subTest(field_name=field_name):
+                before_count = _count_run_records(self.database)
+                response = self.client.post(
+                    "/api/runs",
+                    data={**create_example_source_payload("calculator-demo"), **extra_data},
+                    files=files,
+                )
+
+                self.assertIn(response.status_code, {400, 422}, response.text)
+                self.assertEqual(response.json()["error"]["code"], "mixed_example_source")
+                self.assertEqual(_count_run_records(self.database), before_count)
+
+    def test_example_rejects_mixed_source_fields_without_creating_runs(self) -> None:
+        assert self.client is not None
+        assert self.database is not None
+        assert self.example_config_path is not None
+        write_example_config(self.example_config_path)
+        mix_cases: list[tuple[str, dict[str, str], dict[str, tuple[str, BytesIO, str]] | None]] = [
+            ("projectPath", {"projectPath": "/workspace/project"}, None),
+            ("githubRepoUrl", {"githubRepoUrl": "https://github.com/acme/demo"}, None),
+            ("projectUploadId", {"projectUploadId": "upload-project-123"}, None),
+            ("bugReportsUploadId", {"bugReportsUploadId": "upload-reports-123"}, None),
+            (
+                "configFile",
+                {},
+                {
+                    "configFile": (
+                        "config.yaml",
+                        BytesIO(b"llm:\n  api_key: mixed\n"),
+                        "application/x-yaml",
+                    )
+                },
+            ),
+            ("budget", {"budget": "1"}, None),
+        ]
+
+        for field_name, extra_data, files in mix_cases:
+            with self.subTest(field_name=field_name):
+                before_count = _count_run_records(self.database)
+                response = self.client.post(
+                    "/api/runs",
+                    data={**create_example_source_payload("calculator-demo"), **extra_data},
+                    files=files,
+                )
+
+                self.assertIn(response.status_code, {400, 422}, response.text)
+                self.assertEqual(response.json()["error"]["code"], "mixed_example_source")
+                self.assertEqual(_count_run_records(self.database), before_count)
+
+
+@pytest.mark.parametrize(
+    "example_project_id",
+    [
+        pytest.param("../secret", id="../secret"),
+        pytest.param(
+            "/opt/comet-l/examples/calculator-demo",
+            id="/opt/comet-l/examples/calculator-demo",
+        ),
+        pytest.param("not-exist", id="not-exist"),
+        pytest.param("", id="empty string"),
+    ],
+)
+def test_example_unknown_id_rejected_without_creating_run(example_project_id: str) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        example_root = root / "opt-comet-l" / "examples"
+        example_config_path = root / "opt-comet-l" / "example.config.yaml"
+        _create_example_project_tree(example_root)
+        write_example_config(example_config_path)
+
+        with (
+            patch("comet.web.routes.EXAMPLE_CONFIG_PATH", example_config_path, create=True),
+            patch("comet.web.routes.EXAMPLE_PROJECT_ROOT", example_root, create=True),
+        ):
+            client, _run_service, database, _default_config_path = _create_example_api_client(root)
+            before_count = _count_run_records(database)
+
+            response = client.post(
+                "/api/runs",
+                data=create_example_source_payload(example_project_id),
+            )
+
+            assert response.status_code in {400, 422}, response.text
+            assert _count_run_records(database) == before_count
 
 
 def _zip_bytes(entries: dict[str, bytes | str], *, symlink_name: str | None = None) -> BytesIO:

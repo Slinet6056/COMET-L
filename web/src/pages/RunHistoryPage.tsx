@@ -64,6 +64,17 @@ function buildEndedAt(entry: RunHistoryEntry): string | null {
 }
 
 function buildRunSource(entry: RunHistoryEntry): string {
+  if (entry.projectSourceType === 'example') {
+    const displayName =
+      typeof entry.sourceMetadata?.display_name === 'string'
+        ? entry.sourceMetadata.display_name.trim()
+        : typeof entry.sourceMetadata?.example_project_display_name === 'string'
+          ? entry.sourceMetadata.example_project_display_name.trim()
+          : '';
+
+    return displayName ? `示例项目 · ${displayName}` : '示例项目';
+  }
+
   if (entry.projectSourceType === 'upload') {
     return '上传项目';
   }

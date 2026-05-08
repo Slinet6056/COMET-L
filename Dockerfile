@@ -76,6 +76,8 @@ ENV PATH=/opt/comet-l/.venv/bin:/opt/maven/bin:/opt/jdks/jdk-25/bin:${PATH}
 WORKDIR /opt/comet-l
 
 COPY . /opt/comet-l
+COPY examples/calculator-demo /opt/comet-l/examples/calculator-demo
+COPY examples/multi-file-demo /opt/comet-l/examples/multi-file-demo
 COPY --from=python-builder /usr/local/bin/uv /usr/local/bin/uv
 COPY --from=python-builder /src/.venv /opt/comet-l/.venv
 COPY --from=python-builder /src/.cache/tiktoken /opt/comet-l/.cache/tiktoken

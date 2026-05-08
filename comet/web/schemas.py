@@ -83,6 +83,22 @@ class ConfigParseResponse(ConfigPayload):
     pass
 
 
+class ExampleProjectEntry(BaseModel):
+    id: str
+    displayName: str
+
+
+class ExampleConfigState(BaseModel):
+    available: bool
+    defaults: dict[str, object] | None = None
+    error: str | None = None
+
+
+class ExamplesResponse(BaseModel):
+    projects: list[ExampleProjectEntry] = Field(default_factory=list)
+    config: ExampleConfigState
+
+
 class UploadCreateResponse(BaseModel):
     uploadId: str
     kind: Literal["project", "bug_reports"]
@@ -184,6 +200,7 @@ class RunHistoryEntry(BaseModel):
     status: str
     mode: str
     projectSourceType: Literal["local", "upload", "github"] | str = "local"
+    sourceMetadata: dict[str, object] = Field(default_factory=dict)
     selectedJavaVersion: str | None = None
     mutationEnabled: bool | None = None
     projectPath: str

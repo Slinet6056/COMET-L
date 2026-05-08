@@ -279,6 +279,23 @@ github:
 
 普通用户在 Web 控制台中使用 ZIP 上传创建运行，不需要把宿主机项目目录挂进容器。只有管理员需要使用服务器本地路径模式时，才需要挂载项目目录，并在 `config.yaml` 的 `deployment` 中开启本地路径模式、填写允许访问的目录。
 
+### 示例项目
+
+镜像里已经包含 `示例项目`，挂载单独的示例配置即可：
+
+```bash
+docker run --rm -it \
+  -p 8000:8000 \
+  -v "$PWD/.docker-data/state:/opt/comet-l/state" \
+  -v "$PWD/.docker-data/output:/opt/comet-l/output" \
+  -v "$PWD/.docker-data/sandbox:/opt/comet-l/sandbox" \
+  -v "$PWD/.docker-data/logs:/opt/comet-l/logs" \
+  -v "$PWD/example.config.yaml:/opt/comet-l/example.config.yaml:ro" \
+  comet-l:multi-jdk
+```
+
+`example.config.yaml` 只给 `示例项目` 使用。文件缺失或内容无效时，只会禁用 `示例项目`，不会影响普通上传、本地路径或 GitHub 仓库流程。
+
 管理员处理宿主机本地 Maven 项目时，可以把项目目录挂进容器：
 
 ```bash

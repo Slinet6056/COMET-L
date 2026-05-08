@@ -65,6 +65,7 @@ from .schemas import (
     ConfigParseResponse,
     ConfigPayload,
     ErrorResponse,
+    ExamplesResponse,
     FieldError,
     GitHubRepositoriesResponse,
     GitHubRepositoryEntry,
@@ -115,6 +116,12 @@ MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 MAX_ZIP_FILE_BYTES = 50 * 1024 * 1024
 MAX_ZIP_FILE_COUNT = 5000
 MAX_ZIP_COMPRESSION_RATIO = 100
+EXAMPLE_PROJECT_ROOT = Path("/opt/comet-l/examples")
+EXAMPLE_CONFIG_PATH = Path("/opt/comet-l/example.config.yaml")
+EXAMPLE_PROJECTS = {
+    "calculator-demo": "计算器示例",
+    "multi-file-demo": "多文件示例",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -412,6 +419,168 @@ def _run_response_settings(settings: Settings, default_config_path: Path) -> Set
 
 def _load_default_settings(default_config_path: Path) -> Settings:
     return Settings.from_yaml(str(default_config_path))
+
+
+def _example_project_entries() -> list[dict[str, str]]:
+    return [
+        {"id": project_id, "displayName": display_name}
+        for project_id, display_name in EXAMPLE_PROJECTS.items()
+    ]
+
+
+def _load_example_settings() -> tuple[Settings | None, str | None]:
+    try:
+        return Settings.from_yaml(str(EXAMPLE_CONFIG_PATH)), None
+    except FileNotFoundError:
+        return None, f"示例配置不可用：配置文件不存在: {EXAMPLE_CONFIG_PATH}"
+    except yaml.YAMLError as exc:
+        return None, f"示例配置无效：{exc}"
+    except ValidationError as exc:
+        return None, f"示例配置校验失败：{exc}"
+
+
+def _example_config_state() -> dict[str, object]:
+    settings, error = _load_example_settings()
+    if settings is None:
+        return {"available": False, "defaults": None, "error": error}
+
+    safe_config, _annotations = redacted_settings_dict(settings)
+    return {"available": True, "defaults": safe_config, "error": None}
+
+
+def _unknown_example_response(example_project_id: str | None) -> JSONResponse:
+    return _error_response(
+        422,
+        code="unknown_example_project",
+        message="示例项目不存在。",
+        field_errors=[
+            FieldError(
+                path=["exampleProjectId"],
+                code="unknown_example_project",
+                message=(example_project_id or "").strip(),
+            )
+        ],
+    )
+
+
+def _example_config_unavailable_response(error: str | None) -> JSONResponse:
+    return _error_response(
+        422,
+        code="example_config_unavailable",
+        message=error or "示例配置不可用。",
+        field_errors=[
+            FieldError(
+                path=["exampleConfig"],
+                code="example_config_unavailable",
+                message=error or "示例配置不可用。",
+            )
+        ],
+    )
+
+
+def _resolve_example_project(example_project_id: str | None) -> tuple[str, Path] | JSONResponse:
+    normalized_id = example_project_id.strip() if example_project_id is not None else ""
+    display_name = EXAMPLE_PROJECTS.get(normalized_id)
+    if display_name is None:
+        return _unknown_example_response(example_project_id)
+
+    try:
+        resolved_root = EXAMPLE_PROJECT_ROOT.expanduser().resolve(strict=False)
+        resolved_project = (EXAMPLE_PROJECT_ROOT / normalized_id).expanduser().resolve(strict=False)
+    except OSError:
+        return _unknown_example_response(example_project_id)
+    if not resolved_project.is_relative_to(resolved_root):
+        return _unknown_example_response(example_project_id)
+    return display_name, resolved_project
+
+
+def _example_mixed_field_errors(
+    *,
+    submitted_form_fields: set[str],
+    project_path: str | None,
+    project_upload_id: str | None,
+    config_file: UploadFile | None,
+    max_iterations: int | None,
+    budget: int | None,
+    mutation_enabled: bool | None,
+    resume_state: str | None,
+    debug: bool,
+    bug_reports_dir: str | None,
+    bug_reports_upload_id: str | None,
+    parallel: bool,
+    parallel_targets: int | None,
+    github_repo_url: str | None,
+    github_base_branch: str | None,
+    selected_java_version: str | None,
+) -> list[FieldError]:
+    source_fields = [
+        ("projectPath", project_path),
+        ("projectUploadId", project_upload_id),
+        ("bugReportsDir", bug_reports_dir),
+        ("bugReportsUploadId", bug_reports_upload_id),
+        ("githubRepoUrl", github_repo_url),
+        ("githubBaseBranch", github_base_branch),
+    ]
+    field_errors = [
+        FieldError(
+            path=[field_name],
+            code="mixed_example_source",
+            message="示例模式不能混用其他项目来源字段。",
+        )
+        for field_name, value in source_fields
+        if value is not None and value.strip()
+    ]
+
+    override_fields = [
+        ("maxIterations", max_iterations is not None),
+        ("budget", budget is not None),
+        (
+            "mutationEnabled",
+            mutation_enabled is not None or "mutationEnabled" in submitted_form_fields,
+        ),
+        ("resumeState", resume_state is not None and resume_state.strip()),
+        ("debug", debug or "debug" in submitted_form_fields),
+        ("parallel", parallel or "parallel" in submitted_form_fields),
+        ("parallelTargets", parallel_targets is not None),
+        (
+            "selectedJavaVersion",
+            selected_java_version is not None and selected_java_version.strip(),
+        ),
+    ]
+    field_errors.extend(
+        FieldError(
+            path=[field_name],
+            code="mixed_example_source",
+            message="示例模式不能覆盖运行配置。",
+        )
+        for field_name, submitted in override_fields
+        if submitted
+    )
+
+    if config_file is not None:
+        field_errors.append(
+            FieldError(
+                path=["configFile"],
+                code="mixed_example_source",
+                message="示例模式不能上传运行配置。",
+            )
+        )
+    return field_errors
+
+
+def _invalid_project_source_type_response(project_source_type: str) -> JSONResponse:
+    return _error_response(
+        422,
+        code="invalid_project_source_type",
+        message="项目来源类型无效。",
+        field_errors=[
+            FieldError(
+                path=["projectSourceType"],
+                code="invalid_project_source_type",
+                message=project_source_type,
+            )
+        ],
+    )
 
 
 def _load_default_settings_for_display(default_config_path: Path) -> Settings:
@@ -1482,6 +1651,15 @@ def get_config_defaults(
     )
 
 
+@router.get("/examples", response_model=ExamplesResponse)
+def get_examples(
+    _user: AuthenticatedUser = Depends(require_user),
+) -> ExamplesResponse:
+    return ExamplesResponse.model_validate(
+        {"projects": _example_project_entries(), "config": _example_config_state()}
+    )
+
+
 @router.post(
     "/config/parse",
     response_model=ConfigParseResponse,
@@ -1580,6 +1758,8 @@ async def parse_config(
 )
 async def create_run(
     request: Request,
+    projectSourceType: str | None = Form(default=None),
+    exampleProjectId: str | None = Form(default=None),
     projectPath: str | None = Form(default=None),
     projectUploadId: str | None = Form(default=None),
     configFile: UploadFile | None = File(default=None),
@@ -1600,13 +1780,71 @@ async def create_run(
     run_service: RunLifecycleService = Depends(get_run_service),
     github_auth_service: GitHubOAuthService = Depends(get_github_auth_service),
 ) -> RunCreateResponse | JSONResponse:
-    del request
+    normalized_source_type = projectSourceType.strip() if projectSourceType else None
+    if normalized_source_type is not None and normalized_source_type != "example":
+        return _invalid_project_source_type_response(normalized_source_type)
+
+    example_settings: Settings | None = None
+    example_display_name: str | None = None
+    example_project_path: Path | None = None
+    if normalized_source_type == "example":
+        submitted_form_fields = set((await request.form()).keys())
+        mixed_field_errors = _example_mixed_field_errors(
+            submitted_form_fields=submitted_form_fields,
+            project_path=projectPath,
+            project_upload_id=projectUploadId,
+            config_file=configFile,
+            max_iterations=maxIterations,
+            budget=budget,
+            mutation_enabled=mutationEnabled,
+            resume_state=resumeState,
+            debug=debug,
+            bug_reports_dir=bugReportsDir,
+            bug_reports_upload_id=bugReportsUploadId,
+            parallel=parallel,
+            parallel_targets=parallelTargets,
+            github_repo_url=githubRepoUrl,
+            github_base_branch=githubBaseBranch,
+            selected_java_version=selectedJavaVersion,
+        )
+        if mixed_field_errors:
+            return _error_response(
+                422,
+                code="mixed_example_source",
+                message="示例模式不能混用其他项目来源或配置字段。",
+                field_errors=mixed_field_errors,
+            )
+
+        resolved_example = _resolve_example_project(exampleProjectId)
+        if isinstance(resolved_example, JSONResponse):
+            return resolved_example
+        example_display_name, example_project_path = resolved_example
+        example_settings, example_error = _load_example_settings()
+        if example_settings is None:
+            return _example_config_unavailable_response(example_error)
+
+        example_project_errors = _validate_project_path(str(example_project_path))
+        if example_project_errors:
+            return _error_response(
+                422,
+                code="non_maven_repository"
+                if example_project_errors[0].code == "non_maven_repository"
+                else "invalid_project_path",
+                message="示例项目路径校验失败。",
+                field_errors=example_project_errors,
+            )
+
     normalized_github_repo_url = githubRepoUrl.strip() if githubRepoUrl else None
 
-    merged = await _load_merged_settings(services, configFile)
-    if isinstance(merged, JSONResponse):
-        return merged
-    settings, config_label, uploaded_policy_annotations = merged
+    if example_settings is not None:
+        settings = example_settings
+        config_label = str(EXAMPLE_CONFIG_PATH)
+        uploaded_policy_annotations = ConfigPolicyAnnotations()
+    else:
+        merged = await _load_merged_settings(services, configFile)
+        if isinstance(merged, JSONResponse):
+            return merged
+        settings, config_label, uploaded_policy_annotations = merged
 
     github_field_errors = _validate_github_repo_url(githubRepoUrl)
     github_field_errors.extend(_validate_github_base_branch(githubRepoUrl, githubBaseBranch))
@@ -1658,7 +1896,22 @@ async def create_run(
     upload_source_response: dict[str, object]
     uploads_to_mark_used: list[tuple[UploadRecord, str]] = []
 
-    if normalized_github_repo_url is None:
+    if normalized_source_type == "example":
+        assert example_project_path is not None
+        assert example_display_name is not None
+        assert exampleProjectId is not None
+        normalized_project_path = str(example_project_path)
+        normalized_bug_reports_dir = None
+        source_metadata = {
+            "example_project_id": exampleProjectId.strip(),
+            "display_name": example_display_name,
+        }
+        upload_source_response = {
+            "mode": "example",
+            "exampleProjectId": exampleProjectId.strip(),
+            "displayName": example_display_name,
+        }
+    elif normalized_github_repo_url is None:
         local_path_fields = _submitted_local_path_fields(
             project_path=projectPath,
             bug_reports_dir=bugReportsDir,
@@ -1823,6 +2076,8 @@ async def create_run(
             user_id=user.id,
             settings_loader=lambda _config_path: settings,
         )
+        if normalized_source_type == "example":
+            run_service.get_run_request(run_session.run_id).config_path = config_label
     except ActiveRunConflictError as exc:
         _rollback_upload_consumption(database, marked_uploads_for_rollback)
         logger.warning("创建运行失败: active_run_conflict: %s", exc)
@@ -1967,7 +2222,8 @@ async def create_run(
     system_initializer, evolution_runner = _resolve_runtime_hooks(services)
 
     def load_created_run_settings(config_path: str | None) -> Settings:
-        if config_path != run_session.config_path:
+        allowed_config_paths = {run_session.config_path, config_label}
+        if config_path not in allowed_config_paths:
             raise RuntimeError("运行配置路径与创建时固化的配置快照不一致。")
         return settings.model_copy(deep=True)
 

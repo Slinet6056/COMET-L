@@ -23,6 +23,25 @@ export type ConfigPolicy = {
   redactedFields?: string[];
 };
 
+export type ExampleProject = {
+  id: string;
+  label?: string;
+  displayName?: string;
+  description?: string | null;
+};
+
+export type ExamplesConfigPayload = {
+  available: boolean;
+  defaults: Record<string, unknown> | null;
+  error?: string | null;
+  configPolicy?: ConfigPolicy;
+};
+
+export type ExamplesPayload = {
+  projects: ExampleProject[];
+  config: ExamplesConfigPayload;
+};
+
 export type RunConfigPayload = Record<string, unknown> & {
   evolution?: {
     mutation_enabled?: boolean;
@@ -60,7 +79,8 @@ export type RunHistoryEntry = {
   runId: string;
   status: string;
   mode: string;
-  projectSourceType?: 'local' | 'upload' | 'github' | string;
+  projectSourceType?: 'local' | 'upload' | 'github' | 'example' | string;
+  sourceMetadata?: Record<string, unknown> | null;
   projectPath: string;
   configPath: string;
   queuePosition?: number | null;
@@ -423,6 +443,11 @@ export async function parseConfigFile(file: File): Promise<ConfigPayload> {
   return parseJsonResponse<ConfigPayload>(response);
 }
 
+export async function fetchExamples(): Promise<ExamplesPayload> {
+  const response = await fetch('/api/examples');
+  return parseJsonResponse<ExamplesPayload>(response);
+}
+
 export async function uploadProjectZip(file: File): Promise<UploadResponse> {
   const formData = new FormData();
   formData.set('file', file);
@@ -448,6 +473,8 @@ export async function uploadBugReportsZip(file: File): Promise<UploadResponse> {
 }
 
 export async function createRun(options: {
+  projectSourceType?: 'example';
+  exampleProjectId?: string | null;
   projectPath?: string;
   bugReportsDir?: string | null;
   githubRepoUrl?: string | null;
@@ -455,10 +482,15 @@ export async function createRun(options: {
   selectedJavaVersion?: string | null;
   projectUploadId?: string | null;
   bugReportsUploadId?: string | null;
-  config: RunConfigPayload;
+  config?: RunConfigPayload;
 }): Promise<RunCreateResponse> {
   const formData = new FormData();
-  const runConfig = toUserRunConfig(options.config);
+  if (options.projectSourceType === 'example') {
+    formData.set('projectSourceType', 'example');
+  }
+  if (options.exampleProjectId && options.exampleProjectId.trim().length > 0) {
+    formData.set('exampleProjectId', options.exampleProjectId.trim());
+  }
   if (options.projectPath && options.projectPath.trim().length > 0) {
     formData.set('projectPath', options.projectPath);
   }
@@ -480,15 +512,18 @@ export async function createRun(options: {
   if (options.bugReportsUploadId && options.bugReportsUploadId.trim().length > 0) {
     formData.set('bugReportsUploadId', options.bugReportsUploadId.trim());
   }
-  if (typeof runConfig.evolution?.mutation_enabled === 'boolean') {
-    formData.set('mutationEnabled', String(runConfig.evolution.mutation_enabled));
+  if (options.config) {
+    const runConfig = toUserRunConfig(options.config);
+    if (typeof runConfig.evolution?.mutation_enabled === 'boolean') {
+      formData.set('mutationEnabled', String(runConfig.evolution.mutation_enabled));
+    }
+    formData.set(
+      'configFile',
+      new File([JSON.stringify(runConfig, null, 2)], 'web-config.yaml', {
+        type: 'application/x-yaml',
+      }),
+    );
   }
-  formData.set(
-    'configFile',
-    new File([JSON.stringify(runConfig, null, 2)], 'web-config.yaml', {
-      type: 'application/x-yaml',
-    }),
-  );
 
   const response = await fetch('/api/runs', {
     method: 'POST',

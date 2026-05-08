@@ -303,6 +303,11 @@ class RunLifecycleService:
                 config.github.repo_url = scoped_request.github_repo_url
 
             self._ensure_scoped_directories(scoped_paths)
+            if _normalize_project_source_type(scoped_request.source_metadata) == "example":
+                scoped_request.project_path = self._copy_example_project_to_scoped_sandbox(
+                    scoped_request.project_path,
+                    scoped_paths,
+                )
             safe_config_snapshot, _ = redacted_settings_dict(config)
             self._write_config_snapshot(safe_config_snapshot, scoped_paths["resolved_config"])
             scoped_request.config_path = scoped_paths["resolved_config"]
@@ -496,6 +501,7 @@ class RunLifecycleService:
                     "error": session.error,
                     "userId": session.user_id,
                     "projectSourceType": session.project_source_type,
+                    "sourceMetadata": copy.deepcopy(session.source_metadata),
                     "bugReportsPath": session.bug_reports_path,
                     "pathSnapshot": session.path_snapshot,
                     "queuePosition": session.queue_position,
@@ -560,6 +566,7 @@ class RunLifecycleService:
                     "isHistorical": session.is_historical,
                     "userId": session.user_id,
                     "projectSourceType": session.project_source_type,
+                    "sourceMetadata": copy.deepcopy(session.source_metadata),
                     "bugReportsPath": session.bug_reports_path,
                     "pathSnapshot": session.path_snapshot,
                     "queuePosition": session.queue_position,
@@ -2112,6 +2119,22 @@ class RunLifecycleService:
             Path(scoped_paths[key]).mkdir(parents=True, exist_ok=True)
         Path(scoped_paths["log"]).parent.mkdir(parents=True, exist_ok=True)
 
+    def _copy_example_project_to_scoped_sandbox(
+        self,
+        project_path: str,
+        scoped_paths: dict[str, str],
+    ) -> str:
+        source_project = Path(project_path).expanduser().resolve()
+        target_project = Path(scoped_paths["sandbox"]) / "project"
+        if target_project.exists() or target_project.is_symlink():
+            if target_project.is_dir() and not target_project.is_symlink():
+                shutil.rmtree(target_project)
+            else:
+                target_project.unlink()
+        target_project.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_project, target_project)
+        return str(target_project.resolve())
+
     def _write_config_snapshot(
         self,
         config_snapshot: dict[str, Any],
@@ -2157,6 +2180,8 @@ def _extract_source_metadata(path_metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_project_source_type(source_metadata: dict[str, Any]) -> str:
+    if isinstance(source_metadata.get("example_project_id"), str):
+        return "example"
     upload_source = source_metadata.get("uploadSource")
     if isinstance(upload_source, dict) and upload_source.get("mode") == "upload":
         return "upload"
