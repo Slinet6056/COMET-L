@@ -227,7 +227,7 @@ function ArtifactCard(props: { title: string; artifact?: RunResultsArtifact; tes
           <span className="text-muted-foreground">更新时间</span>
           <p>{formatDate(artifact.updatedAt)}</p>
         </div>
-        <div>
+        <div className="text-right">
           <span className="text-muted-foreground">大小</span>
           <p>{formatBytes(artifact.sizeBytes)}</p>
         </div>
@@ -494,15 +494,17 @@ export function RunResultsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <ArtifactCard title="最终状态 JSON" artifact={results.artifacts.finalState} />
             <ArtifactCard title="运行日志" artifact={results.artifacts.runLog} />
-            {results.finalTestsArchive && (
-              <ArtifactCard title="最终测试包" artifact={results.finalTestsArchive} />
-            )}
             {results.reportArtifact && (
               <ArtifactCard
                 title="Markdown 报告"
                 artifact={results.reportArtifact}
                 testId="report-download-link"
               />
+            )}
+            {results.finalTestsArchive && (
+              <div className="sm:col-span-3" data-testid="final-tests-archive-card">
+                <ArtifactCard title="最终测试包" artifact={results.finalTestsArchive} />
+              </div>
             )}
           </div>
         </CardContent>

@@ -549,6 +549,61 @@ describe('Run results page', () => {
     expect(finalTestsLink).toHaveAttribute('href', backendProvidedFinalTestsUrl);
   });
 
+  it('places the final tests archive on its own full-width second row', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              reportArtifact: {
+                exists: true,
+                filename: 'report.md',
+                contentType: 'text/markdown',
+                sizeBytes: 512,
+                updatedAt: '2026-03-10T10:05:02Z',
+                downloadUrl: '/api/runs/run-42/artifacts/report',
+              },
+              finalTestsArchive: {
+                exists: true,
+                filename: 'comet-run-run-42-generated-tests.zip',
+                contentType: 'application/zip',
+                sizeBytes: 1024,
+                updatedAt: '2026-03-10T10:05:03Z',
+                downloadUrl: '/api/runs/run-42/artifacts/final-tests.zip',
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    const finalStateCard = await screen.findByText('最终状态 JSON');
+    const finalTestsCard = screen.getByTestId('final-tests-archive-card');
+    const reportCard = screen.getByTestId('report-download-link').closest('div');
+
+    expect(finalStateCard.closest('div')).toBeInTheDocument();
+    expect(reportCard?.parentElement).toBe(finalTestsCard.parentElement);
+    expect(finalTestsCard).toHaveClass('sm:col-span-3');
+    expect(finalTestsCard.compareDocumentPosition(reportCard ?? finalTestsCard)).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    );
+  });
+
   it('does not render final tests archive when finalTestsArchive is absent', async () => {
     vi.stubGlobal(
       'fetch',
