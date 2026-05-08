@@ -18,15 +18,22 @@ FROM runtime-base AS python-builder
 
 WORKDIR /src
 
+ENV TIKTOKEN_CACHE_DIR=/src/.cache/tiktoken
+
 RUN python3 -m pip install --break-system-packages --no-cache-dir uv
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
+RUN mkdir -p "${TIKTOKEN_CACHE_DIR}" \
+    && /src/.venv/bin/python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
 FROM maven:3.9.11-eclipse-temurin-25 AS java-builder
 
 WORKDIR /src
 
+COPY docker/maven-settings.xml /tmp/maven-settings.xml
+RUN mkdir -p /root/.m2 \
+    && cp /tmp/maven-settings.xml /root/.m2/settings.xml
 COPY java-runtime/pom.xml java-runtime/pom.xml
 COPY java-runtime/src java-runtime/src
 
@@ -63,6 +70,7 @@ ENV JAVA_HOME=/opt/jdks/jdk-25
 ENV UV_PYTHON=python3.12
 ENV MAVEN_HOME=/opt/maven
 ENV M2_HOME=/opt/maven
+ENV TIKTOKEN_CACHE_DIR=/opt/comet-l/.cache/tiktoken
 ENV PATH=/opt/comet-l/.venv/bin:/opt/maven/bin:/opt/jdks/jdk-25/bin:${PATH}
 
 WORKDIR /opt/comet-l
@@ -70,8 +78,10 @@ WORKDIR /opt/comet-l
 COPY . /opt/comet-l
 COPY --from=python-builder /usr/local/bin/uv /usr/local/bin/uv
 COPY --from=python-builder /src/.venv /opt/comet-l/.venv
+COPY --from=python-builder /src/.cache/tiktoken /opt/comet-l/.cache/tiktoken
 COPY --from=java-builder /src/java-runtime/target /opt/comet-l/java-runtime/target
 COPY --from=java-builder /usr/share/maven /opt/maven
+COPY docker/maven-settings.xml /opt/maven/conf/settings.xml
 COPY --from=web-builder /src/web/dist /opt/comet-l/web/dist
 COPY --from=jdk8 /opt/java/openjdk /opt/jdks/jdk-8
 COPY --from=jdk11 /opt/java/openjdk /opt/jdks/jdk-11
@@ -82,7 +92,7 @@ COPY --from=jdk25 /opt/java/openjdk /opt/jdks/jdk-25
 RUN chmod +x /opt/comet-l/docker/entrypoint.sh /opt/comet-l/docker/java-env.sh /opt/comet-l/docker/self-check.sh \
     && ln -sf /opt/comet-l/docker/self-check.sh /usr/local/bin/comet-docker-self-check \
     && mkdir -p /opt/comet-l/state /opt/comet-l/output /opt/comet-l/sandbox /opt/comet-l/logs \
-    && chown -R ubuntu:ubuntu /opt/comet-l/state /opt/comet-l/output /opt/comet-l/sandbox /opt/comet-l/logs
+    && chown -R ubuntu:ubuntu /opt/comet-l/.cache /opt/comet-l/state /opt/comet-l/output /opt/comet-l/sandbox /opt/comet-l/logs
 
 USER ubuntu
 
