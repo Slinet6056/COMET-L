@@ -34,18 +34,15 @@ RUN mvn -q -f java-runtime/pom.xml clean package
 
 FROM node:22.14.0-bookworm-slim AS web-builder
 
-WORKDIR /src/web
+WORKDIR /src
 
 RUN npm install -g pnpm
 
-COPY web/package.json ./package.json
-COPY web/tsconfig*.json ./
-COPY web/vite.config.ts ./vite.config.ts
-COPY web/src ./src
-COPY web/index.html ./index.html
+COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY web ./web
 
-RUN pnpm install --no-frozen-lockfile
-RUN pnpm build
+RUN pnpm --dir web install --no-frozen-lockfile
+RUN pnpm --dir web build
 
 FROM eclipse-temurin:8u482-b08-jdk-noble AS jdk8
 FROM eclipse-temurin:11.0.30_7-jdk-noble AS jdk11
