@@ -686,6 +686,49 @@ describe('Run results page', () => {
     expect(screen.getByTestId('java-version-badge')).toHaveTextContent('Java 版本：17');
   });
 
+  it('hides pull request status for uploaded projects', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              projectSourceType: 'upload',
+              pullRequestError: '创建 GitHub PR 失败: HTTP 422 - Validation Failed',
+              reportArtifact: {
+                exists: true,
+                filename: 'report.md',
+                contentType: 'text/markdown',
+                sizeBytes: 512,
+                updatedAt: '2026-03-10T10:05:02Z',
+                downloadUrl: '/api/runs/run-42/artifacts/report',
+              },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '工件下载' })).toBeInTheDocument();
+    expect(screen.queryByText('Pull Request 创建失败')).not.toBeInTheDocument();
+    expect(screen.queryByText(/创建 GitHub PR 失败/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pr-link')).not.toBeInTheDocument();
+  });
+
   it('hides Java version badge when selectedJavaVersion is absent', async () => {
     vi.stubGlobal(
       'fetch',

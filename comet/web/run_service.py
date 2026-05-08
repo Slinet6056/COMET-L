@@ -733,6 +733,7 @@ class RunLifecycleService:
             "runId": snapshot["runId"],
             "status": snapshot["status"],
             "mode": snapshot["mode"],
+            "projectSourceType": session.project_source_type,
             "mutationEnabled": snapshot.get("mutationEnabled"),
             "iteration": snapshot["iteration"],
             "llmCalls": snapshot["llmCalls"],
@@ -1452,6 +1453,9 @@ class RunLifecycleService:
     def _publish_generated_tests_pull_request(self, run_id: str) -> str | None:
         session = self._sessions[run_id]
         request = self._requests[run_id]
+
+        if session.project_source_type == "upload":
+            return None
 
         github_snapshot = session.config_snapshot.get("github", {})
         if not isinstance(github_snapshot, dict):

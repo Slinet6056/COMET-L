@@ -15,7 +15,7 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -4130,13 +4130,19 @@ class ResultsApiTests(unittest.TestCase):
         if self.temp_dir is not None:
             self.temp_dir.cleanup()
 
-    def _create_run(self, *, selected_java_version: str | None = None) -> str:
+    def _create_run(
+        self,
+        *,
+        selected_java_version: str | None = None,
+        source_metadata: dict[str, object] | None = None,
+    ) -> str:
         assert self.run_service is not None
         assert self.project_path is not None
         session = self.run_service.create_run(
             RunRequest(
                 project_path=str(self.project_path),
                 selected_java_version=selected_java_version,
+                source_metadata=source_metadata or {},
             ),
             user_id=self.user_id,
             settings_loader=lambda _config_path: Settings.model_validate(
@@ -4494,6 +4500,39 @@ class ResultsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["selectedJavaVersion"], "17")
+
+    def test_results_endpoint_includes_project_source_type(self) -> None:
+        assert self.client is not None
+        run_id = self._create_run()
+        self._write_completed_run_artifacts(run_id)
+
+        response = self.client.get(f"/api/runs/{run_id}/results")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["projectSourceType"], "local")
+
+    def test_uploaded_run_completion_skips_pull_request_creation(self) -> None:
+        assert self.client is not None
+        assert self.run_service is not None
+        run_id = self._create_run(source_metadata={"uploadSource": {"mode": "upload"}})
+        session = self.run_service.get_session(run_id)
+        session.config_snapshot.setdefault("github", {})["repo_url"] = (
+            "https://github.com/acme/demo"
+        )
+        session.config_snapshot.setdefault("github", {})["base_branch"] = "main"
+        pull_request_service = Mock()
+        self.run_service.set_pull_request_service(pull_request_service)
+
+        self.run_service.mark_completed(run_id)
+
+        pull_request_service.commit_generated_tests_and_create_pr.assert_not_called()
+        response = self.client.get(f"/api/runs/{run_id}/results")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["projectSourceType"], "upload")
+        self.assertIsNone(payload["pullRequestUrl"])
+        self.assertIsNone(payload["pullRequestError"])
 
     def test_results_endpoint_includes_pull_request_failure_reason(self) -> None:
         assert self.client is not None

@@ -300,6 +300,7 @@ export function RunResultsPage() {
     () => (results ? getDisplayTotalMutants(results) : null),
     [results],
   );
+  const canShowPullRequestStatus = results?.projectSourceType !== 'upload';
 
   if (isLoading) {
     return (
@@ -511,7 +512,7 @@ export function RunResultsPage() {
       </Card>
 
       {/* Pull Request */}
-      {results.pullRequestUrl ? (
+      {canShowPullRequestStatus && results.pullRequestUrl ? (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Pull Request 链接</CardTitle>
@@ -532,7 +533,7 @@ export function RunResultsPage() {
             </Button>
           </CardContent>
         </Card>
-      ) : results.reportArtifact?.exists ? (
+      ) : canShowPullRequestStatus && results.reportArtifact?.exists ? (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Pull Request 创建失败</CardTitle>

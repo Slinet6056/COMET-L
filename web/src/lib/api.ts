@@ -235,6 +235,7 @@ export type RunResultsResponse = {
   runId: string;
   status: string;
   mode: string;
+  projectSourceType?: 'local' | 'upload' | 'github' | string;
   queuePosition?: number | null;
   iteration: number;
   llmCalls: number;
