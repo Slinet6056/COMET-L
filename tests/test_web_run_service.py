@@ -1161,7 +1161,7 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertTrue(cancelled.cancel_requested)
             self.assertEqual(cancelled.cancellation_reason, "用户取消运行。")
 
-    def test_runner_timeout_marks_run_failed_with_stable_error(self) -> None:
+    def test_runner_timeout_overrun_keeps_successful_completion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             project_path = root / "project"
@@ -1207,9 +1207,17 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertTrue(release.wait(timeout=5))
             service._threads[session.run_id].join(timeout=5)
 
-            failed = service.get_session(session.run_id)
-            self.assertEqual(failed.status, "failed")
-            self.assertEqual(failed.error, "run_timeout")
+            completed = service.get_session(session.run_id)
+            self.assertEqual(completed.status, "completed")
+            self.assertIsNotNone(completed.completed_at)
+            self.assertIsNone(completed.failed_at)
+            self.assertIsNone(completed.error)
+
+            results = service.build_results(session.run_id)
+            self.assertEqual(results["status"], "completed")
+            self.assertTrue(results["timeoutExceeded"])
+            self.assertIsNotNone(results["timeoutOverrunSeconds"])
+            self.assertGreater(results["timeoutOverrunSeconds"], 0)
 
     def test_cleanup_removes_expired_uploads_and_old_artifacts_only_under_user_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

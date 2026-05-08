@@ -68,6 +68,14 @@ function formatBytes(value: number | null | undefined): string {
   return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
+function formatSeconds(value: number | null | undefined): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '—';
+  }
+
+  return `${value.toFixed(value >= 10 ? 0 : 1)}s`;
+}
+
 function translateStatus(value: string | null | undefined): string {
   if (!value) {
     return '未知';
@@ -85,6 +93,15 @@ function translatePhaseLabel(label: string | null | undefined): string {
 }
 
 function buildTerminalMessage(results: RunResultsResponse): string {
+  if (
+    (results.status === 'completed' || results.status === 'succeeded') &&
+    results.timeoutExceeded
+  ) {
+    return `本次运行已完成，但超出了执行时间预算 ${formatSeconds(
+      results.timeoutOverrunSeconds,
+    )}。结果已保留，可继续查看摘要与工件。`;
+  }
+
   if (results.status === 'failed') {
     return '本次运行以失败结束。如果后端已生成 final-state 数据和运行日志，仍可在此获取。';
   }

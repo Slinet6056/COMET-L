@@ -265,6 +265,8 @@ class RunResultsResponse(BaseModel):
     mode: str
     selectedJavaVersion: str | None = None
     mutationEnabled: bool | None = None
+    timeoutExceeded: bool = False
+    timeoutOverrunSeconds: float | None = None
     iteration: int
     llmCalls: int
     budget: int

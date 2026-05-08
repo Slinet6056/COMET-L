@@ -23,6 +23,8 @@ function buildResults(overrides: Record<string, unknown> = {}) {
     runId: 'run-42',
     status: 'completed',
     mode: 'standard',
+    timeoutExceeded: false,
+    timeoutOverrunSeconds: null,
     iteration: 4,
     llmCalls: 13,
     budget: 88,
@@ -275,6 +277,39 @@ describe('Run results page', () => {
     expect(await screen.findByRole('heading', { name: '最终统计' })).toBeInTheDocument();
     expectMetricValue('变异分数', '80.0%');
     expectMetricValue('变异体总数', '5');
+  });
+
+  it('shows an overrun notice when a run completes after the budget deadline', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({
+            user: { id: 1, username: 'tester', role: 'user' },
+          });
+        }
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              timeoutExceeded: true,
+              timeoutOverrunSeconds: 15.2,
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/已完成，但超出了执行时间预算/)).toBeInTheDocument();
+    expect(screen.getByText(/15s/)).toBeInTheDocument();
   });
 
   it('shows disabled mutation semantics and avoids fallback score recomputation', async () => {

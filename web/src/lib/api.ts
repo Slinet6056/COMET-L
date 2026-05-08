@@ -240,6 +240,8 @@ export type RunResultsResponse = {
   iteration: number;
   llmCalls: number;
   budget: number;
+  timeoutExceeded?: boolean;
+  timeoutOverrunSeconds?: number | null;
   phase: RunPhase;
   summary: RunResultsSummary;
   artifacts: Record<string, RunResultsArtifact>;

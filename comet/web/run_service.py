@@ -693,9 +693,40 @@ class RunLifecycleService:
         snapshot = self.build_snapshot(run_id)
         return self._build_results_payload(run_id, snapshot)
 
+    def _build_timeout_overrun_summary(self, session: RunSession) -> dict[str, Any]:
+        timeout_seconds = self._resolve_timeout_seconds_from_config(session.config_snapshot)
+        finished_at = session.finished_at
+        if timeout_seconds is None or session.started_at is None or finished_at is None:
+            return {
+                "timeoutExceeded": False,
+                "timeoutOverrunSeconds": None,
+            }
+
+        started = datetime.fromisoformat(session.started_at)
+        finished = datetime.fromisoformat(finished_at)
+        elapsed_seconds = max((finished - started).total_seconds(), 0.0)
+        overrun_seconds = elapsed_seconds - timeout_seconds
+        if overrun_seconds <= 0:
+            return {
+                "timeoutExceeded": False,
+                "timeoutOverrunSeconds": None,
+            }
+
+        return {
+            "timeoutExceeded": True,
+            "timeoutOverrunSeconds": overrun_seconds,
+        }
+
+    def _resolve_timeout_seconds_from_config(self, config_snapshot: dict[str, Any]) -> int | None:
+        timeout = config_snapshot.get("execution", {}).get("timeout")
+        if isinstance(timeout, int) and timeout > 0:
+            return timeout
+        return None
+
     def _build_results_payload(self, run_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
         session = self._sessions[run_id]
         database_summary = self._build_database_summary(Path(session.paths["database"]))
+        timeout_overrun_summary = self._build_timeout_overrun_summary(session)
         artifact_summary = {
             "finalState": self._build_download_artifact(
                 run_id,
@@ -735,6 +766,7 @@ class RunLifecycleService:
             "mode": snapshot["mode"],
             "projectSourceType": session.project_source_type,
             "mutationEnabled": snapshot.get("mutationEnabled"),
+            **timeout_overrun_summary,
             "iteration": snapshot["iteration"],
             "llmCalls": snapshot["llmCalls"],
             "budget": snapshot["budget"],
@@ -996,14 +1028,15 @@ class RunLifecycleService:
                 run_control=run_control,
                 timeout_deadline=timeout_deadline,
             )
-            if timeout_deadline is not None and datetime.now(timezone.utc) >= timeout_deadline:
-                self.mark_failed(run_id, "run_timeout")
-                return
             self.mark_completed(run_id)
-        except Exception as exc:
             if timeout_deadline is not None and datetime.now(timezone.utc) >= timeout_deadline:
-                self.mark_failed(run_id, "run_timeout")
-                return
+                overrun = self._build_timeout_overrun_summary(self._sessions[run_id])
+                logger.warning(
+                    "运行 %s 已完成，但超出执行时间预算 %.3f 秒",
+                    run_id,
+                    overrun["timeoutOverrunSeconds"] or 0.0,
+                )
+        except Exception as exc:
             self.mark_failed(run_id, str(exc))
             return
 
