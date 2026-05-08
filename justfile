@@ -15,7 +15,7 @@ runtime-build:
     mvn clean package -f java-runtime/pom.xml
 
 docker-build tag="comet-l:multi-jdk":
-    docker build -t {{tag}} .
+    docker buildx build --load -t {{tag}} .
 
 docker-self-check tag="comet-l:multi-jdk":
     docker run --rm {{tag}} comet-docker-self-check
