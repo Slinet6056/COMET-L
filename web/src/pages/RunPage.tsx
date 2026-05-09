@@ -959,6 +959,7 @@ export function RunPage() {
   const snapshotStatus = snapshot?.status ?? null;
   const snapshotRef = useRef<RunSnapshot | null>(null);
   const snapshotSignatureRef = useRef<string | null>(null);
+  const terminalSnapshotSeenRef = useRef(false);
   const pageErrorRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -973,6 +974,7 @@ export function RunPage() {
   useEffect(() => {
     let active = true;
     let teardown: (() => void) | null = null;
+    terminalSnapshotSeenRef.current = false;
 
     async function loadRun() {
       setIsLoading(true);
@@ -987,6 +989,7 @@ export function RunPage() {
 
         snapshotSignatureRef.current = JSON.stringify(initialSnapshot);
         snapshotRef.current = initialSnapshot;
+        terminalSnapshotSeenRef.current = isTerminalRunStatus(initialSnapshot.status);
         setSnapshot(initialSnapshot);
         setIsLoading(false);
 
@@ -1019,6 +1022,7 @@ export function RunPage() {
                 event.type === 'run.cancelled' ||
                 event.type === 'run.stale'
               ) {
+                terminalSnapshotSeenRef.current = true;
                 setConnectionState('ended');
                 return;
               }
@@ -1026,7 +1030,11 @@ export function RunPage() {
               setConnectionState('live');
             },
             onError: () => {
-              if (active && !isTerminalRunStatus(snapshotRef.current?.status)) {
+              if (
+                active &&
+                !terminalSnapshotSeenRef.current &&
+                !isTerminalRunStatus(snapshotRef.current?.status)
+              ) {
                 setConnectionState('error');
               }
             },

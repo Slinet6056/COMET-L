@@ -373,6 +373,105 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
   const shouldAutoScrollByTaskId = useRef<Record<string, boolean>>({});
   const isLiveRun = !isTerminalRun(runStatus);
 
+  async function loadSummary(showLoading = false, isActive: () => boolean = () => true) {
+    if (showLoading) {
+      setIsSummaryLoading(true);
+    }
+
+    try {
+      const response = await fetchRunLogs(runId);
+      if (!isActive()) {
+        return;
+      }
+
+      setStreams(response.streams);
+      setSummaryError(null);
+    } catch (loadError) {
+      if (!isActive()) {
+        return;
+      }
+
+      setSummaryError(getSafeLogErrorMessage(loadError, '无法加载运行日志。'));
+    } finally {
+      if (isActive() && showLoading) {
+        setIsSummaryLoading(false);
+      }
+    }
+  }
+
+  async function loadEntries(
+    detailTaskIds: string[],
+    showLoading = false,
+    isActive: () => boolean = () => true,
+  ) {
+    if (showLoading) {
+      setLoadingByTaskId((current) => {
+        const next = { ...current };
+        detailTaskIds.forEach((taskId) => {
+          next[taskId] = true;
+        });
+        return next;
+      });
+    }
+
+    const responses: Array<
+      { taskId: string; response: RunLogsStreamResponse } | { taskId: string; error: string }
+    > = await Promise.all(
+      detailTaskIds.map(async (taskId) => {
+        try {
+          const response = await fetchRunLogsForTask(runId, taskId);
+          return { taskId, response };
+        } catch (loadError) {
+          return {
+            taskId,
+            error: getSafeLogErrorMessage(loadError, '无法加载日志流详情。'),
+          };
+        }
+      }),
+    );
+
+    if (!isActive()) {
+      return;
+    }
+
+    setEntriesByTaskId((current) => {
+      const next = { ...current };
+      responses.forEach((result) => {
+        if ('response' in result) {
+          next[result.taskId] = result.response.entries;
+        }
+      });
+      return next;
+    });
+
+    setStreamByTaskId((current) => {
+      const next = { ...current };
+      responses.forEach((result) => {
+        if ('response' in result) {
+          next[result.taskId] =
+            result.response.stream ?? latestStreamsRef.current?.byTaskId[result.taskId] ?? null;
+        }
+      });
+      return next;
+    });
+
+    setErrorByTaskId((current) => {
+      const next = { ...current };
+      responses.forEach((result) => {
+        next[result.taskId] = 'error' in result ? (result.error ?? '无法加载日志流详情。') : null;
+      });
+      return next;
+    });
+
+    setLoadingByTaskId((current) => {
+      const next = { ...current };
+      detailTaskIds.forEach((taskId) => {
+        next[taskId] = false;
+      });
+      return next;
+    });
+  }
+
   useEffect(() => {
     if (runId.length === 0) {
       return;
@@ -400,48 +499,32 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
   }, [streams]);
 
   useEffect(() => {
+    if (runId.length === 0) {
+      return;
+    }
+
     let active = true;
-    let intervalId: number | null = null;
 
-    async function loadSummary(showLoading = false) {
-      if (showLoading) {
-        setIsSummaryLoading(true);
-      }
-
-      try {
-        const response = await fetchRunLogs(runId);
-        if (!active) {
-          return;
-        }
-
-        setStreams(response.streams);
-        setSummaryError(null);
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-
-        setSummaryError(getSafeLogErrorMessage(loadError, '无法加载运行日志。'));
-      } finally {
-        if (active && showLoading) {
-          setIsSummaryLoading(false);
-        }
-      }
-    }
-
-    void loadSummary(true);
-
-    if (isLiveRun) {
-      intervalId = window.setInterval(() => {
-        void loadSummary(false);
-      }, LIVE_LOG_POLL_MS);
-    }
+    void loadSummary(true, () => active);
 
     return () => {
       active = false;
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-      }
+    };
+  }, [runId]);
+
+  useEffect(() => {
+    if (runId.length === 0 || !isLiveRun) {
+      return;
+    }
+
+    let active = true;
+    const intervalId = window.setInterval(() => {
+      void loadSummary(false, () => active);
+    }, LIVE_LOG_POLL_MS);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
     };
   }, [isLiveRun, runId]);
 
@@ -568,92 +651,29 @@ export function LogViewer({ runId, runStatus }: LogViewerProps) {
     }
 
     let active = true;
-    let intervalId: number | null = null;
 
-    async function loadEntries(showLoading = false) {
-      if (showLoading) {
-        setLoadingByTaskId((current) => {
-          const next = { ...current };
-          activeDetailTaskIds.forEach((taskId) => {
-            next[taskId] = true;
-          });
-          return next;
-        });
-      }
-
-      const responses: Array<
-        { taskId: string; response: RunLogsStreamResponse } | { taskId: string; error: string }
-      > = await Promise.all(
-        activeDetailTaskIds.map(async (taskId) => {
-          try {
-            const response = await fetchRunLogsForTask(runId, taskId);
-            return { taskId, response };
-          } catch (loadError) {
-            return {
-              taskId,
-              error: getSafeLogErrorMessage(loadError, '无法加载日志流详情。'),
-            };
-          }
-        }),
-      );
-
-      if (!active) {
-        return;
-      }
-
-      setEntriesByTaskId((current) => {
-        const next = { ...current };
-        responses.forEach((result) => {
-          if ('response' in result) {
-            next[result.taskId] = result.response.entries;
-          }
-        });
-        return next;
-      });
-
-      setStreamByTaskId((current) => {
-        const next = { ...current };
-        responses.forEach((result) => {
-          if ('response' in result) {
-            next[result.taskId] =
-              result.response.stream ?? latestStreamsRef.current?.byTaskId[result.taskId] ?? null;
-          }
-        });
-        return next;
-      });
-
-      setErrorByTaskId((current) => {
-        const next = { ...current };
-        responses.forEach((result) => {
-          next[result.taskId] = 'error' in result ? (result.error ?? '无法加载日志流详情。') : null;
-        });
-        return next;
-      });
-
-      setLoadingByTaskId((current) => {
-        const next = { ...current };
-        activeDetailTaskIds.forEach((taskId) => {
-          next[taskId] = false;
-        });
-        return next;
-      });
-    }
-
-    void loadEntries(true);
-
-    if (isLiveRun) {
-      intervalId = window.setInterval(() => {
-        void loadEntries(false);
-      }, LIVE_LOG_POLL_MS);
-    }
+    void loadEntries(activeDetailTaskIds, true, () => active);
 
     return () => {
       active = false;
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-      }
     };
-  }, [activeDetailTaskIds, isLiveRun, isSummaryLoading, runId]);
+  }, [activeDetailTaskIds, isSummaryLoading, runId]);
+
+  useEffect(() => {
+    if (runId.length === 0 || activeDetailTaskIds.length === 0 || !isLiveRun) {
+      return;
+    }
+
+    let active = true;
+    const intervalId = window.setInterval(() => {
+      void loadEntries(activeDetailTaskIds, false, () => active);
+    }, LIVE_LOG_POLL_MS);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [activeDetailTaskIds, isLiveRun, runId]);
 
   useEffect(() => {
     activeDetailTaskIds.forEach((taskId) => {

@@ -13,6 +13,7 @@ import {
   logout,
   uploadBugReportsZip,
   uploadProjectZip,
+  subscribeToRunEvents,
 } from './api';
 
 describe('fetchConfigDefaults', () => {
@@ -91,6 +92,84 @@ describe('fetchRunLogsForTask', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/runs/run-1/logs/Pre%3AProductService.addProduct%23abc123',
     );
+  });
+});
+
+describe('subscribeToRunEvents', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('closes terminal streams and ignores the follow-up disconnect error', () => {
+    class MockEventSource {
+      static instances: MockEventSource[] = [];
+
+      url: string;
+      onerror: (() => void) | null = null;
+      closed = false;
+      close = vi.fn(() => {
+        this.closed = true;
+      });
+
+      private listeners = new Map<string, Array<(event: MessageEvent<string>) => void>>();
+
+      constructor(url: string) {
+        this.url = url;
+        MockEventSource.instances.push(this);
+      }
+
+      addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+        const callback = listener as (event: MessageEvent<string>) => void;
+        const current = this.listeners.get(type) ?? [];
+        current.push(callback);
+        this.listeners.set(type, current);
+      }
+
+      emit(type: string, payload: unknown) {
+        if (this.closed) {
+          return;
+        }
+
+        const event = new MessageEvent(type, { data: JSON.stringify(payload) });
+        for (const listener of this.listeners.get(type) ?? []) {
+          listener(event);
+        }
+      }
+
+      triggerError() {
+        if (!this.closed) {
+          this.onerror?.();
+        }
+      }
+    }
+
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource);
+
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+    const teardown = subscribeToRunEvents('run-terminal', {
+      onEvent,
+      onError,
+    });
+
+    const stream = MockEventSource.instances[0];
+    stream.emit('run.snapshot', {
+      type: 'run.snapshot',
+      status: 'completed',
+      snapshot: {
+        runId: 'run-terminal',
+        status: 'completed',
+      },
+    });
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(stream.close).toHaveBeenCalledTimes(1);
+
+    stream.triggerError();
+    expect(onError).not.toHaveBeenCalled();
+
+    teardown();
   });
 });
 

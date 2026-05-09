@@ -426,4 +426,49 @@ describe('LogViewer', () => {
     expect(fetchRunLogsForTaskSpy).toHaveBeenCalledWith('run-logs-test', 'main');
     expect(screen.queryByText('main line')).not.toBeInTheDocument();
   });
+
+  it('does not refetch the same logs immediately when the run status becomes terminal', async () => {
+    const mainStream = buildStream('main', 'running', {
+      order: 0,
+      totalEntryCount: 1,
+      bufferedEntryCount: 1,
+    });
+    const runningStream = buildStream('task-live', 'running', {
+      order: 1,
+      startedAt: '2026-03-10T10:00:01Z',
+      lastEntryAt: '2026-03-10T10:00:03Z',
+      totalEntryCount: 2,
+      bufferedEntryCount: 2,
+    });
+
+    const fetchRunLogsSpy = vi
+      .spyOn(api, 'fetchRunLogs')
+      .mockResolvedValue(buildSummary('run-logs-test', [mainStream, runningStream]));
+    const fetchRunLogsForTaskSpy = vi
+      .spyOn(api, 'fetchRunLogsForTask')
+      .mockImplementation(async (_runId, taskId) =>
+        buildStreamResponse(
+          taskId,
+          taskId === 'main' ? ['main line'] : ['first worker line'],
+          taskId === 'main' ? mainStream : runningStream,
+          ['main', 'task-live'],
+        ),
+      );
+
+    const { rerender } = render(<LogViewer runId="run-logs-test" runStatus="running" />);
+
+    await screen.findByText('main line');
+
+    expect(fetchRunLogsSpy).toHaveBeenCalledTimes(1);
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
+
+    rerender(<LogViewer runId="run-logs-test" runStatus="completed" />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchRunLogsSpy).toHaveBeenCalledTimes(1);
+    expect(fetchRunLogsForTaskSpy).toHaveBeenCalledTimes(1);
+  });
 });

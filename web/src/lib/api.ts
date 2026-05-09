@@ -568,11 +568,35 @@ type RunEventsSubscription = {
 
 export function subscribeToRunEvents(runId: string, handlers: RunEventsSubscription): () => void {
   const eventSource = new EventSource(`/api/runs/${runId}/events`);
+  let closed = false;
+
+  const close = () => {
+    if (closed) {
+      return;
+    }
+
+    closed = true;
+    eventSource.close();
+  };
+
   const listener = (message: MessageEvent<string>) => {
     try {
-      handlers.onEvent(JSON.parse(message.data) as RunEvent);
+      const event = JSON.parse(message.data) as RunEvent;
+      handlers.onEvent(event);
+
+      if (
+        event.type === 'run.completed' ||
+        event.type === 'run.failed' ||
+        event.type === 'run.cancelled' ||
+        event.type === 'run.stale' ||
+        isTerminalRunStatus(event.status)
+      ) {
+        close();
+      }
     } catch {
-      handlers.onError?.();
+      if (!closed) {
+        handlers.onError?.();
+      }
     }
   };
 
@@ -589,11 +613,13 @@ export function subscribeToRunEvents(runId: string, handlers: RunEventsSubscript
   });
 
   eventSource.onerror = () => {
-    handlers.onError?.();
+    if (!closed) {
+      handlers.onError?.();
+    }
   };
 
   return () => {
-    eventSource.close();
+    close();
   };
 }
 
