@@ -38,6 +38,24 @@ type ActionEntry = {
   detail: string;
 };
 
+function ResultsPageAction(props: { runId: string; isTerminal: boolean }) {
+  const { runId, isTerminal } = props;
+
+  if (isTerminal) {
+    return (
+      <Button variant="ghost" size="sm" className="text-xs" asChild>
+        <Link to={`/runs/${runId}/results`}>前往结果页</Link>
+      </Button>
+    );
+  }
+
+  return (
+    <Button variant="ghost" size="sm" className="text-xs" disabled>
+      结果生成后可查看
+    </Button>
+  );
+}
+
 type ParallelSnapshotData = {
   currentBatch: number;
   parallelStats: Record<string, unknown>;
@@ -668,9 +686,7 @@ function StandardRunView(props: {
 
       <Separator />
 
-      <Button variant="ghost" size="sm" className="text-xs" asChild>
-        <Link to={`/runs/${runId}/results`}>前往结果页</Link>
-      </Button>
+      <ResultsPageAction runId={runId} isTerminal={isTerminalRunStatus(snapshot.status)} />
     </div>
   );
 }
@@ -942,9 +958,7 @@ function ParallelRunView(props: {
 
       <Separator />
 
-      <Button variant="ghost" size="sm" className="text-xs" asChild>
-        <Link to={`/runs/${runId}/results`}>前往结果页</Link>
-      </Button>
+      <ResultsPageAction runId={runId} isTerminal={isTerminalRunStatus(snapshot.status)} />
     </div>
   );
 }

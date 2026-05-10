@@ -292,6 +292,8 @@ describe('Run page parallel mode', () => {
     expect(screen.getByTitle('Calculator.add#sig-aaa111')).toBeInTheDocument();
     expect(screen.getByText('累计工作线程数')).toBeInTheDocument();
     expect(screen.getByText('42.0%')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '结果生成后可查看' })).toBeDisabled();
+    expect(screen.queryByRole('link', { name: '前往结果页' })).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(api.subscribeToRunEvents).toHaveBeenCalledWith(

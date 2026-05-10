@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import {
   fetchRunResults,
   getSafeApiErrorMessage,
+  isTerminalRunStatus,
   translateRunStatus,
   type RunResultsArtifact,
   type RunResultsResponse,
@@ -276,6 +277,28 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function PendingResultsNotice(props: { runId: string; status?: string | null }) {
+  const { runId, status } = props;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>运行结果</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p role="alert" className="text-sm text-destructive">
+          {status
+            ? `运行 ${runId} 当前状态为「${translateRunStatus(status)}」，尚未产生可查看的结果页。`
+            : `运行 ${runId} 尚未产生可查看的结果页。`}
+        </p>
+        <Button variant="ghost" size="sm" asChild>
+          <Link to={`/runs/${runId}`}>返回运行详情</Link>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function RunResultsPage() {
   const { runId = '' } = useParams();
   const [results, setResults] = useState<RunResultsResponse | null>(null);
@@ -322,6 +345,7 @@ export function RunResultsPage() {
   const canShowPullRequestStatus = !NON_PULL_REQUEST_PROJECT_SOURCES.has(
     results?.projectSourceType ?? '',
   );
+  const canViewResults = results ? isTerminalRunStatus(results.status) : false;
 
   if (isLoading) {
     return (
@@ -354,6 +378,10 @@ export function RunResultsPage() {
         </CardContent>
       </Card>
     );
+  }
+
+  if (!canViewResults) {
+    return <PendingResultsNotice runId={runId} status={results.status} />;
   }
 
   return (

@@ -128,4 +128,32 @@ describe('RunHistoryPage source labels', () => {
     expect(screen.getByText('本地路径')).toBeInTheDocument();
     expect(screen.getByText('GitHub 仓库')).toBeInTheDocument();
   });
+
+  it('disables result entry for non-terminal runs and keeps terminal runs linked', async () => {
+    mockHistory([
+      {
+        ...baseEntry,
+        runId: 'run-running',
+        status: 'running',
+        completedAt: null,
+      },
+      {
+        ...baseEntry,
+        runId: 'run-completed',
+        status: 'completed',
+      },
+    ]);
+
+    renderHistory();
+
+    expect(await screen.findByRole('button', { name: '结果' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: '结果' })).toHaveAttribute(
+      'href',
+      '/runs/run-completed/results',
+    );
+    const resultLinks = screen.queryAllByRole('link', { name: '结果' });
+    expect(
+      resultLinks.some((link) => link.getAttribute('href') === '/runs/run-running/results'),
+    ).toBe(false);
+  });
 });

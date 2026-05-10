@@ -203,6 +203,83 @@ describe('Run results page', () => {
     expect(screen.queryByRole('link', { name: '下载 final_state.json' })).not.toBeInTheDocument();
   });
 
+  it('blocks access when the run has not reached a terminal state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              status: 'running',
+              phase: { key: 'running', label: 'Running' },
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '运行 run-42 当前状态为「运行中」，尚未产生可查看的结果页。',
+    );
+    expect(screen.queryByRole('heading', { name: '最终统计' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '返回运行详情' })).toHaveAttribute(
+      'href',
+      '/runs/run-42',
+    );
+  });
+
+  it('renders terminal-status pages with Chinese copy', async () => {
+    const statuses = [
+      ['stale', '状态：已失效'],
+      ['cancelled', '状态：已取消'],
+      ['succeeded', '状态：已完成'],
+    ];
+
+    for (const [status, label] of statuses) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: string | URL | Request) => {
+          const url = typeof input === 'string' ? input : input.toString();
+          if (url === '/api/auth/me') {
+            return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+          }
+          if (url === '/api/runs/run-42/results') {
+            return jsonResponse(
+              buildResults({
+                status,
+                phase: { key: status, label: status },
+              }),
+            );
+          }
+
+          throw new Error(`Unexpected request: ${url}`);
+        }),
+      );
+
+      const view = render(
+        <MemoryRouter initialEntries={['/runs/run-42/results']}>
+          <App />
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText(label)).toBeInTheDocument();
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('prefers global and database-backed mutant totals when local final metrics are zero', async () => {
     vi.stubGlobal(
       'fetch',
@@ -835,47 +912,37 @@ describe('Run results page', () => {
     expect(screen.queryByTestId('java-version-badge')).not.toBeInTheDocument();
   });
 
-  it('renders pending, stale, cancelled, and succeeded statuses with Chinese copy', async () => {
-    const statuses = [
-      ['pending', '状态：等待中'],
-      ['stale', '状态：已失效'],
-      ['cancelled', '状态：已取消'],
-      ['succeeded', '状态：已完成'],
-    ];
+  it('blocks pending runs with the same terminal guard copy', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === '/api/auth/me') {
+          return jsonResponse({ user: { id: 1, username: 'tester', role: 'user' } });
+        }
+        if (url === '/api/runs/run-42/results') {
+          return jsonResponse(
+            buildResults({
+              status: 'pending',
+              phase: { key: 'pending', label: 'Pending' },
+            }),
+          );
+        }
 
-    for (const [status, label] of statuses) {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (input: string | URL | Request) => {
-          const url = typeof input === 'string' ? input : input.toString();
-          if (url === '/api/auth/me') {
-            return jsonResponse({
-              user: { id: 1, username: 'tester', role: 'user' },
-            });
-          }
-          if (url === '/api/runs/run-42/results') {
-            return jsonResponse(
-              buildResults({
-                status,
-                phase: { key: status, label: status },
-              }),
-            );
-          }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
 
-          throw new Error(`Unexpected request: ${url}`);
-        }),
-      );
+    render(
+      <MemoryRouter initialEntries={['/runs/run-42/results']}>
+        <App />
+      </MemoryRouter>,
+    );
 
-      const view = render(
-        <MemoryRouter initialEntries={['/runs/run-42/results']}>
-          <App />
-        </MemoryRouter>,
-      );
-
-      expect(await screen.findByText(label)).toBeInTheDocument();
-      view.unmount();
-      vi.unstubAllGlobals();
-    }
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '运行 run-42 当前状态为「等待中」，尚未产生可查看的结果页。',
+    );
+    expect(screen.queryByText('状态：等待中')).not.toBeInTheDocument();
   });
 
   it('uses a generic not-found message for cross-user 404 without leaking backend details', async () => {

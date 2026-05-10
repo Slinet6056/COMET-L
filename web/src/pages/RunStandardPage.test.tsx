@@ -136,6 +136,11 @@ describe('Run page standard mode', () => {
     expect(screen.getByText('45.0%')).toBeInTheDocument();
     expect(screen.getByText('记录的改进')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '核心指标' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '结果生成后可查看' })).toHaveLength(1);
+    for (const button of screen.getAllByRole('button', { name: '结果生成后可查看' })) {
+      expect(button).toBeDisabled();
+    }
+    expect(screen.queryByRole('link', { name: '前往结果页' })).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(MockEventSource.instances).toHaveLength(1);

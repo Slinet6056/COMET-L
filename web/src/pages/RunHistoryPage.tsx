@@ -12,7 +12,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { fetchRunHistory, translateRunStatus, type RunHistoryEntry } from '../lib/api';
+import {
+  fetchRunHistory,
+  isTerminalRunStatus,
+  translateRunStatus,
+  type RunHistoryEntry,
+} from '../lib/api';
 
 const STATUS_LABELS: Record<string, string> = {
   standard: '标准',
@@ -127,6 +132,24 @@ function statusVariant(
   if (status === 'cancelled' || status === 'stale') return 'destructive';
   if (status === 'running' || status === 'starting' || status === 'cancelling') return 'secondary';
   return 'outline';
+}
+
+function ResultsAction({ runId, status }: { runId: string; status: string }) {
+  if (isTerminalRunStatus(status)) {
+    return (
+      <Button size="sm" className="h-6 text-xs px-2" asChild>
+        <Link className="primary-button history-card__link" to={`/runs/${runId}/results`}>
+          结果
+        </Link>
+      </Button>
+    );
+  }
+
+  return (
+    <Button size="sm" className="h-6 text-xs px-2" disabled>
+      结果
+    </Button>
+  );
 }
 
 export function RunHistoryPage() {
@@ -298,14 +321,7 @@ export function RunHistoryPage() {
                           详情
                         </Link>
                       </Button>
-                      <Button size="sm" className="h-6 text-xs px-2" asChild>
-                        <Link
-                          className="primary-button history-card__link"
-                          to={`/runs/${entry.runId}/results`}
-                        >
-                          结果
-                        </Link>
-                      </Button>
+                      <ResultsAction runId={entry.runId} status={entry.status} />
                     </div>
                   </TableCell>
                 </TableRow>
