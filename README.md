@@ -231,96 +231,32 @@ just docker-verify
 
 镜像内固定 JDK 路径：
 
-| 版本 | 路径 |
-| --- | --- |
-| 8 | `/opt/jdks/jdk-8` |
-| 11 | `/opt/jdks/jdk-11` |
-| 17 | `/opt/jdks/jdk-17` |
-| 21 | `/opt/jdks/jdk-21` |
-| 25 | `/opt/jdks/jdk-25` |
+| 版本 | 路径               |
+| ---- | ------------------ |
+| 8    | `/opt/jdks/jdk-8`  |
+| 11   | `/opt/jdks/jdk-11` |
+| 17   | `/opt/jdks/jdk-17` |
+| 21   | `/opt/jdks/jdk-21` |
+| 25   | `/opt/jdks/jdk-25` |
 
 容器启动时如果未显式传入 `JAVA_HOME`，默认使用 `/opt/jdks/jdk-25`。入口脚本还会导出 `COMET_JAVA_HOME_8`、`COMET_JAVA_HOME_11`、`COMET_JAVA_HOME_17`、`COMET_JAVA_HOME_21`、`COMET_JAVA_HOME_25`。
 
 ### 运行 Web 控制台容器
 
-推荐持久化状态、输出、沙箱和日志：
+服务器部署请阅读 [Docker 服务器部署指南](docs/docker-server-deployment.md)。该文档使用发布镜像 `slinet6056/comet-l:latest`，按使用者视角说明服务器目录、配置文件、启动容器、创建管理员、GitHub 可选配置和用户运行流程。
 
-```bash
-mkdir -p .docker-data/{state,output,sandbox,logs}
-cp -n config.server.example.yaml config.yaml
-
-docker run --rm -it \
-  --name comet-l \
-  -p 8000:8000 \
-  -v "$PWD/.docker-data/state:/opt/comet-l/state" \
-  -v "$PWD/.docker-data/output:/opt/comet-l/output" \
-  -v "$PWD/.docker-data/sandbox:/opt/comet-l/sandbox" \
-  -v "$PWD/.docker-data/logs:/opt/comet-l/logs" \
-  -v "$PWD/config.yaml:/opt/comet-l/config.yaml" \
-  comet-l:multi-jdk
-```
-
-`config.server.example.yaml` 是服务器侧部署配置样例，部署 Web 控制台时先复制为容器启动加载的 `config.yaml`，再按环境修改其中的 `deployment` 和 `github` 配置。它是 Web 服务启动时读取的部署、GitHub 和服务器策略来源，不是每次运行的用户配置；缺少 `llm` 也是有效的 Web 部署配置，因为运行默认值或用户上传的运行配置会为单次运行提供 LLM 等字段。
-
-`config.example.yaml` 是用户侧运行配置样例，复制出的本地运行配置或 Web 控制台上传配置只影响当次运行，提供 LLM、execution、knowledge、evolution 等运行参数。服务器配置和运行配置不会互相回填：上传配置不能成为服务器 base，也不能补齐 GitHub OAuth、部署策略、受管 clone 根目录或固定 JDK/Maven 路径；服务器策略可以按部署要求限制或覆盖运行字段。
-
-如果使用 GitHub 仓库导入、自动 push 或创建 PR，把 GitHub OAuth 配置写进挂载的 `config.yaml`：
-
-```yaml
-github:
-  oauth_client_id: "你的 Client ID"
-  oauth_client_secret: "你的 Client Secret"
-  oauth_redirect_uri: "http://127.0.0.1:8000/api/github/auth/callback"
-  oauth_scope: "repo"
-  encrypted_token_store_path: "./state/github/auth/token.enc"
-  encrypted_key_store_path: "./state/github/auth/token.key"
-  managed_clone_root: "./sandbox/github-managed"
-```
-
-普通用户在 Web 控制台中使用 ZIP 上传创建运行，不需要把宿主机项目目录挂进容器。只有管理员需要使用服务器本地路径模式时，才需要挂载项目目录，并在 `config.yaml` 的 `deployment` 中开启本地路径模式、填写允许访问的目录。
-
-### 示例项目
-
-镜像里已经包含 `示例项目`，挂载单独的示例配置即可：
-
-```bash
-docker run --rm -it \
-  -p 8000:8000 \
-  -v "$PWD/.docker-data/state:/opt/comet-l/state" \
-  -v "$PWD/.docker-data/output:/opt/comet-l/output" \
-  -v "$PWD/.docker-data/sandbox:/opt/comet-l/sandbox" \
-  -v "$PWD/.docker-data/logs:/opt/comet-l/logs" \
-  -v "$PWD/example.config.yaml:/opt/comet-l/example.config.yaml:ro" \
-  comet-l:multi-jdk
-```
-
-`example.config.yaml` 只给 `示例项目` 使用。文件缺失或内容无效时，只会禁用 `示例项目`，不会影响普通上传、本地路径或 GitHub 仓库流程。
-
-管理员处理宿主机本地 Maven 项目时，可以把项目目录挂进容器：
-
-```bash
-docker run --rm -it \
-  -p 8000:8000 \
-  -v "$PWD/.docker-data/state:/opt/comet-l/state" \
-  -v "$PWD/.docker-data/output:/opt/comet-l/output" \
-  -v "$PWD/.docker-data/sandbox:/opt/comet-l/sandbox" \
-  -v "$PWD/.docker-data/logs:/opt/comet-l/logs" \
-  -v "/absolute/path/to/maven-project:/workspace/project" \
-  comet-l:multi-jdk
-```
-
-随后管理员可在 Web 首页选择“本地路径”，项目路径填写 `/workspace/project`。普通用户仍应使用 ZIP 上传方式提交项目。
+本 README 只保留本地构建与自检命令；正式在服务器上部署时，以 Docker 服务器部署指南为准。多用户部署的安全边界和实现限制见 [docs/production-multi-user-deployment.md](docs/production-multi-user-deployment.md)。
 
 ## Bug 报告输入
 
 `--bug-reports-dir` 可指向一个包含缺陷报告的目录，供 RAG 检索使用。当前支持：
 
-| 格式 | 扩展名 | 说明 |
-| --- | --- | --- |
-| Markdown | `.md` | 支持可选 YAML front matter |
-| 纯文本 | `.txt` | 任意自然语言描述 |
-| Diff | `.diff` | Git diff 输出 |
-| Patch | `.patch` | 补丁文件 |
+| 格式     | 扩展名   | 说明                       |
+| -------- | -------- | -------------------------- |
+| Markdown | `.md`    | 支持可选 YAML front matter |
+| 纯文本   | `.txt`   | 任意自然语言描述           |
+| Diff     | `.diff`  | Git diff 输出              |
+| Patch    | `.patch` | 补丁文件                   |
 
 示例：
 
